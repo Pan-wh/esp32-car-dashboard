@@ -37,85 +37,117 @@ SS = 4  # 超采样倍数（先放大画，再缩小，得到平滑线条）
 
 
 def draw_driver(state: str, size: int = 180) -> Image.Image:
-    """画一个极简扁平风格的驾驶员（手绘线条 + 状态表情），风格与仪表一致。"""
+    """卡通驾驶员（圆脸 + 卷发 + 双手扶方向盘），三种状态表情。
+
+    风格参考用户提供的车载集群截图：扁平色块 + 粗描边 + 圆润造型。
+    注意：不复刻任何品牌标识（AI_CONTEXT 第 3 节要求）。
+    底色纯黑（与页面背景一致，使用 CF_TRUE_COLOR 无透明通道）。
+    """
+    import math
+
     S = size * SS
     img = Image.new("RGB", (S, S), (0, 0, 0))
     d = ImageDraw.Draw(img)
+
+    SKIN = (243, 198, 163)
+    SKIN_D = (222, 172, 136)
+    HAIR = (38, 38, 43)
+    SHIRT = (76, 111, 168)
+    SHIRT_D = (58, 88, 138)
+    WHEEL = (56, 56, 62)
+    LINE = (28, 28, 32)
     accent = ACCENTS[state]
 
     def sc(v):
         return int(round(v * SS))
 
-    lw = sc(5)          # 主线宽
-    lw_thin = sc(3)     # 细线宽
+    def E(box, **kw):
+        d.ellipse([sc(box[0]), sc(box[1]), sc(box[2]), sc(box[3])], **kw)
 
     cx = size * 0.5
+    head_cy = 62
+    head_rx, head_ry = 36, 34
 
-    # ---- 方向盘（在驾驶员身前，遮住躯干下部）----
-    wheel_box = [sc(cx - 62), sc(112), sc(cx + 62), sc(156)]
-    d.ellipse(wheel_box, outline=WHITE, width=lw)
-    # 轮毂
-    hub_r = 9
-    d.ellipse([sc(cx - hub_r), sc(134 - hub_r), sc(cx + hub_r), sc(134 + hub_r)],
-              outline=WHITE, width=lw_thin)
-    # 两根辐条（轮毂 → 轮缘）
-    d.line([sc(cx), sc(134), sc(cx - 44), sc(122)], fill=WHITE, width=lw_thin)
-    d.line([sc(cx), sc(134), sc(cx + 44), sc(122)], fill=WHITE, width=lw_thin)
+    # ---------- 躯干 ----------
+    d.polygon([(sc(cx - 64), sc(size)), (sc(cx - 50), sc(106)),
+               (sc(cx + 50), sc(106)), (sc(cx + 64), sc(size))], fill=SHIRT)
+    d.polygon([(sc(cx - 16), sc(106)), (sc(cx), sc(124)), (sc(cx + 16), sc(106))], fill=SKIN_D)
 
-    # ---- 躯干/肩（在方向盘之后）----
-    d.arc([sc(cx - 46), sc(78), sc(cx + 46), sc(170)], start=180, end=360,
-          fill=WHITE, width=lw)
-    # 脖子
-    d.line([sc(cx - 7), sc(78), sc(cx - 7), sc(88)], fill=WHITE, width=lw_thin)
-    d.line([sc(cx + 7), sc(78), sc(cx + 7), sc(88)], fill=WHITE, width=lw_thin)
+    # ---------- 脖子 ----------
+    d.rectangle([sc(cx - 12), sc(86), sc(cx + 12), sc(112)], fill=SKIN_D)
 
-    # ---- 头 ----
-    head_cy, head_r = 56, 27
-    if state == "speeding":
-        head_cy = 53  # 略微前倾
-    d.ellipse([sc(cx - head_r), sc(head_cy - head_r),
-               sc(cx + head_r), sc(head_cy + head_r)], outline=WHITE, width=lw)
+    # ---------- 头 + 耳朵 ----------
+    E((cx - head_rx, head_cy - head_ry, cx + head_rx, head_cy + head_ry), fill=SKIN)
+    E((cx - head_rx - 5, head_cy - 5, cx - head_rx + 5, head_cy + 11), fill=SKIN)
+    E((cx + head_rx - 5, head_cy - 5, cx + head_rx + 5, head_cy + 11), fill=SKIN)
 
-    # ---- 表情 ----
-    eye_dx, eye_dy = 11, -4
+    # ---------- 卷发（沿颅顶排一圈小球） ----------
+    for i in range(9):
+        t = math.pi * (1.0 - i / 8.0)
+        hx = cx + (head_rx - 3) * math.cos(t)
+        hy = head_cy - (head_ry - 7) * math.sin(t) - 3
+        r = 11 if 2 <= i <= 6 else 9
+        E((hx - r, hy - r, hx + r, hy + r), fill=HAIR)
+    # 发顶加厚（只盖到眉毛之上）
+    E((cx - 27, head_cy - head_ry - 11, cx + 27, head_cy - head_ry + 16), fill=HAIR)
+    # 鬓角
+    E((cx - head_rx - 1, head_cy - 15, cx - head_rx + 11, head_cy + 7), fill=HAIR)
+    E((cx + head_rx - 11, head_cy - 15, cx + head_rx + 1, head_cy + 7), fill=HAIR)
+
+    # ---------- 表情 ----------
+    ex_l, ex_r = cx - 13, cx + 13
+    ey = head_cy + 3
+
     if state == "normal":
-        for sx in (-1, 1):
-            d.ellipse([sc(cx + sx * eye_dx - 3.2), sc(head_cy + eye_dy - 3.2),
-                       sc(cx + sx * eye_dx + 3.2), sc(head_cy + eye_dy + 3.2)], fill=WHITE)
-        d.arc([sc(cx - 9), sc(head_cy + 4), sc(cx + 9), sc(head_cy + 16)],
-              start=15, end=165, fill=WHITE, width=lw_thin)          # 微笑
+        for ex in (ex_l, ex_r):
+            E((ex - 4.5, ey - 5.5, ex + 4.5, ey + 5.5), fill=LINE)
+            E((ex - 1.6, ey - 3.6, ex + 1.4, ey - 0.6), fill=(255, 255, 255))
+        d.line([sc(ex_l - 9), sc(ey - 16), sc(ex_l + 8), sc(ey - 14)], fill=HAIR, width=sc(3))
+        d.line([sc(ex_r - 8), sc(ey - 14), sc(ex_r + 9), sc(ey - 16)], fill=HAIR, width=sc(3))
+        d.arc([sc(cx - 11), sc(head_cy + 13), sc(cx + 11), sc(head_cy + 27)],
+              start=20, end=160, fill=LINE, width=sc(2.6))
     elif state == "spirited":
-        for sx in (-1, 1):
-            d.ellipse([sc(cx + sx * eye_dx - 3.2), sc(head_cy + eye_dy - 3.2),
-                       sc(cx + sx * eye_dx + 3.2), sc(head_cy + eye_dy + 3.2)], fill=WHITE)
-        # 皱起的眉毛
-        d.line([sc(cx - 18), sc(head_cy - 15), sc(cx - 6), sc(head_cy - 10)],
-               fill=WHITE, width=lw_thin)
-        d.line([sc(cx + 18), sc(head_cy - 15), sc(cx + 6), sc(head_cy - 10)],
-               fill=WHITE, width=lw_thin)
-        d.line([sc(cx - 8), sc(head_cy + 12), sc(cx + 8), sc(head_cy + 12)],
-               fill=WHITE, width=lw_thin)                            # 抿嘴
+        for ex in (ex_l, ex_r):
+            E((ex - 4, ey - 4, ex + 4, ey + 4), fill=LINE)
+            E((ex - 1.4, ey - 2.8, ex + 1.4, ey - 0.4), fill=(255, 255, 255))
+        d.line([sc(ex_l - 10), sc(ey - 19), sc(ex_l + 9), sc(ey - 12)], fill=HAIR, width=sc(3.4))
+        d.line([sc(ex_r - 9), sc(ey - 12), sc(ex_r + 10), sc(ey - 19)], fill=HAIR, width=sc(3.4))
+        d.line([sc(cx - 10), sc(head_cy + 21), sc(cx + 10), sc(head_cy + 21)],
+               fill=LINE, width=sc(2.6))
+        E((cx + 30, head_cy - 22, cx + 38, head_cy - 7), fill=accent)
     else:  # speeding
-        for sx in (-1, 1):  # 瞪大的眼
-            d.ellipse([sc(cx + sx * eye_dx - 6), sc(head_cy + eye_dy - 6),
-                       sc(cx + sx * eye_dx + 6), sc(head_cy + eye_dy + 6)],
-                      outline=WHITE, width=lw_thin)
-        d.ellipse([sc(cx - 8), sc(head_cy + 6), sc(cx + 8), sc(head_cy + 20)],
-                  fill=accent)                                       # 张嘴喊
-        # 两侧速度线
-        for i, dy in enumerate((-14, 0, 14)):
-            x1 = cx - 74 - i * 2
-            d.line([sc(x1), sc(head_cy + dy), sc(x1 - 14), sc(head_cy + dy)],
-                   fill=accent, width=lw_thin)
-            x2 = cx + 74 + i * 2
-            d.line([sc(x2), sc(head_cy + dy), sc(x2 + 14), sc(head_cy + dy)],
-                   fill=accent, width=lw_thin)
+        for ex in (ex_l, ex_r):
+            E((ex - 6.5, ey - 7, ex + 6.5, ey + 7), fill=(255, 255, 255))
+            E((ex - 3.4, ey - 3.8, ex + 3.4, ey + 3.8), fill=LINE)
+        d.line([sc(ex_l - 10), sc(ey - 21), sc(ex_l + 9), sc(ey - 16)], fill=HAIR, width=sc(3))
+        d.line([sc(ex_r - 9), sc(ey - 16), sc(ex_r + 10), sc(ey - 21)], fill=HAIR, width=sc(3))
+        E((cx - 10, head_cy + 14, cx + 10, head_cy + 31), fill=(118, 38, 38))
+        E((cx - 6, head_cy + 25, cx + 6, head_cy + 31), fill=(232, 124, 124))
+        E((cx + 30, head_cy - 24, cx + 37, head_cy - 10), fill=accent)
+        E((cx + 39, head_cy - 6, cx + 45, head_cy + 6), fill=accent)
+        for dy in (-16, 0, 16):
+            d.line([sc(cx - 86), sc(head_cy + dy), sc(cx - 68), sc(head_cy + dy)],
+                   fill=accent, width=sc(3))
+            d.line([sc(cx + 86), sc(head_cy + dy), sc(cx + 104), sc(head_cy + dy)],
+                   fill=accent, width=sc(3))
 
-    # 激烈驾驶：加两道小速度线
-    if state == "spirited":
-        for dy in (-10, 8):
-            d.line([sc(cx + 68), sc(head_cy + dy), sc(cx + 82), sc(head_cy + dy)],
-                   fill=accent, width=lw_thin)
+    # ---------- 鼻子 ----------
+    d.arc([sc(cx - 6), sc(head_cy + 7), sc(cx + 6), sc(head_cy + 16)],
+          start=200, end=340, fill=SKIN_D, width=sc(2.4))
+
+    # ---------- 手臂 ----------
+    for sx in (-1, 1):
+        d.line([sc(cx + sx * 57), sc(122), sc(cx + sx * 44), sc(134)],
+               fill=SHIRT_D, width=sc(13))
+
+    # ---------- 方向盘（先画轮，再画手 → 手在轮缘之上） ----------
+    d.arc([sc(cx - 62), sc(124), sc(cx + 62), sc(180)], start=185, end=355,
+          fill=WHEEL, width=sc(10))
+    E((cx - 9, 144, cx + 9, 162), fill=WHEEL)
+
+    # ---------- 手 ----------
+    for sx in (-1, 1):
+        E((cx + sx * 44 - 11, 134 - 11, cx + sx * 44 + 11, 134 + 11), fill=SKIN)
 
     return img.resize((size, size), Image.LANCZOS)
 
