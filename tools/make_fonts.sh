@@ -60,7 +60,7 @@ fi
 "$PY" -m fontTools.subset "$SRC/Inter-Bold.ttf" \
   --text="0123456789" --output-file="$SRC/inter-bold-num-sub.ttf"
 "$PY" -m fontTools.subset "$SRC/Inter-Medium.ttf" \
-  --unicodes="U+0020-007E" --output-file="$SRC/inter-med-ascii-sub.ttf"
+  --unicodes="U+0020-007E,U+00B0" --output-file="$SRC/inter-med-ascii-sub.ttf"
 
 # ---- 4) 生成 LVGL 字模 C 文件 ----
 cd simulator
@@ -78,7 +78,7 @@ npx --yes lv_font_conv --font "../$SRC/inter-bold-num-sub.ttf" \
   -r 0x2D-0x39 --lv-font-name speed_num_150 -o ui/font_speed_num_150.c
 npx --yes lv_font_conv --font "../$SRC/inter-med-ascii-sub.ttf" \
   --size 26 --bpp 4 --format lvgl --no-compress \
-  -r 0x20-0x7E --lv-font-name label_26 -o ui/font_label_26.c
+  -r 0x20-0x7E,0xB0 --lv-font-name label_26 -o ui/font_label_26.c
 cd "$ROOT"
 
 # ---- 5) 同步子集 TTF 给 LVGL Pro 草稿工程 ----
