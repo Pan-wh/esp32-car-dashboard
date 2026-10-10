@@ -1,0 +1,13 @@
+<!--
+  ESP32 车载仪表 —— LVGL Pro 草稿工程
+  用途：在 LVGL Pro 编辑器中实时预览/迭代 UI 设计（D-006：仅草稿，导出代码不进固件）。
+  真机源码：simulator/ui/（LVGL 8.4.0，与微雪官方库配套）。
+-->
+<project name="esp32_dashboard" lvgl_version="9.5.0">
+    <targets>
+        <!-- 微雪 ESP32-S3-Touch-AMOLED-1.75-G：1.75" 圆形 AMOLED -->
+        <target name="amoled_1_75_round">
+            <display width="466" height="466"/>
+        </target>
+    </targets>
+</project>
