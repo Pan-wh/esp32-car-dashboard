@@ -87,6 +87,20 @@ static void analog_tick_cb(lv_timer_t *timer)
     update_hands();
 }
 
+/*
+ * 指针圆润化：lv_meter 的线条指针对角是直角，看起来生硬。
+ * LVGL 8.4 的 lv_draw_line_dsc_t 支持 round_start / round_end（圆头线帽），
+ * 在指针绘制事件里打开即可得到柔性圆头指针。
+ */
+static void meter_draw_cb(lv_event_t *e)
+{
+    lv_obj_draw_part_dsc_t *dsc = lv_event_get_draw_part_dsc(e);
+    if (dsc->type == LV_METER_DRAW_PART_NEEDLE_LINE && dsc->line_dsc) {
+        dsc->line_dsc->round_start = 1;
+        dsc->line_dsc->round_end = 1;
+    }
+}
+
 /* 12 个数字沿圆周定位（0° 在 12 点，顺时针） */
 static void create_numerals(lv_obj_t *parent)
 {
@@ -138,6 +152,8 @@ lv_obj_t *ui_analog_create(lv_obj_t *parent)
     lv_obj_center(s_ctx.meter);
     lv_obj_clear_flag(s_ctx.meter, LV_OBJ_FLAG_CLICKABLE); /* 触摸手势交给页面容器 */
     lv_obj_set_style_bg_opa(s_ctx.meter, LV_OPA_TRANSP, 0);
+    /* 指针圆头（见 meter_draw_cb） */
+    lv_obj_add_event_cb(s_ctx.meter, meter_draw_cb, LV_EVENT_DRAW_PART_BEGIN, NULL);
 
     /* 分钟刻度：61 个 → 60 段 × 6°（无标签） */
     lv_meter_scale_t *sc_min = lv_meter_add_scale(s_ctx.meter);
@@ -158,7 +174,7 @@ lv_obj_t *ui_analog_create(lv_obj_t *parent)
     s_ctx.ind_min = lv_meter_add_needle_line(s_ctx.meter, sc_min, 5,
                                              lv_color_hex(UI_HAND_WHITE),
                                              -(R_EDGE - NEEDLE_MIN));
-    s_ctx.ind_sec = lv_meter_add_needle_line(s_ctx.meter, sc_min, 2,
+    s_ctx.ind_sec = lv_meter_add_needle_line(s_ctx.meter, sc_min, 3,
                                              lv_color_hex(UI_HAND_SEC),
                                              -(R_EDGE - NEEDLE_SEC));
 
