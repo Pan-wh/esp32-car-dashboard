@@ -56,6 +56,17 @@
 - **许可说明**：SquareLine Personal 免费版限非商业用途、10 屏幕/150 控件，本项目范围内够用（若仅作草稿参考）。
 - **状态**：已定（用户 2026-10-10 确认）。
 
+### D-006 附注：LVGL Pro 评估（2026-10-10）
+
+- **事实**（[lvgl.io/pro](https://lvgl.io/pro)）：LVGL 官方新产品，XML 界面编辑器，
+  支持像素级**实时预览** + Inspector、[浏览器在线编辑 viewer.lvgl.io](https://viewer.lvgl.io/)、
+  Figma 导入、CLI 代码生成；Community 档**免费**（个人/开源，无 CLI）。
+- **结论**：实时预览能力优于 SquareLine；但其 XML/代码生成面向 **LVGL 9.x**，
+  本项目固件为 LVGL 8.4.0，导出代码同样不能进固件——与 SquareLine 同类版本不匹配，主路线不变。
+- **保留价值**：XML 是纯文本、Git 友好、明确面向 AI 辅助开发；若日后需要更强的草稿工具，
+  LVGL Pro（免费档）优于 SquareLine。**观察项**：微雪若将 Arduino 配套库升级到 LVGL 9，
+  LVGL Pro 可升级为一等选项（支持设备端 XML 运行时加载），届时重新评估本决策。
+
 ## 待决策事项
 
 - 里程碑 5 的地图/导航技术方案（对比后再定，不提前实施）。
