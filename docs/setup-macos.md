@@ -157,3 +157,17 @@ arduino-cli compile \
 - 结果（2026-10-10）：**编译通过**（仅编译验证，未烧录、未上硬件）
   - Sketch：413124 bytes（程序区 3145728 bytes 的 13%）
   - 全局变量：23704 bytes（动态内存 327680 bytes 的 7%）
+
+## 8. UI 模拟器（板子到手前的 UI 开发环境）
+
+决策 D-006：UI 主路线为 AI 手写 LVGL 8.4 代码 + macOS SDL 模拟器。
+安装与日常使用见 [`simulator/README.md`](../simulator/README.md)：
+
+```bash
+brew install sdl2        # 一次性
+cd simulator && ./fetch_deps.sh   # 一次性：下载 LVGL v8.4.0
+make run                 # 交互预览（ESC 退出，S 截图）
+make shot                # 无头自动截图
+```
+
+SquareLine Studio 仅作可视化草稿辅助（其 8.x 导出只支持 8.3.11，不匹配本项目 8.4.0，导出代码不进固件）。

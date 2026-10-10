@@ -25,6 +25,13 @@ firmware/**/build/
 # 如需将官方仓库纳入版本管理可注释掉下一行
 reference/
 
+# 模拟器
+simulator/deps/
+simulator/build/
+simulator/dashboard_sim
+simulator/screenshot.bmp
+simulator/shots/
+
 # 临时与日志
 *.log
 *.tmp
