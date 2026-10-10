@@ -237,9 +237,13 @@ def main():
     with open(OUT_C, "w", encoding="utf-8") as f:
         f.write("\n".join(parts))
 
-    size_kb = sum(os.path.getsize(os.path.join(IMG_DIR, f"driver_{s}.png")) for s in states) / 1024
+    # 统计实际 Flash 占用（RGB565 = 2 字节/像素）
+    total_px = 0
+    for st in states:
+        w, h = Image.open(os.path.join(IMG_DIR, STATE_FILES[st])).size
+        total_px += w * h
     print(f"已生成 {OUT_C}")
-    print(f"提示：3 张图在 Flash 中约 {3 * 180 * 180 * 2 / 1024:.0f} KB（180×180 RGB565）")
+    print(f"提示：{len(states)} 张图 RGB565 在 Flash 中约 {total_px * 2 / 1024:.0f} KB")
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ LV_IMG_DECLARE(driver_normal);
 LV_IMG_DECLARE(driver_spirited);
 LV_IMG_DECLARE(driver_speeding);
 
-/* ---- 设计常量 ---- */
+/* ---- 设计常量（V1-V4：黑底主题）---- */
 #define C_BG      0x000000 /* 纯黑背景（OLED 省电） */
 #define C_MAIN    0xF5F5F7 /* 主数据：白 */
 #define C_DIM     0x8A919E /* 次要文字：中灰 */
@@ -36,11 +36,21 @@ LV_IMG_DECLARE(driver_speeding);
 #define C_LABEL   0xC8C8CE /* 刻度数字：浅灰 */
 #define C_WARN    0xFF9500 /* 超速提醒：橙 */
 
+/* ---- V5：白底表盘主题（用户 2026-10-10 要求，与驾驶员素材白底无缝）---- */
+#define C_BG_LIGHT    0xFFFFFF /* 表盘底：纯白 */
+#define C_TICK_MIN_L  0x9A9A9E /* 小刻度：中灰 */
+#define C_TICK_MAJ_L  0x4A4A50 /* 大刻度：深灰 */
+#define C_LABEL_L     0x3A3A40 /* 刻度数字：深灰 */
+#define C_TEXT_L      0x1A1A1E /* 主文字：近黑 */
+#define C_TEXT_DIM_L  0x6A6A70 /* 次文字：中灰 */
+#define C_NEEDLE_L    0x2A2A2E /* 指针：深炭灰 */
+#define C_BAD_L       0xB0B0B6 /* 无效/置灰 */
+
 #define SPEED_MAX 200.0f /* 量程 km/h */
 
 /* V5 参数 */
-#define DRIVER_IMG_SIZE   200  /* 中央插画边长（美术素材 200×200） */
-#define MARKER_INNER_R    168  /* 指针内端半径（避开 200px 插画：对角半径≤159） */
+#define DRIVER_IMG_SIZE   230  /* 中央插画边长（美术素材 230×230） */
+#define MARKER_INNER_R    168  /* 指针内端半径（插画内容最大半径 ≤ 24+115=139，不冲突） */
 #define DRIVER_SPIRITED_V 90.0f  /* 激烈驾驶阈值 km/h（用户确认：0-90 平静） */
 #define DRIVER_SPEEDING_V 120.0f /* 超速阈值 km/h（用户确认：>120 咬牙） */
 
@@ -257,11 +267,20 @@ static void build_v4(lv_obj_t *p)
 /*   底部 = 速度/时间 + GPS/航向                                        */
 /* ------------------------------------------------------------------ */
 
+static int driver_state_from_speed(void); /* 前置声明 */
+
+/* 当前驾驶员状态：显式设定优先，否则按速度自动 */
+static int current_driver_state(void)
+{
+    return (s_driver_state >= 0) ? s_driver_state : driver_state_from_speed();
+}
+
 /*
  * V5 指针绘制回调：
  *  1. 打开圆头线帽（与其它页面一致）；
  *  2. 把 V5 指针的内端从圆心沿同方向外移到 MARKER_INNER_R，
- *     这样中央插画区域不会被指针覆盖（lv_meter 的线条指针默认从圆心起）。
+ *     这样中央插画区域不会被指针覆盖（lv_meter 的线条指针默认从圆心起）；
+ *  3. 白底表盘上用深炭灰指针；超速时转为橙色（lv_meter 无颜色 setter，故在此改）。
  */
 static void speed5_draw_cb(lv_event_t *e)
 {
@@ -272,6 +291,10 @@ static void speed5_draw_cb(lv_event_t *e)
     dsc->line_dsc->round_end = 1;
 
     if (dsc->sub_part_ptr != (void *)s_needle5 || dsc->p1 == NULL || dsc->p2 == NULL) return;
+
+    /* 超速时指针转橙，其余深炭灰（白底表盘） */
+    dsc->line_dsc->color = lv_color_hex(
+        current_driver_state() == UI_DRIVER_SPEEDING ? C_WARN : C_NEEDLE_L);
 
     int32_t dx = dsc->p2->x - dsc->p1->x;
     int32_t dy = dsc->p2->y - dsc->p1->y;
@@ -307,11 +330,12 @@ static void update_aux(void)
     else snprintf(b1, sizeof(b1), "-- km/h · %02d:%02d", t.tm_hour, t.tm_min);
     lv_label_set_text(s_aux1, b1);
     lv_obj_set_style_text_color(s_aux1,
-        lv_color_hex(st == UI_DRIVER_SPEEDING ? C_WARN : C_MAIN), 0);
+        lv_color_hex(st == UI_DRIVER_SPEEDING ? C_WARN : C_TEXT_L), 0);
 
     if (s_valid) snprintf(b2, sizeof(b2), "GPS %d SAT · %03d°", s_sats, s_heading);
     else snprintf(b2, sizeof(b2), "NO FIX");
     lv_label_set_text(s_aux2, b2);
+    lv_obj_set_style_text_color(s_aux2, lv_color_hex(s_valid ? C_TEXT_DIM_L : C_BAD_L), 0);
 }
 
 static void aux_timer_cb(lv_timer_t *t)
@@ -322,6 +346,10 @@ static void aux_timer_cb(lv_timer_t *t)
 
 static void build_v5(lv_obj_t *p)
 {
+    /* 白底表盘（用户要求；与驾驶员素材的白底无缝衔接） */
+    lv_obj_set_style_bg_color(p, lv_color_hex(C_BG_LIGHT), 0);
+    lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
+
     /* 外圈刻度 + 指针 */
     s_meter = lv_meter_create(p);
     lv_obj_remove_style_all(s_meter);
@@ -331,22 +359,22 @@ static void build_v5(lv_obj_t *p)
     lv_obj_add_event_cb(s_meter, speed5_draw_cb, LV_EVENT_DRAW_PART_BEGIN, NULL);
 
     lv_meter_scale_t *sc_min = lv_meter_add_scale(s_meter);
-    lv_meter_set_scale_ticks(s_meter, sc_min, 41, 2, 10, lv_color_hex(0x5A5A5F));
+    lv_meter_set_scale_ticks(s_meter, sc_min, 41, 2, 10, lv_color_hex(C_TICK_MIN_L));
     lv_meter_set_scale_range(s_meter, sc_min, 0, (int32_t)SPEED_MAX, 270, 135);
 
     lv_meter_scale_t *sc_maj = lv_meter_add_scale(s_meter);
-    lv_meter_set_scale_ticks(s_meter, sc_maj, 7, 3, 18, lv_color_hex(C_LABEL));
+    lv_meter_set_scale_ticks(s_meter, sc_maj, 7, 3, 18, lv_color_hex(C_TICK_MAJ_L));
     lv_meter_set_scale_range(s_meter, sc_maj, 0, (int32_t)SPEED_MAX, 270, 135);
 
     /* 指针：白色圆头，尖端到 r=214；内端由绘制回调外移到 r=152 */
-    s_needle5 = lv_meter_add_needle_line(s_meter, sc_min, 7, lv_color_hex(C_MAIN), -(220 - 214));
+    s_needle5 = lv_meter_add_needle_line(s_meter, sc_min, 7, lv_color_hex(C_NEEDLE_L), -(220 - 214));
 
     /* 刻度数字（创建在指针之后 → 绘制在指针之上，指针从数字下穿过） */
     const int vals[] = { 0, 40, 80, 120, 160, 200 };
     for (int i = 0; i < 6; i++) {
         char buf[8];
         snprintf(buf, sizeof(buf), "%d", vals[i]);
-        lv_obj_t *n = make_label(p, &label_26, C_LABEL, buf);
+        lv_obj_t *n = make_label(p, &label_26, C_LABEL_L, buf);
         float a = (float)(135 + i * 54) * 3.14159265f / 180.0f;
         lv_obj_align(n, LV_ALIGN_CENTER,
                      (lv_coord_t)lroundf(178.0f * cosf(a)),
@@ -360,9 +388,9 @@ static void build_v5(lv_obj_t *p)
     lv_obj_clear_flag(s_driver_img, LV_OBJ_FLAG_CLICKABLE);
 
     /* 底部辅助信息（两行，落在刻度的底部缺口内） */
-    s_aux1 = make_label(p, &label_26, C_MAIN, "0 km/h · 00:00");
+    s_aux1 = make_label(p, &label_26, C_TEXT_L, "0 km/h · 00:00");
     lv_obj_align(s_aux1, LV_ALIGN_CENTER, 0, 150);
-    s_aux2 = make_label(p, &label_26, C_DIM, "GPS 0 SAT · 000°");
+    s_aux2 = make_label(p, &label_26, C_TEXT_DIM_L, "GPS 0 SAT · 000°");
     lv_obj_align(s_aux2, LV_ALIGN_CENTER, 0, 180);
 
     /* 时间/速度变化时刷新辅助信息（1s 周期足够） */
@@ -388,6 +416,8 @@ static void apply_state(void)
                            st == UI_DRIVER_SPEEDING ? &driver_speeding :
                            st == UI_DRIVER_SPIRITED ? &driver_spirited : &driver_normal);
         }
+        /* 指针颜色由绘制回调按状态决定，故状态变化时需强制重绘 */
+        if (s_meter) lv_obj_invalidate(s_meter);
         update_aux();
         return;
     }
