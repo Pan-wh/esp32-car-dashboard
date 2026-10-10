@@ -216,6 +216,11 @@ int main(int argc, char **argv)
             if (e.type == SDL_KEYDOWN) {
                 if (e.key.keysym.sym == SDLK_ESCAPE) goto done;
                 if (e.key.keysym.sym == SDLK_s) save_bmp("screenshot.bmp");
+                /* 方向键 / A、D 切页（仅模拟器便利键，设备上靠滑动手势） */
+                if (e.key.keysym.sym == SDLK_RIGHT || e.key.keysym.sym == SDLK_d)
+                    ui_pages_show((ui_page_t)((ui_pages_current() + 1) % UI_PAGE_COUNT));
+                if (e.key.keysym.sym == SDLK_LEFT || e.key.keysym.sym == SDLK_a)
+                    ui_pages_show((ui_page_t)((ui_pages_current() + UI_PAGE_COUNT - 1) % UI_PAGE_COUNT));
             }
             if (e.type == SDL_MOUSEMOTION) {
                 g_mouse_x = e.motion.x / scale;

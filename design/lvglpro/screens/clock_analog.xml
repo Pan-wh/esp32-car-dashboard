@@ -27,31 +27,31 @@
 
         <!-- 指针（静态定格 10:09:30；pivot 在矩形底端 = 表盘中心）-->
         <!-- 时针：长 106，宽 9，10 时 09 分 30 秒 → 304.8° -->
-        <lv_obj width="9" height="106" x="228" y="127" radius="4"
+        <lv_obj width="9" height="106" x="228" y="127" style_radius="4"
                 style_transform_pivot_x="4" style_transform_pivot_y="106"
                 style_transform_rotation="3048">
             <style name="style_hand_hour"/>
         </lv_obj>
 
         <!-- 分针：长 154，宽 5，9 分 30 秒 → 57° -->
-        <lv_obj width="5" height="154" x="230" y="79" radius="2"
+        <lv_obj width="5" height="154" x="230" y="79" style_radius="2"
                 style_transform_pivot_x="2" style_transform_pivot_y="154"
                 style_transform_rotation="570">
             <style name="style_hand_min"/>
         </lv_obj>
 
         <!-- 秒针：长 166，宽 2，30 秒 → 180° -->
-        <lv_obj width="2" height="166" x="232" y="67" radius="1"
+        <lv_obj width="2" height="166" x="232" y="67" style_radius="1"
                 style_transform_pivot_x="1" style_transform_pivot_y="166"
                 style_transform_rotation="1800">
             <style name="style_hand_sec"/>
         </lv_obj>
 
         <!-- 中心圆点：白底 18px + 橙色内点 8px -->
-        <lv_obj width="18" height="18" align="center" radius="9">
+        <lv_obj width="18" height="18" align="center" style_radius="9">
             <style name="style_dot"/>
         </lv_obj>
-        <lv_obj width="8" height="8" align="center" radius="4">
+        <lv_obj width="8" height="8" align="center" style_radius="4">
             <style name="style_dot_in"/>
         </lv_obj>
     </view>
