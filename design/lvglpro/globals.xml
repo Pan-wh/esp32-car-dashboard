@@ -12,9 +12,9 @@
         <bin as_file="false" name="date26"
              src_path="fonts/noto-date-sub.ttf"
              size="26" bpp="4" symbols="0123456789月日星期一二三四五六 ·"/>
-        <!-- 模拟时钟：表盘数字 Inter Medium 34px -->
+        <!-- 模拟时钟：表盘数字 Inter Regular 34px（贴近 SF Pro Display 观感） -->
         <bin as_file="false" name="num34"
-             src_path="fonts/inter-med-sub.ttf"
+             src_path="fonts/inter-num-sub.ttf"
              size="34" bpp="4" range="0x30-0x39"/>
     </fonts>
 
