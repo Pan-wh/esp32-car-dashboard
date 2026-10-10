@@ -8,8 +8,9 @@
 当前处于 **里程碑 0：建立工程**（见 `AI_CONTEXT.md` 第 9 节）。
 
 - [x] 目录结构与文档骨架
-- [x] macOS 开发环境配置（Arduino IDE 2.3.10 + Arduino-ESP32 Core，见 `docs/setup-macos.md`）
-- [x] 官方仓库克隆与版本记录（见 `reference/` 与 `docs/setup-macos.md`）
+- [x] macOS 开发环境配置（Arduino IDE 2.3.10 + Arduino-ESP32 Core 3.3.10，见 `docs/setup-macos.md`）
+- [x] 官方仓库克隆与版本记录（commit `e4344e7`，见 `reference/` 与 `docs/decisions.md`）
+- [x] 01_HelloWorld 编译验证通过（仅编译，未烧录）
 - [ ] 官方示例 01_HelloWorld 烧录验证（屏幕）
 - [ ] 官方示例 03_LVGL_PCF85063_simpleTime 烧录验证（RTC）
 - [ ] 官方示例 09_LC76G_I2C 烧录验证（GNSS）

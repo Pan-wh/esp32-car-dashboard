@@ -145,7 +145,15 @@ arduino-cli compile \
 | VS Code | ✅ 已安装 |
 | arduino-cli | ✅ 1.5.1（IDE 内置，路径见上） |
 | arduino-cli.yaml | ✅ 已写入 espressif 索引 URL |
-| esp32:esp32 Core | ⏳ 3.3.10 安装中/完成后核对 `arduino-cli core list` |
+| esp32:esp32 Core | ✅ 3.3.10 已安装（`arduino-cli core list` 核对通过；线上最新 3.3.12，**刻意锁定 3.3.10**） |
 | 官方仓库 | ✅ clone 完成，commit `e4344e7`，位于 `reference/` |
 | 配套库 | ✅ 使用仓库内 `examples/arduino/libraries`（`--libraries` 指定） |
+| 01_HelloWorld 编译 | ✅ 2026-10-10 通过（仅编译，**未烧录**） |
 | 串口驱动 | 未验证——首次插板后按第 5 节确认串口出现 |
+
+### 01_HelloWorld 编译验证记录
+
+- 命令：见本文第 4 节（FQBN `esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB`）
+- 结果（2026-10-10）：**编译通过**（仅编译验证，未烧录、未上硬件）
+  - Sketch：413124 bytes（程序区 3145728 bytes 的 13%）
+  - 全局变量：23704 bytes（动态内存 327680 bytes 的 7%）
