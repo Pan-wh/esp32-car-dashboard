@@ -36,21 +36,18 @@ make run      # 交互模式：ESC 退出，S 键截图 screenshot.bmp
 make shot     # 等价：./dashboard_sim --offscreen --ms 1500 --shot shots/preview.bmp
 ```
 
-## 重新生成时间主字体（96px Montserrat SemiBold）
+## 重新生成字体（时间 138px / 中文日期 26px）
 
-字体源文件与许可：`design/assets/fonts/`（SIL OFL 1.1）。
+一键管线（下载可变字体→实例化字重→子集化→lv_font_conv）：
 
 ```bash
-cd simulator
-npx lv_font_conv \
-  --font ../design/assets/fonts/Montserrat-SemiBold.ttf \
-  --size 96 --bpp 4 --format lvgl --no-compress \
-  -r 0x20,0x2D,0x2E,0x30-0x3A,0xB7 \
-  --lv-font-name clock_font_96 -o ui/font_clock_96.c
+tools/make_fonts.sh
 ```
 
-生成后 Makefile 自动检测并启用（`-DCLOCK_FONT_CUSTOM`）。若删除该文件则回退内置
-Montserrat 48。**新增中文字体/图标时用同样流程生成，并在 design/assets/fonts/ 保留源与许可。**
+产出 `ui/font_clock_iphone_138.c`（Inter ExtraLight，iPhone 息屏风格细字重）与
+`ui/font_date_cjk_26.c`（Noto Sans SC 中文日期），并同步子集 TTF 给 `design/lvglpro/`。
+源字体与许可：`design/assets/fonts/`（Inter / Noto Sans SC / Montserrat 备用，均 OFL）。
+**新增字形（如秒、其他汉字）时改脚本第 3 步 `--text` 后重跑。**
 
 ## 目录
 

@@ -32,6 +32,10 @@ simulator/dashboard_sim
 simulator/screenshot.bmp
 simulator/shots/
 
+# 字体管线中间产物与 Python 库（tools/make_fonts.sh 可重建）
+design/assets/fonts/src/
+tools/pylibs/
+
 # 临时与日志
 *.log
 *.tmp

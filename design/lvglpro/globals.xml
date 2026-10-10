@@ -1,38 +1,28 @@
 <!--
-  全局资源：字体 / 常量 / 样式
+  全局资源：字体 / 常量 / 样式（v2：iPhone 息屏时钟风格）
   参数与 simulator/ui/ui_clock.c、design/wireframes/clock.md 保持一致。
 -->
 <globals>
     <fonts>
-        <!-- 时间主字体：96px Montserrat SemiBold（与模拟器/固件同源） -->
-        <bin as_file="false" name="clock96"
-             src_path="fonts/Montserrat-SemiBold.ttf"
-             size="96" bpp="4" range="0x20-0x3A" symbols="·"/>
-        <!-- 日期字体：20px -->
-        <bin as_file="false" name="date20"
-             src_path="fonts/Montserrat-SemiBold.ttf"
-             size="20" bpp="4" range="0x20-0x7F"/>
+        <!-- 时间主字体：Inter ExtraLight 138px（SF Pro 细字重的开源近似） -->
+        <bin as_file="false" name="clock138"
+             src_path="fonts/inter-el-sub.ttf"
+             size="138" bpp="4" range="0x20-0x3A"/>
+        <!-- 日期字体：Noto Sans SC 26px（中文日期） -->
+        <bin as_file="false" name="date26"
+             src_path="fonts/noto-date-sub.ttf"
+             size="26" bpp="4" symbols="0123456789月日星期一二三四五六 ·"/>
     </fonts>
 
     <consts>
-        <!-- 设计规范色板（design/wireframes/clock.md） -->
-        <color name="c_bg"         value="0x0B0D10"/>
-        <color name="c_fg_main"     value="0xF2F4F7"/>
-        <color name="c_fg_dim"      value="0x8A919E"/>
-        <color name="c_ring_outer"  value="0x3A4149"/>
-        <color name="c_ring_inner"  value="0x2A3138"/>
+        <!-- 设计规范色板（design/wireframes/clock.md v2） -->
+        <color name="c_bg"    value="0x000000"/>
+        <color name="c_time"  value="0xF5F5F7"/>
+        <color name="c_date"  value="0x98989E"/>
     </consts>
 
     <styles>
-        <style name="style_ring_outer"
-               radius="225" bg_opa="0%"
-               border_width="2" border_color="#c_ring_outer"/>
-        <style name="style_ring_inner"
-               radius="218" bg_opa="0%"
-               border_width="1" border_color="#c_ring_inner"/>
-        <style name="style_time"
-               text_font="clock96" text_color="#c_fg_main" text_letter_space="4"/>
-        <style name="style_date"
-               text_font="date20" text_color="#c_fg_dim" text_letter_space="1"/>
+        <style name="style_time" text_font="clock138" text_color="#c_time"/>
+        <style name="style_date" text_font="date26"   text_color="#c_date"/>
     </styles>
 </globals>

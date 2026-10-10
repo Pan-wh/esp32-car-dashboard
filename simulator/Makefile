@@ -17,16 +17,11 @@ CFLAGS := -O2 -std=gnu99 -Wall -Wextra -Wno-unused-parameter \
           -DLV_LVGL_H_INCLUDE_SIMPLE \
           $(SDL_CFLAGS)
 
-# 若 ui/font_clock_96.c（lv_font_conv 生成）存在则启用自定义大号字体
-ifneq ($(wildcard ui/font_clock_96.c),)
-CFLAGS      += -DCLOCK_FONT_CUSTOM=1
-UI_FONT_SRC := ui/font_clock_96.c
-else
-UI_FONT_SRC :=
-endif
+# UI 源码：ui/ 下全部（ui_clock.c + 生成的字体 font_*.c）
+UI_SRC := $(wildcard ui/*.c)
 
 LVGL_SRC := $(shell find $(LVGL_DIR)/src -name '*.c')
-APP_SRC  := main.c ui/ui_clock.c $(UI_FONT_SRC)
+APP_SRC  := main.c $(UI_SRC)
 SRCS     := $(LVGL_SRC) $(APP_SRC)
 OBJS     := $(addprefix $(BUILD)/,$(SRCS:=.o))
 
