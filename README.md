@@ -11,10 +11,12 @@
 - [x] macOS 开发环境配置（Arduino IDE 2.3.10 + Arduino-ESP32 Core 3.3.10，见 `docs/setup-macos.md`）
 - [x] 官方仓库克隆与版本记录（commit `e4344e7`，见 `reference/` 与 `docs/decisions.md`）
 - [x] 01_HelloWorld 编译验证通过（仅编译，未烧录）
+- [x] UI 模拟器（SDL2 + LVGL 8.4.0，`simulator/`，见其 README）
+- [x] 主时钟表盘 v1（模拟器渲染已验证，真机未验证，`design/wireframes/clock.md`）
 - [ ] 官方示例 01_HelloWorld 烧录验证（屏幕）
 - [ ] 官方示例 03_LVGL_PCF85063_simpleTime 烧录验证（RTC）
 - [ ] 官方示例 09_LC76G_I2C 烧录验证（GNSS）
-- [ ] 主界面原型（时钟/车速表盘）
+- [ ] 速度表盘页设计 + 主界面原型
 
 ## 目录结构
 
