@@ -7,6 +7,7 @@
 #include "ui_timesrc.h"
 
 #include <stdbool.h>
+#include <sys/time.h>
 
 static bool s_frozen = false;
 static struct tm s_fixed;
@@ -38,4 +39,20 @@ void ui_timesrc_now(struct tm *out)
 
     time_t t = time(NULL);
     localtime_r(&t, out);
+}
+
+void ui_timesrc_now_ms(struct tm *out, int *ms)
+{
+    if (s_frozen) {
+        /* 冻结时间用于截图验证：亚秒固定为 0，保证截图可复现 */
+        *out = s_fixed;
+        *ms = 0;
+        return;
+    }
+
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    time_t sec = tv.tv_sec;
+    localtime_r(&sec, out);
+    *ms = (int)(tv.tv_usec / 1000);
 }

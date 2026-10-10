@@ -5,7 +5,7 @@
  *   - 纯黑背景（AMOLED 息屏省电）
  *   - 外围 60 个灰色分钟刻度；12 个整点刻度更长更亮
  *   - 白色阿拉伯数字 1-12
- *   - 白色时针（粗短）/ 分针（细长）；橙色秒针
+ *   - 白色时针（粗短）/ 分针（细长）；橙色秒针（**连续滑动扫秒，20Hz**）
  *   - 中心圆点连接三针
  *
  * 实现要点（依据 LVGL 8.4 源码 lv_meter.c 实测语义）：
@@ -62,14 +62,19 @@ static lv_obj_t *s_dot_inner;
 static void update_hands(void)
 {
     struct tm t;
-    ui_timesrc_now(&t);
+    int ms;
+    ui_timesrc_now_ms(&t, &ms);
 
-    int32_t v_sec = (int32_t)t.tm_sec * 60;                         /* 每秒 60 单位 = 6° */
+    /*
+     * 秒针连续滑动（扫秒，非跳动）：量表 3600 单位 = 60 分钟，
+     * 故 1 秒 = 60 单位 = 6°，1 毫秒 ≈ 0.06 单位。
+     */
+    int32_t v_sec = (int32_t)t.tm_sec * 60 + (int32_t)ms * 60 / 1000;
     int32_t v_min = (int32_t)t.tm_min * 60 + (int32_t)t.tm_sec;     /* 每分 60 单位 = 6° */
     int32_t v_hour = (int32_t)(t.tm_hour % 12) * 300                /* 每小时 300 单位 = 30° */
                      + (int32_t)t.tm_min * 5 + (int32_t)t.tm_sec / 12;
 
-    /* lv_meter 指针变化会重绘整个表盘区域，故仅在数值变化时更新 */
+    /* lv_meter 指针变化只重绘指针扫过的包围盒（源码 inv_line），故仅在变化时更新 */
     if (v_hour != s_ctx.last_hour) {
         lv_meter_set_indicator_value(s_ctx.meter, s_ctx.ind_hour, v_hour);
         s_ctx.last_hour = v_hour;
@@ -182,11 +187,11 @@ lv_obj_t *ui_analog_create(lv_obj_t *parent)
     create_numerals(parent);
     create_center_dot(parent);
 
-    /* 初始化指针位置并每秒刷新 */
+    /* 初始化指针位置并以 20Hz 刷新（秒针连续滑动） */
     s_ctx.last_hour = -1;
     s_ctx.last_min = -1;
     update_hands();
-    lv_timer_create(analog_tick_cb, 1000, NULL);
+    lv_timer_create(analog_tick_cb, 50, NULL); /* 20 Hz → 每秒 6° 平滑扫过 */
 
     return s_ctx.meter;
 }
