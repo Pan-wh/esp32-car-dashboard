@@ -19,6 +19,9 @@ lv_obj_t *ui_speed_create(lv_obj_t *parent);
 /* 切换设计变体（0..UI_SPEED_VARIANT_COUNT-1）；已创建时会重建内容 */
 void ui_speed_set_variant(int variant);
 
+/* 当前变体序号 */
+int ui_speed_get_variant(void);
+
 /* 设置速度（km/h）；valid=false 时显示无效状态（"--"） */
 void ui_speed_set_speed(float kmh);
 

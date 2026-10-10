@@ -234,6 +234,11 @@ int main(int argc, char **argv)
                     ui_pages_show((ui_page_t)((ui_pages_current() + 1) % UI_PAGE_COUNT));
                 if (e.key.keysym.sym == SDLK_LEFT || e.key.keysym.sym == SDLK_a)
                     ui_pages_show((ui_page_t)((ui_pages_current() + UI_PAGE_COUNT - 1) % UI_PAGE_COUNT));
+                /* V 键：循环切换速度表盘设计变体（并跳到该页） */
+                if (e.key.keysym.sym == SDLK_v) {
+                    ui_speed_set_variant((ui_speed_get_variant() + 1) % UI_SPEED_VARIANT_COUNT);
+                    ui_pages_show(UI_PAGE_SPEED);
+                }
             }
             if (e.type == SDL_MOUSEMOTION) {
                 g_mouse_x = e.motion.x / scale;
