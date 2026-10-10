@@ -1,0 +1,34 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Arduino IDE / arduino-cli 构建产物
+firmware/**/build/
+*.hex
+*.uf2
+*.partition.csv.tmp
+
+# 编译中间文件
+*.o
+*.d
+*.a
+*.elf
+*.bin.map
+
+# 参考仓库（体积大，按需另行克隆，见 docs/setup-macos.md）
+# 如需将官方仓库纳入版本管理可注释掉下一行
+reference/
+
+# 临时与日志
+*.log
+*.tmp
+tools/output/
+
+# 密钥/私有配置（如后续有 Wi-Fi 凭据等，勿提交）
+secrets/
