@@ -320,6 +320,11 @@ void ui_speed_set_variant(int variant)
     }
 }
 
+int ui_speed_get_variant(void)
+{
+    return s_variant;
+}
+
 void ui_speed_set_speed(float kmh)
 {
     s_speed = kmh;
