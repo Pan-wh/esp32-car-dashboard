@@ -14,6 +14,15 @@
 void ui_timesrc_now(struct tm *out);
 
 /*
+ * 取当前时间 + 亚秒毫秒（0-999），用于秒针连续滑动（扫秒）。
+ *
+ * 真机注意：PCF85063 只有整秒寄存器，没有亚秒。
+ * 移植时应在 RTC 秒值变化时记录 MCU 毫秒计时作为基准，
+ * 用 (now_ms - mark_ms) 推算亚秒偏移（此处接口不变）。
+ */
+void ui_timesrc_now_ms(struct tm *out, int *ms);
+
+/*
  * 冻结时间到指定时刻，用于截图验证与设计比对。
  * hour < 0 表示解除冻结，恢复系统时间。
  */
