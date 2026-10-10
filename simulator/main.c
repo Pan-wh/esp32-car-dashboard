@@ -19,6 +19,7 @@
 
 #include "lvgl.h"
 #include "ui_pages.h"
+#include "ui_speed.h"
 #include "ui_timesrc.h"
 
 #define SIM_W 466
@@ -135,6 +136,9 @@ int main(int argc, char **argv)
     Uint32 run_ms = 0;
     int start_page = 0;
     int fh = -1, fm = 0, fs = 0;
+    int speed_variant = 0;
+    float speed_kmh = 88.0f;
+    int nofix = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
@@ -142,6 +146,9 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc) shot = argv[++i];
         else if (!strcmp(argv[i], "--ms") && i + 1 < argc) run_ms = (Uint32)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--page") && i + 1 < argc) start_page = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--variant") && i + 1 < argc) speed_variant = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--speed") && i + 1 < argc) speed_kmh = (float)atof(argv[++i]);
+        else if (!strcmp(argv[i], "--nofix")) nofix = 1;
         else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
             if (sscanf(argv[++i], "%d:%d:%d", &fh, &fm, &fs) < 2) fh = -1;
         }
@@ -149,6 +156,11 @@ int main(int argc, char **argv)
 
     /* 冻结时间（截图验证/设计比对用）；未指定则用系统时间 */
     if (fh >= 0) ui_timesrc_freeze(fh, fm, fs);
+
+    /* 速度表盘预置状态（GNSS 未接入前由命令行模拟数据） */
+    ui_speed_set_variant(speed_variant);
+    ui_speed_set_speed(speed_kmh);
+    ui_speed_set_fix(nofix ? false : true, 12);
 
     if (offscreen) SDL_SetHint(SDL_HINT_VIDEODRIVER, "dummy");
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {

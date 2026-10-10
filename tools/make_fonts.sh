@@ -40,6 +40,12 @@ fi
 # Nunito: wght=700 (Bold)，表盘数字——圆头圆角、笔画饱满（"圆润"观感）
 "$PY" -m fontTools.varLib.instancer "$SRC/Nunito-VF.ttf" wght=700 \
   -o "$SRC/Nunito-Bold.ttf"
+# Inter: wght=700 (Bold) + opsz=32，速度大数字（车速需要粗壮醒目）
+"$PY" -m fontTools.varLib.instancer "$SRC/Inter-VF.ttf" wght=700 opsz=32 \
+  -o "$SRC/Inter-Bold.ttf"
+# Inter: wght=500 (Medium) + opsz=32，单位/刻度标签/状态文字
+"$PY" -m fontTools.varLib.instancer "$SRC/Inter-VF.ttf" wght=500 opsz=32 \
+  -o "$SRC/Inter-Medium.ttf"
 # Noto Sans SC: wght=400
 "$PY" -m fontTools.varLib.instancer "$SRC/NotoSansSC-VF.ttf" wght=400 \
   -o "$SRC/NotoSansSC-Regular.ttf"
@@ -51,6 +57,10 @@ fi
   --text="0123456789" --output-file="$SRC/nunito-num-sub.ttf"
 "$PY" -m fontTools.subset "$SRC/NotoSansSC-Regular.ttf" \
   --text="0123456789月日星期一二三四五六 ·" --output-file="$SRC/noto-date-sub.ttf"
+"$PY" -m fontTools.subset "$SRC/Inter-Bold.ttf" \
+  --text="0123456789" --output-file="$SRC/inter-bold-num-sub.ttf"
+"$PY" -m fontTools.subset "$SRC/Inter-Medium.ttf" \
+  --unicodes="U+0020-007E" --output-file="$SRC/inter-med-ascii-sub.ttf"
 
 # ---- 4) 生成 LVGL 字模 C 文件 ----
 cd simulator
@@ -63,11 +73,17 @@ npx --yes lv_font_conv --font "../$SRC/nunito-num-sub.ttf" \
 npx --yes lv_font_conv --font "../$SRC/noto-date-sub.ttf" \
   --size 26 --bpp 4 --format lvgl --no-compress \
   --symbols "0123456789月日星期一二三四五六 ·" --lv-font-name date_cjk_26 -o ui/font_date_cjk_26.c
+npx --yes lv_font_conv --font "../$SRC/inter-bold-num-sub.ttf" \
+  --size 150 --bpp 4 --format lvgl --no-compress \
+  -r 0x2D-0x39 --lv-font-name speed_num_150 -o ui/font_speed_num_150.c
+npx --yes lv_font_conv --font "../$SRC/inter-med-ascii-sub.ttf" \
+  --size 26 --bpp 4 --format lvgl --no-compress \
+  -r 0x20-0x7E --lv-font-name label_26 -o ui/font_label_26.c
 cd "$ROOT"
 
 # ---- 5) 同步子集 TTF 给 LVGL Pro 草稿工程 ----
 cp "$SRC/inter-el-sub.ttf" "$SRC/nunito-num-sub.ttf" "$SRC/noto-date-sub.ttf" \
-   design/lvglpro/fonts/
+   "$SRC/inter-bold-num-sub.ttf" "$SRC/inter-med-ascii-sub.ttf" design/lvglpro/fonts/
 
 echo "完成：simulator/ui/font_*.c + design/lvglpro/fonts/*.ttf"
 echo "换字重/字号：改第 2 步 wght= 或第 4 步 --size 后重跑本脚本。"
