@@ -12,10 +12,10 @@
         <bin as_file="false" name="date26"
              src_path="fonts/noto-date-sub.ttf"
              size="26" bpp="4" symbols="0123456789月日星期一二三四五六 ·"/>
-        <!-- 模拟时钟：表盘数字 Inter Regular 34px（贴近 SF Pro Display 观感） -->
-        <bin as_file="false" name="num34"
-             src_path="fonts/inter-num-sub.ttf"
-             size="34" bpp="4" range="0x30-0x39"/>
+        <!-- 模拟时钟：表盘数字 Nunito Bold 38px（圆润饱满，端点圆头） -->
+        <bin as_file="false" name="num38"
+             src_path="fonts/nunito-num-sub.ttf"
+             size="38" bpp="4" range="0x30-0x39"/>
     </fonts>
 
     <consts>
@@ -42,7 +42,7 @@
         <style name="style_tick_min" line_color="#c_tick_min" line_width="2" length="8"/>
         <!-- 整点刻度 + 数字 1-12：更长更亮，数字向内留出间隔 -->
         <style name="style_tick_hour" line_color="#c_tick_hour" line_width="3" length="16"
-               text_color="#c_num" text_font="num34" pad_radial="24"/>
+               text_color="#c_num" text_font="num38" pad_radial="24"/>
         <!-- 指针与中心点 -->
         <style name="style_hand_hour" bg_color="#c_hand" bg_opa="100%"/>
         <style name="style_hand_min"  bg_color="#c_hand" bg_opa="100%"/>

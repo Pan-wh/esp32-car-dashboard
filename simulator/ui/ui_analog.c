@@ -37,12 +37,12 @@
 #define TICK_LEN_MIN   8
 #define TICK_LEN_MAJ   16
 #define NEEDLE_HOUR    106  /* 时针长度 ≈ 0.48R */
-#define NEEDLE_MIN     154  /* 分针长度 ≈ 0.70R */
+#define NEEDLE_MIN     150  /* 分针长度 ≈ 0.68R（数字加大后留出间隙）*/
 #define NEEDLE_SEC     166  /* 秒针长度 ≈ 0.75R */
-#define NUM_RADIUS     176  /* 数字中心半径 */
+#define NUM_RADIUS     177  /* 数字中心半径（38px 字号）*/
 #define NUM_Y_NUDGE    (-2) /* 字体框含降部空间，视觉中心微调 */
 
-LV_FONT_DECLARE(num_inter_34); /* Inter Medium 34px，数字 0-9 */
+LV_FONT_DECLARE(num_dial_38); /* Nunito Bold 38px，表盘数字 0-9 */
 
 /* 量表满量程 = 1 小时 = 3600 单位 */
 #define SCALE_MAX 3600
@@ -106,7 +106,7 @@ static void create_numerals(lv_obj_t *parent)
 {
     for (int h = 1; h <= 12; h++) {
         lv_obj_t *lbl = lv_label_create(parent);
-        lv_obj_set_style_text_font(lbl, &num_inter_34, 0);
+        lv_obj_set_style_text_font(lbl, &num_dial_38, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(UI_NUM_COLOR), 0);
 
         char buf[4];
