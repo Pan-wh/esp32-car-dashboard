@@ -41,8 +41,8 @@ LV_IMG_DECLARE(driver_speeding);
 /* V5 参数 */
 #define DRIVER_IMG_SIZE   200  /* 中央插画边长（美术素材 200×200） */
 #define MARKER_INNER_R    168  /* 指针内端半径（避开 200px 插画：对角半径≤159） */
-#define DRIVER_SPIRITED_V 90.0f  /* 激烈驾驶阈值 km/h */
-#define DRIVER_SPEEDING_V 120.0f /* 超速阈值 km/h */
+#define DRIVER_SPIRITED_V 90.0f  /* 激烈驾驶阈值 km/h（用户确认：0-90 平静） */
+#define DRIVER_SPEEDING_V 120.0f /* 超速阈值 km/h（用户确认：>120 咬牙） */
 
 #define SEG_CNT 24 /* V4 分段数 */
 
