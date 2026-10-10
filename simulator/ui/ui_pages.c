@@ -9,6 +9,7 @@
 
 #include "ui_analog.h"
 #include "ui_clock.h"
+#include "ui_speed.h"
 
 #define UI_BG_COLOR 0x000000
 
@@ -56,6 +57,7 @@ void ui_pages_init(void)
     /* 页面内容 */
     ui_analog_create(s_pages[UI_PAGE_ANALOG]);
     ui_clock_create(s_pages[UI_PAGE_DIGITAL]);
+    ui_speed_create(s_pages[UI_PAGE_SPEED]);
 
     /* 让页面容器成为触摸目标（手势才能命中容器） */
     for (int i = 0; i < UI_PAGE_COUNT; i++) {
