@@ -12,7 +12,9 @@
 - [x] 官方仓库克隆与版本记录（commit `e4344e7`，见 `reference/` 与 `docs/decisions.md`）
 - [x] 01_HelloWorld 编译验证通过（仅编译，未烧录）
 - [x] UI 模拟器（SDL2 + LVGL 8.4.0，`simulator/`，见其 README）
-- [x] 主时钟表盘 v1（模拟器渲染已验证，真机未验证，`design/wireframes/clock.md`）
+- [x] 数字时钟 v2：iPhone 充电息屏风格（模拟器已验证，`design/wireframes/clock.md`）
+- [x] 模拟指针时钟 v1：极简风格，刻度环 + 三针 + 橙色秒针（逐点验证，`design/wireframes/analog-clock.md`）
+- [x] 页面切换：左右滑动（模拟时钟 ⇄ 数字时钟，`simulator/ui/ui_pages.c`）
 - [ ] 官方示例 01_HelloWorld 烧录验证（屏幕）
 - [ ] 官方示例 03_LVGL_PCF85063_simpleTime 烧录验证（RTC）
 - [ ] 官方示例 09_LC76G_I2C 烧录验证（GNSS）

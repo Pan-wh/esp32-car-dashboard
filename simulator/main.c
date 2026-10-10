@@ -18,7 +18,8 @@
 #include <string.h>
 
 #include "lvgl.h"
-#include "ui_clock.h"
+#include "ui_pages.h"
+#include "ui_timesrc.h"
 
 #define SIM_W 466
 #define SIM_H 466
@@ -132,13 +133,22 @@ int main(int argc, char **argv)
     bool offscreen = false;
     const char *shot = NULL;
     Uint32 run_ms = 0;
+    int start_page = 0;
+    int fh = -1, fm = 0, fs = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--offscreen")) offscreen = true;
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc) shot = argv[++i];
         else if (!strcmp(argv[i], "--ms") && i + 1 < argc) run_ms = (Uint32)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--page") && i + 1 < argc) start_page = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
+            if (sscanf(argv[++i], "%d:%d:%d", &fh, &fm, &fs) < 2) fh = -1;
+        }
     }
+
+    /* 冻结时间（截图验证/设计比对用）；未指定则用系统时间 */
+    if (fh >= 0) ui_timesrc_freeze(fh, fm, fs);
 
     if (offscreen) SDL_SetHint(SDL_HINT_VIDEODRIVER, "dummy");
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -193,8 +203,9 @@ int main(int argc, char **argv)
     indev_drv.read_cb = mouse_read_cb;
     lv_indev_drv_register(&indev_drv);
 
-    /* 业务 UI：主时钟表盘 */
-    ui_clock_create(lv_scr_act());
+    /* 业务 UI：页面管理（模拟时钟 / 数字时钟） */
+    ui_pages_init();
+    ui_pages_show((ui_page_t)start_page);
 
     Uint32 deadline = run_ms ? SDL_GetTicks() + run_ms : 0;
 

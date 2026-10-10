@@ -28,12 +28,27 @@ make run      # 交互模式：ESC 退出，S 键截图 screenshot.bmp
 ```
 
 - **鼠标 = 触摸**（模拟电容触摸点击/拖动）
+- **左右滑动切换页面**：模拟指针时钟 ⇄ 数字时钟
 - 圆形灰色描边是 466 圆屏的**物理可视边界**，角部深色区在真机上不可见
+
+### 命令行参数
+
+| 参数 | 说明 |
+|------|------|
+| `--scale N` | 窗口放大倍数（默认 2） |
+| `--page N` | 启动显示第 N 页（0=模拟时钟，1=数字时钟） |
+| `--time H:M:S` | **冻结时间**，便于截图验证/设计比对；缺省用系统时间 |
+| `--offscreen` | 无窗口（软件渲染，CI/验证用） |
+| `--ms N` | 运行 N 毫秒后自动退出 |
+| `--shot PATH` | 退出前截图到 PATH（24bit BMP，含圆形遮罩） |
 
 ## 自动截图（无窗口，验证用）
 
 ```bash
-make shot     # 等价：./dashboard_sim --offscreen --ms 1500 --shot shots/preview.bmp
+make shot     # 数字时钟页：./dashboard_sim --offscreen --ms 1500 --shot shots/preview.bmp
+
+# 模拟时钟页，冻结在 10:09:30（经典表盘位姿）
+./dashboard_sim --offscreen --ms 1200 --page 0 --time 10:09:30 --shot shots/analog.bmp
 ```
 
 ## 重新生成字体（时间 138px / 中文日期 26px）

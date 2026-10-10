@@ -13,7 +13,8 @@
 #include "ui_clock.h"
 
 #include <stdio.h>
-#include <time.h>
+
+#include "ui_timesrc.h"
 
 /* ---- 设计常量（与 design/wireframes/clock.md 对应，改动需同步文档）---- */
 #define UI_BG_COLOR    0x000000  /* 背景：纯黑（息屏观感） */
@@ -44,9 +45,8 @@ void ui_clock_set_time(int hour, int minute, int mon, int mday, int wday)
 static void clock_tick_cb(lv_timer_t *timer)
 {
     (void)timer;
-    time_t now = time(NULL);
     struct tm lt;
-    localtime_r(&now, &lt);
+    ui_timesrc_now(&lt);
     ui_clock_set_time(lt.tm_hour, lt.tm_min, lt.tm_mon, lt.tm_mday, lt.tm_wday);
 }
 
