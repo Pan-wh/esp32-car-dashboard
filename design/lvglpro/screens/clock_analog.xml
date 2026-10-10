@@ -1,0 +1,58 @@
+<!--
+  模拟指针时钟（草图镜像 of simulator/ui/ui_analog.c）
+  定格在 10:09:30（经典表盘位姿）。
+
+  ⚠️ 重要差异：真机实现用 LVGL 8.4 的 lv_meter（刻度环 + 自动旋转指针），
+     但 LVGL Pro 的内置控件里**没有 lv_meter**（LVGL 9 改用 lv_scale）。
+     因此本草图用 lv_scale 画刻度环与数字，三根指针是**静态旋转矩形**（不会走动）
+     仅用于确认布局/配色/字号。动态与实际渲染以模拟器为准。
+-->
+<screen>
+    <view style_bg_color="0x000000">
+        <!-- 分钟刻度环：60 个刻度，6° 间隔，无标签 -->
+        <lv_scale width="440" height="440" align="center"
+                  mode="round_inner" min_value="0" max_value="59"
+                  total_tick_count="60" label_show="false"
+                  angle_range="354" rotation="270">
+            <style name="style_tick_min" selector="items"/>
+        </lv_scale>
+
+        <!-- 整点刻度环 + 数字 1-12 -->
+        <lv_scale width="440" height="440" align="center"
+                  mode="round_inner" min_value="1" max_value="12"
+                  total_tick_count="12" major_tick_every="1" label_show="true"
+                  angle_range="330" rotation="300">
+            <style name="style_tick_hour" selector="indicator"/>
+        </lv_scale>
+
+        <!-- 指针（静态定格 10:09:30；pivot 在矩形底端 = 表盘中心）-->
+        <!-- 时针：长 106，宽 9，10 时 09 分 30 秒 → 304.8° -->
+        <lv_obj width="9" height="106" x="228" y="127" radius="4"
+                style_transform_pivot_x="4" style_transform_pivot_y="106"
+                style_transform_rotation="3048">
+            <style name="style_hand_hour"/>
+        </lv_obj>
+
+        <!-- 分针：长 154，宽 5，9 分 30 秒 → 57° -->
+        <lv_obj width="5" height="154" x="230" y="79" radius="2"
+                style_transform_pivot_x="2" style_transform_pivot_y="154"
+                style_transform_rotation="570">
+            <style name="style_hand_min"/>
+        </lv_obj>
+
+        <!-- 秒针：长 166，宽 2，30 秒 → 180° -->
+        <lv_obj width="2" height="166" x="232" y="67" radius="1"
+                style_transform_pivot_x="1" style_transform_pivot_y="166"
+                style_transform_rotation="1800">
+            <style name="style_hand_sec"/>
+        </lv_obj>
+
+        <!-- 中心圆点：白底 18px + 橙色内点 8px -->
+        <lv_obj width="18" height="18" align="center" radius="9">
+            <style name="style_dot"/>
+        </lv_obj>
+        <lv_obj width="8" height="8" align="center" radius="4">
+            <style name="style_dot_in"/>
+        </lv_obj>
+    </view>
+</screen>

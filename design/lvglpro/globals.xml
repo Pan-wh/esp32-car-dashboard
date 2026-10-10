@@ -1,28 +1,53 @@
 <!--
-  全局资源：字体 / 常量 / 样式（v2：iPhone 息屏时钟风格）
-  参数与 simulator/ui/ui_clock.c、design/wireframes/clock.md 保持一致。
+  全局资源：字体 / 常量 / 样式
+  参数与 simulator/ui/*.c、design/wireframes/*.md 保持一致。
 -->
 <globals>
     <fonts>
-        <!-- 时间主字体：Inter ExtraLight 138px（SF Pro 细字重的开源近似） -->
+        <!-- 数字时钟：时间主字体 Inter ExtraLight 138px（iPhone 息屏风格） -->
         <bin as_file="false" name="clock138"
              src_path="fonts/inter-el-sub.ttf"
              size="138" bpp="4" range="0x20-0x3A"/>
-        <!-- 日期字体：Noto Sans SC 26px（中文日期） -->
+        <!-- 数字时钟：中文日期 Noto Sans SC 26px -->
         <bin as_file="false" name="date26"
              src_path="fonts/noto-date-sub.ttf"
              size="26" bpp="4" symbols="0123456789月日星期一二三四五六 ·"/>
+        <!-- 模拟时钟：表盘数字 Inter Medium 34px -->
+        <bin as_file="false" name="num34"
+             src_path="fonts/inter-med-sub.ttf"
+             size="34" bpp="4" range="0x30-0x39"/>
     </fonts>
 
     <consts>
-        <!-- 设计规范色板（design/wireframes/clock.md v2） -->
+        <!-- 公共 -->
         <color name="c_bg"    value="0x000000"/>
+        <!-- 数字时钟 -->
         <color name="c_time"  value="0xF5F5F7"/>
         <color name="c_date"  value="0x98989E"/>
+        <!-- 模拟时钟 -->
+        <color name="c_tick_min"  value="0x5A5A5F"/>
+        <color name="c_tick_hour" value="0xC8C8CE"/>
+        <color name="c_num"       value="0xF5F5F7"/>
+        <color name="c_hand"      value="0xF5F5F7"/>
+        <color name="c_hand_sec"  value="0xFF9500"/>
     </consts>
 
     <styles>
+        <!-- ===== 数字时钟（screens/clock.xml）===== -->
         <style name="style_time" text_font="clock138" text_color="#c_time"/>
         <style name="style_date" text_font="date26"   text_color="#c_date"/>
+
+        <!-- ===== 模拟时钟（screens/clock_analog.xml）===== -->
+        <!-- 分钟刻度：60 个，短且暗 -->
+        <style name="style_tick_min" line_color="#c_tick_min" line_width="2" length="8"/>
+        <!-- 整点刻度 + 数字 1-12：更长更亮，数字向内留出间隔 -->
+        <style name="style_tick_hour" line_color="#c_tick_hour" line_width="3" length="16"
+               text_color="#c_num" text_font="num34" pad_radial="24"/>
+        <!-- 指针与中心点 -->
+        <style name="style_hand_hour" bg_color="#c_hand" bg_opa="100%"/>
+        <style name="style_hand_min"  bg_color="#c_hand" bg_opa="100%"/>
+        <style name="style_hand_sec"  bg_color="#c_hand_sec" bg_opa="100%"/>
+        <style name="style_dot"       bg_color="#c_hand" bg_opa="100%"/>
+        <style name="style_dot_in"    bg_color="#c_hand_sec" bg_opa="100%"/>
     </styles>
 </globals>

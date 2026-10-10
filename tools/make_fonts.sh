@@ -34,6 +34,9 @@ fi
 # Inter: wght=200 (ExtraLight) + opsz=32（大字号显示优化）
 "$PY" -m fontTools.varLib.instancer "$SRC/Inter-VF.ttf" wght=200 opsz=32 \
   -o "$SRC/Inter-ExtraLight.ttf"
+# Inter: wght=500 (Medium)，用于模拟时钟 1-12 数字
+"$PY" -m fontTools.varLib.instancer "$SRC/Inter-VF.ttf" wght=500 opsz=32 \
+  -o "$SRC/Inter-Medium.ttf"
 # Noto Sans SC: wght=400
 "$PY" -m fontTools.varLib.instancer "$SRC/NotoSansSC-VF.ttf" wght=400 \
   -o "$SRC/NotoSansSC-Regular.ttf"
@@ -41,6 +44,8 @@ fi
 # ---- 3) 子集化（只留需要的字形，TTF 缩到 ~5KB）----
 "$PY" -m fontTools.subset "$SRC/Inter-ExtraLight.ttf" \
   --text="0123456789: " --output-file="$SRC/inter-el-sub.ttf"
+"$PY" -m fontTools.subset "$SRC/Inter-Medium.ttf" \
+  --text="0123456789" --output-file="$SRC/inter-med-sub.ttf"
 "$PY" -m fontTools.subset "$SRC/NotoSansSC-Regular.ttf" \
   --text="0123456789月日星期一二三四五六 ·" --output-file="$SRC/noto-date-sub.ttf"
 
@@ -49,13 +54,17 @@ cd simulator
 npx --yes lv_font_conv --font "../$SRC/inter-el-sub.ttf" \
   --size 138 --bpp 4 --format lvgl --no-compress \
   -r 0x20-0x3A --lv-font-name clock_iphone_138 -o ui/font_clock_iphone_138.c
+npx --yes lv_font_conv --font "../$SRC/inter-med-sub.ttf" \
+  --size 34 --bpp 4 --format lvgl --no-compress \
+  -r 0x30-0x39 --lv-font-name num_inter_34 -o ui/font_num_inter_34.c
 npx --yes lv_font_conv --font "../$SRC/noto-date-sub.ttf" \
   --size 26 --bpp 4 --format lvgl --no-compress \
   --symbols "0123456789月日星期一二三四五六 ·" --lv-font-name date_cjk_26 -o ui/font_date_cjk_26.c
 cd "$ROOT"
 
 # ---- 5) 同步子集 TTF 给 LVGL Pro 草稿工程 ----
-cp "$SRC/inter-el-sub.ttf" "$SRC/noto-date-sub.ttf" design/lvglpro/fonts/
+cp "$SRC/inter-el-sub.ttf" "$SRC/inter-med-sub.ttf" "$SRC/noto-date-sub.ttf" \
+   design/lvglpro/fonts/
 
 echo "完成：simulator/ui/font_*.c + design/lvglpro/fonts/*.ttf"
 echo "如需新增字形（如秒数、其他汉字），改第 3 步 --text 后重跑本脚本。"
