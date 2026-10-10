@@ -1,0 +1,38 @@
+<!--
+  全局资源：字体 / 常量 / 样式
+  参数与 simulator/ui/ui_clock.c、design/wireframes/clock.md 保持一致。
+-->
+<globals>
+    <fonts>
+        <!-- 时间主字体：96px Montserrat SemiBold（与模拟器/固件同源） -->
+        <bin as_file="false" name="clock96"
+             src_path="fonts/Montserrat-SemiBold.ttf"
+             size="96" bpp="4" range="0x20-0x3A" symbols="·"/>
+        <!-- 日期字体：20px -->
+        <bin as_file="false" name="date20"
+             src_path="fonts/Montserrat-SemiBold.ttf"
+             size="20" bpp="4" range="0x20-0x7F"/>
+    </fonts>
+
+    <consts>
+        <!-- 设计规范色板（design/wireframes/clock.md） -->
+        <color name="c_bg"         value="0x0B0D10"/>
+        <color name="c_fg_main"     value="0xF2F4F7"/>
+        <color name="c_fg_dim"      value="0x8A919E"/>
+        <color name="c_ring_outer"  value="0x3A4149"/>
+        <color name="c_ring_inner"  value="0x2A3138"/>
+    </consts>
+
+    <styles>
+        <style name="style_ring_outer"
+               radius="225" bg_opa="0%"
+               border_width="2" border_color="#c_ring_outer"/>
+        <style name="style_ring_inner"
+               radius="218" bg_opa="0%"
+               border_width="1" border_color="#c_ring_inner"/>
+        <style name="style_time"
+               text_font="clock96" text_color="#c_fg_main" text_letter_space="4"/>
+        <style name="style_date"
+               text_font="date20" text_color="#c_fg_dim" text_letter_space="1"/>
+    </styles>
+</globals>
