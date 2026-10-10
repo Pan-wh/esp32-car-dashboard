@@ -35,6 +35,14 @@ ACCENTS = {
 
 SS = 4  # 超采样倍数（先放大画，再缩小，得到平滑线条）
 
+# 状态 → 源 PNG 文件名（**表情与速度区间的对应关系改这里**）
+# 源图由 tools/cut_driver_sheet.py 从组图切出（200×200，圆外已置黑）。
+STATE_FILES = {
+    "normal":   "driver_calm.png",   # 平静（半睁眼 + 平嘴）
+    "spirited": "driver_frown.png",  # 皱眉（眉头下压 + 下撇嘴）
+    "speeding": "driver_shout.png",  # 咬牙瞪眼（张口 + 怒眉）
+}
+
 
 def draw_driver(state: str, size: int = 180) -> Image.Image:
     """卡通驾驶员（圆脸 + 卷发 + 双手扶方向盘），三种状态表情。
@@ -186,19 +194,22 @@ def png_to_lvgl_c(path_png: str, name: str) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--force", action="store_true", help="强制重画临时底图")
+    ap.add_argument("--force", action="store_true",
+                    help="源图缺失时用内置卡通底图重新生成（覆盖同名文件）")
     args = ap.parse_args()
 
     os.makedirs(IMG_DIR, exist_ok=True)
     states = ["normal", "spirited", "speeding"]
 
     for st in states:
-        p = os.path.join(IMG_DIR, f"driver_{st}.png")
+        p = os.path.join(IMG_DIR, STATE_FILES[st])
         if args.force or not os.path.exists(p):
-            draw_driver(st).save(p)
-            print(f"已生成临时底图: {p}")
+            # 兜底：没有美术素材时用内置卡通底图（仅用于开发预览）
+            fallback = os.path.join(IMG_DIR, f"driver_{st}.png")
+            draw_driver(st, size=200).save(fallback)
+            print(f"[兜底] 缺少 {STATE_FILES[st]}，已生成临时底图: {fallback}")
         else:
-            print(f"已存在（用 --force 可重画）: {p}")
+            print(f"使用美术素材: {STATE_FILES[st]}")
 
     header = f"""/**
  * ui_driver_images.c —— 驾驶员插画（LVGL 图像资源）
@@ -220,7 +231,7 @@ def main():
 """
     parts = [header]
     for st in states:
-        parts.append(png_to_lvgl_c(os.path.join(IMG_DIR, f"driver_{st}.png"), f"driver_{st}"))
+        parts.append(png_to_lvgl_c(os.path.join(IMG_DIR, STATE_FILES[st]), f"driver_{st}"))
         parts.append("")
 
     with open(OUT_C, "w", encoding="utf-8") as f:
