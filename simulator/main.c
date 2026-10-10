@@ -208,6 +208,7 @@ int main(int argc, char **argv)
     ui_pages_show((ui_page_t)start_page);
 
     Uint32 deadline = run_ms ? SDL_GetTicks() + run_ms : 0;
+    Uint32 last_tick = SDL_GetTicks();
 
     for (;;) {
         SDL_Event e;
@@ -228,6 +229,17 @@ int main(int argc, char **argv)
             }
             if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == 1) g_mouse_down = true;
             if (e.type == SDL_MOUSEBUTTONUP && e.button.button == 1) g_mouse_down = false;
+        }
+
+        /*
+         * 喂 LVGL 心跳：LV_TICK_CUSTOM=0 时必须周期性调用 lv_tick_inc()，
+         * 否则 LVGL 认为时间没有流逝，所有 lv_timer 都不会触发
+         * （表现为时钟不走、秒针不动）。真机上由硬件定时器做同样的事。
+         */
+        Uint32 now_tick = SDL_GetTicks();
+        if (now_tick != last_tick) {
+            lv_tick_inc(now_tick - last_tick);
+            last_tick = now_tick;
         }
 
         lv_timer_handler();
