@@ -5,7 +5,7 @@
  *   - 纯黑背景（AMOLED 息屏省电）
  *   - 外围 60 个灰色分钟刻度；12 个整点刻度更长更亮
  *   - 白色阿拉伯数字 1-12
- *   - 白色时针（粗短）/ 分针（细长）；橙色秒针（**连续滑动扫秒，20Hz**）
+ *   - 白色时针（粗短）/ 分针（细长）；橙色秒针（默认**每秒跳动**，可切连续滑动）
  *   - 中心圆点连接三针
  *
  * 实现要点（依据 LVGL 8.4 源码 lv_meter.c 实测语义）：
@@ -44,6 +44,10 @@
 
 LV_FONT_DECLARE(num_dial_38); /* Nunito Bold 38px，表盘数字 0-9 */
 
+/* 秒针模式：1 = 连续滑动扫秒（20Hz）；0 = 每秒跳动（默认，经典石英表观感）
+ * 两种模式都已实现并验证，切换本宏即可（详见 design/wireframes/analog-clock.md 第 6 节） */
+#define ANALOG_SECOND_SWEEP 0
+
 /* 量表满量程 = 1 小时 = 3600 单位 */
 #define SCALE_MAX 3600
 
@@ -65,11 +69,15 @@ static void update_hands(void)
     int ms;
     ui_timesrc_now_ms(&t, &ms);
 
-    /*
-     * 秒针连续滑动（扫秒，非跳动）：量表 3600 单位 = 60 分钟，
-     * 故 1 秒 = 60 单位 = 6°，1 毫秒 ≈ 0.06 单位。
-     */
-    int32_t v_sec = (int32_t)t.tm_sec * 60 + (int32_t)ms * 60 / 1000;
+    int32_t v_sec;
+#if ANALOG_SECOND_SWEEP
+    /* 连续滑动：量表 3600 单位 = 60 分钟 → 1 秒 = 60 单位 = 6°，1 毫秒 ≈ 0.06 单位 */
+    v_sec = (int32_t)t.tm_sec * 60 + (int32_t)ms * 60 / 1000;
+#else
+    /* 每秒跳动：位置只取决于整秒 */
+    (void)ms;
+    v_sec = (int32_t)t.tm_sec * 60;
+#endif
     int32_t v_min = (int32_t)t.tm_min * 60 + (int32_t)t.tm_sec;     /* 每分 60 单位 = 6° */
     int32_t v_hour = (int32_t)(t.tm_hour % 12) * 300                /* 每小时 300 单位 = 30° */
                      + (int32_t)t.tm_min * 5 + (int32_t)t.tm_sec / 12;
@@ -187,11 +195,15 @@ lv_obj_t *ui_analog_create(lv_obj_t *parent)
     create_numerals(parent);
     create_center_dot(parent);
 
-    /* 初始化指针位置并以 20Hz 刷新（秒针连续滑动） */
+    /* 初始化指针位置并启动刷新定时器 */
     s_ctx.last_hour = -1;
     s_ctx.last_min = -1;
     update_hands();
-    lv_timer_create(analog_tick_cb, 50, NULL); /* 20 Hz → 每秒 6° 平滑扫过 */
+#if ANALOG_SECOND_SWEEP
+    lv_timer_create(analog_tick_cb, 50, NULL);   /* 20 Hz → 每秒 6° 平滑扫过 */
+#else
+    lv_timer_create(analog_tick_cb, 1000, NULL); /* 1 Hz → 每秒跳一格 */
+#endif
 
     return s_ctx.meter;
 }
