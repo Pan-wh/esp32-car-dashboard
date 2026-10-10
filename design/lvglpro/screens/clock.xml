@@ -1,28 +1,18 @@
 <!--
-  主时钟表盘（草稿镜像 of simulator/ui/ui_clock.c）
-  布局：466×466 圆屏，双层表环，中心 96px 时间，其下日期。
+  主时钟表盘 v2：iPhone 充电息屏时钟风格（镜像 simulator/ui/ui_clock.c）
+  纯黑背景，中文日期在上（弱化），超大极细时间在下。
   注意：编辑器预览为静态草稿（不接真实 RTC 数据）；正式实现以 simulator/ui 为准。
 -->
 <screen>
-    <view style_bg_color="0x0B0D10">
-        <!-- 外表环：450×450（r=225，屏缘内 8px） -->
-        <lv_obj width="450" height="450" align="center" scrollable="false">
-            <style name="style_ring_outer"/>
-        </lv_obj>
-
-        <!-- 内表环：436×436（r=218） -->
-        <lv_obj width="436" height="436" align="center" scrollable="false">
-            <style name="style_ring_inner"/>
-        </lv_obj>
-
-        <!-- 时间（主数据） -->
-        <lv_label text="10:58" align="center" x="0" y="-16">
-            <style name="style_time"/>
+    <view style_bg_color="0x000000">
+        <!-- 日期 + 星期（次要信息，弱化，时间上方） -->
+        <lv_label text="10月10日 星期六" align="center" x="0" y="-60">
+            <style name="style_date"/>
         </lv_label>
 
-        <!-- 日期 + 星期（次要数据，弱化） -->
-        <lv_label text="OCT 10 · SAT" align="center" x="0" y="52">
-            <style name="style_date"/>
+        <!-- 时间（主数据，超大极细，无前导零如 9:41） -->
+        <lv_label text="9:41" align="center" x="0" y="16">
+            <style name="style_time"/>
         </lv_label>
     </view>
 </screen>
