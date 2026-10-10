@@ -139,6 +139,7 @@ int main(int argc, char **argv)
     int speed_variant = 0;
     float speed_kmh = 88.0f;
     int nofix = 0;
+    int driver_state = UI_DRIVER_AUTO;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
@@ -149,6 +150,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--variant") && i + 1 < argc) speed_variant = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--speed") && i + 1 < argc) speed_kmh = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--nofix")) nofix = 1;
+        else if (!strcmp(argv[i], "--driver") && i + 1 < argc) driver_state = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
             if (sscanf(argv[++i], "%d:%d:%d", &fh, &fm, &fs) < 2) fh = -1;
         }
@@ -161,6 +163,7 @@ int main(int argc, char **argv)
     ui_speed_set_variant(speed_variant);
     ui_speed_set_speed(speed_kmh);
     ui_speed_set_fix(nofix ? false : true, 12);
+    ui_speed_set_driver_state(driver_state);
 
     if (offscreen) SDL_SetHint(SDL_HINT_VIDEODRIVER, "dummy");
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
