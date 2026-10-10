@@ -33,9 +33,9 @@
             <style name="style_hand_hour"/>
         </lv_obj>
 
-        <!-- 分针：长 154，宽 5，9 分 30 秒 → 57° -->
-        <lv_obj width="5" height="154" x="230" y="79" style_radius="3"
-                style_transform_pivot_x="2" style_transform_pivot_y="154"
+        <!-- 分针：长 150，宽 5，9 分 30 秒 → 57° -->
+        <lv_obj width="5" height="150" x="230" y="83" style_radius="3"
+                style_transform_pivot_x="2" style_transform_pivot_y="150"
                 style_transform_rotation="570">
             <style name="style_hand_min"/>
         </lv_obj>
