@@ -15,9 +15,12 @@ SRC="$ROOT/simulator/ui"
 [ -d "$SRC" ] || { echo "找不到共享源码目录: $SRC"; exit 1; }
 mkdir -p "$DST"
 
-# 清理上次同步的文件（只删我们自己同步的：ui_*.c/h、gnss_*.c/h、font_*.c、ui_driver_images.c）
-for f in "$DST"/ui_*.c "$DST"/ui_*.h "$DST"/gnss_*.c "$DST"/gnss_*.h "$DST"/font_*.c; do
-  [ -e "$f" ] && rm -f "$f"
+# 清理上次同步的文件。
+# ⚠️ 只删**确实来自 simulator/ui/ 的同名文件**，不要用 gnss_*.c 这类宽泛通配，
+#    否则会误删固件侧手写的文件（例如 gnss_lc76g.c 是固件专用的 I2C 读取层）。
+for f in "$SRC"/*.c "$SRC"/*.h; do
+  base=$(basename "$f")
+  [ -e "$DST/$base" ] && rm -f "$DST/$base"
 done
 
 # 复制共享源码（排除模拟器专用文件）
