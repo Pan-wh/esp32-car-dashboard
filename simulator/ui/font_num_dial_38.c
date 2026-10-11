@@ -1,13 +1,13 @@
 /*******************************************************************************
  * Size: 38 px
  * Bpp: 4
- * Opts: --font ../design/assets/fonts/src/nunito-num-sub.ttf --size 38 --bpp 4 --format lvgl --no-compress -r 0x30-0x39 --lv-font-name num_dial_38 -o ui/font_num_dial_38.c
+ * Opts: --font ../design/assets/fonts/src/nunito-num-sub.ttf --size 38 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h -r 0x30-0x39 --lv-font-name num_dial_38 -o ui/font_num_dial_38.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
 #else
-#include "lvgl/lvgl.h"
+#include "lvgl.h"
 #endif
 
 #ifndef NUM_DIAL_38

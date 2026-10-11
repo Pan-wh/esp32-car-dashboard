@@ -10,7 +10,19 @@
 
 #include <time.h>
 
-/* 取当前时间（系统时间，或冻结后的固定时间） */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
+/*
+ * 时间提供者：默认为「系统时间」（模拟器）；固件注册 RTC 读取函数即可，
+ * 页面代码无需改动。
+ */
+typedef void (*ui_timesrc_provider_t)(struct tm *out);
+void ui_timesrc_set_provider(ui_timesrc_provider_t fn);
+
+/* 取当前时间（提供者时间 / 系统时间 / 冻结时间） */
 void ui_timesrc_now(struct tm *out);
 
 /*
@@ -27,5 +39,9 @@ void ui_timesrc_now_ms(struct tm *out, int *ms);
  * hour < 0 表示解除冻结，恢复系统时间。
  */
 void ui_timesrc_freeze(int hour, int min, int sec);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* UI_TIMESRC_H */

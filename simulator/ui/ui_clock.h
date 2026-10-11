@@ -9,7 +9,16 @@
 
 #include "lvgl.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
 /* 创建主时钟表盘；parent 通常传 lv_scr_act() */
 void ui_clock_create(lv_obj_t *parent);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* UI_CLOCK_H */

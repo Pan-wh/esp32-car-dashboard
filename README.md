@@ -21,6 +21,8 @@
 - [x] 速度表盘 V5（驾驶员三态 + 白底 + 速度渐变，像素级验证）
 - [x] GNSS 数据链路：NMEA 解析（44 项单测通过）+ 日志回放端到端验证（见 `docs/gnss.md`）
 - [ ] GNSS 硬件读取层（I2C，待板子到货）
+- [x] 固件工程骨架 `firmware/dashboard/`：官方初始化流程 + 共享 UI/解析代码，
+      **编译通过**（Flash 40% / RAM 36%），未烧录（见 firmware/dashboard/README.md）
 - [ ] 速度表盘页设计 + 主界面原型
 
 ## 目录结构
