@@ -21,7 +21,7 @@ CFLAGS := -O2 -std=gnu99 -Wall -Wextra -Wno-unused-parameter \
 UI_SRC := $(wildcard ui/*.c)
 
 LVGL_SRC := $(shell find $(LVGL_DIR)/src -name '*.c')
-APP_SRC  := main.c $(UI_SRC)
+APP_SRC  := $(wildcard *.c) $(UI_SRC)
 SRCS     := $(LVGL_SRC) $(APP_SRC)
 OBJS     := $(addprefix $(BUILD)/,$(SRCS:=.o))
 
@@ -42,7 +42,11 @@ run: $(BIN)
 shot: $(BIN)
 	./$(BIN) --offscreen --ms 1500 --shot shots/preview.bmp
 
+# 逻辑单元测试（PC 上运行，不需要硬件）
+test:
+	$(MAKE) -C ../tests run
+
 clean:
 	rm -rf $(BUILD) $(BIN)
 
-.PHONY: all run shot clean
+.PHONY: all run shot test clean
