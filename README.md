@@ -15,7 +15,9 @@
 - [x] 数字时钟 v2：iPhone 充电息屏风格（模拟器已验证，`design/wireframes/clock.md`）
 - [x] 模拟指针时钟 v1：极简风格，刻度环 + 三针 + 橙色秒针（逐点验证，`design/wireframes/analog-clock.md`）
 - [x] 页面切换：左右滑动（模拟时钟 ⇄ 数字时钟，`simulator/ui/ui_pages.c`）
-- [ ] 官方示例 01_HelloWorld 烧录验证（屏幕）
+- [x] 官方示例 01_HelloWorld 烧录验证（**真机通过**：屏幕显示 + 串口每 200ms 输出）
+- [x] 官方示例 03_LVGL_PCF85063_simpleTime 烧录验证（**真机通过**：LVGL 渲染 + RTC 每秒走时）
+- [x] 本工程固件烧录运行（**真机通过**：3 页 UI、串口命令、RTC 校时；GNSS 待接天线）
 - [ ] 官方示例 03_LVGL_PCF85063_simpleTime 烧录验证（RTC）
 - [ ] 官方示例 09_LC76G_I2C 烧录验证（GNSS）
 - [x] 速度表盘 V5（驾驶员三态 + 白底 + 速度渐变，像素级验证）
