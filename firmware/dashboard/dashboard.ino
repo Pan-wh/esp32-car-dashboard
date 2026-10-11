@@ -36,6 +36,8 @@ extern "C" {
 #include "ui_pages.h"
 #include "ui_speed.h"
 #include "ui_timesrc.h"
+#include "gnss_nmea.h"   /* 平台无关的 NMEA 解析（模拟器/固件共用） */
+#include "gnss_lc76g.h"  /* LC76G I2C 读取层（固件侧） */
 }
 
 /* ---------------- 可调参数 ---------------- */
@@ -110,6 +112,64 @@ static void tlog_add(int16_t x, int16_t y, bool pressed)
   s_tlog_head = (s_tlog_head + 1) % TOUCH_LOG_N;
   if (s_tlog_cnt < TOUCH_LOG_N) s_tlog_cnt++;
 }
+
+/* ---------------- GNSS（LC76G，I2C 共享总线）---------------- */
+
+/*
+ * LC76G 的复位由 TCA9554 IO 扩展器（0x20）的 P7/EXIO7 控制（GPS_RST）。
+ * 依据：厂商 HARDWARE_REFERENCE_ZH.md「P7 / EXIO7 | GPS_RST | 输出 | -G 版本 LC76G 复位」。
+ * 官方 Arduino 示例与 IDF BSP **都没有驱动该引脚**，因此模块默认处于复位状态、
+ * 不会出现在 I2C 总线上（实测扫描确实没有 0x50/0x54）。
+ *
+ * TCA9554 寄存器：0x03 = 方向（0=输出），0x01 = 输出电平。
+ */
+#define TCA9554_ADDR 0x20
+#define TCA9554_REG_OUT 0x01
+#define TCA9554_REG_DIR 0x03
+#define GPS_RST_BIT 7
+
+static bool gps_reset_release(void)
+{
+    uint8_t dir = 0, out = 0;
+
+    /* 读回当前方向寄存器，只把 P7 设为输出，其余位保持不变 */
+    Wire.beginTransmission(TCA9554_ADDR);
+    Wire.write(TCA9554_REG_DIR);
+    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.requestFrom((uint8_t)TCA9554_ADDR, (uint8_t)1) != 1) return false;
+    dir = (uint8_t)Wire.read();
+    dir = (uint8_t)(dir & ~((uint8_t)1 << GPS_RST_BIT)); /* P7 = 输出，其余不动 */
+
+    Wire.beginTransmission(TCA9554_ADDR);
+    Wire.write(TCA9554_REG_DIR);
+    Wire.write(dir);
+    if (Wire.endTransmission() != 0) return false;
+
+    /* 读回当前输出寄存器，只改 P7，避免影响其他被扩展器控制的功能 */
+    Wire.beginTransmission(TCA9554_ADDR);
+    Wire.write(TCA9554_REG_OUT);
+    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.requestFrom((uint8_t)TCA9554_ADDR, (uint8_t)1) != 1) return false;
+    out = (uint8_t)Wire.read();
+
+    /* 先拉低再拉高，产生一次干净复位脉冲 */
+    Wire.beginTransmission(TCA9554_ADDR);
+    Wire.write(TCA9554_REG_OUT);
+    Wire.write((uint8_t)(out & ~((uint8_t)1 << GPS_RST_BIT)));
+    if (Wire.endTransmission() != 0) return false;
+    delay(50);
+
+    Wire.beginTransmission(TCA9554_ADDR);
+    Wire.write(TCA9554_REG_OUT);
+    Wire.write((uint8_t)(out | ((uint8_t)1 << GPS_RST_BIT)));
+    if (Wire.endTransmission() != 0) return false;
+
+    return true;
+}
+
+/* GNSS 解析上下文（在 gnss_poll 中填充） */
+static gnss_ctx_t gnss;
+static bool gnss_ok = false;
 
 /* ---------------- RTC ---------------- */
 
@@ -355,11 +415,57 @@ static void print_help(void)
   Serial.println("       set YYYY-MM-DD HH:MM:SS   手动校准 RTC 时间（例：set 2026-10-10 22:30:00）");
   Serial.println("       page N                   切换页面");
   Serial.println("       pages                    列出页面");
+  Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
+  Serial.println("       gnss                     显示 GNSS 定位状态与统计");
   Serial.println("       rot 0|1|2|3              屏幕内容旋转（0=0° 1=90° 2=180° 3=270°）");
   Serial.println("       mem                      显示 LVGL/ESP 内存情况");
   Serial.println("       dump                     打印当前屏幕的元素树（排查元素缺失）");
   Serial.println("       touch                    打印最近触摸采样（排查坐标镜像/旋转）");
   Serial.println("       help                     显示本帮助");
+}
+
+/* I2C 总线扫描（排障：确认 LC76G 等器件是否在线） */
+static void print_scan(void)
+{
+  Serial.println("[扫描] I2C 总线（SDA=15, SCL=14）:");
+  int n = 0;
+  for (uint8_t a = 1; a < 127; a++) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) {
+      Serial.printf("        0x%02X", a);
+      if (a == 0x51) Serial.print(" (RTC PCF85063)");
+      if (a == 0x5A) Serial.print(" (触摸 CST9217)");
+      if (a == 0x6B) Serial.print(" (IMU QMI8658)");
+      if (a == 0x50) Serial.print(" (LC76G 写)");
+      if (a == 0x54) Serial.print(" (LC76G 读)");
+      Serial.println();
+      n++;
+    }
+  }
+  Serial.printf("[扫描] 共 %d 个设备\n", n);
+}
+
+/* 打印 GNSS 状态（排障用） */
+static void print_gnss(void)
+{
+  if (!gnss_ok) {
+    Serial.println("[GNSS] 未握手（I2C 无响应）");
+    return;
+  }
+
+  uint32_t age = gnss_age_ms(&gnss);
+  Serial.printf("[GNSS] 定位=%s 卫星=%d(用)/%d(见) HDOP=%.1f 高度=%.1fm\n",
+                gnss.data.valid ? (gnss.data.fix == GNSS_FIX_3D ? "3D"
+                                   : gnss.data.fix == GNSS_FIX_2D ? "2D" : "有效")
+                                : "无",
+                gnss.data.sats_used, gnss.data.sats_view, (double)gnss.data.hdop,
+                (double)gnss.data.altitude_m);
+  Serial.printf("       速度=%.2f km/h 航向=%.1f° UTC=%02d:%02d:%02d %04d-%02d-%02d\n",
+                (double)gnss.data.speed_kmh, (double)gnss.data.course_deg, gnss.data.utc_h,
+                gnss.data.utc_m, gnss.data.utc_s, gnss.data.year, gnss.data.month, gnss.data.day);
+  Serial.printf("       数据龄=%s 语句=%u 校验错=%u 未知=%u 溢出=%u\n",
+                (age == UINT32_MAX) ? "无数据" : String(age).c_str(), (unsigned)gnss.sentences,
+                (unsigned)gnss.checksum_err, (unsigned)gnss.unknown, (unsigned)gnss.overflow);
 }
 
 /* 打印 LVGL 内存与堆情况（排查元素缺失） */
@@ -447,6 +553,12 @@ static void process_command(char *cmd)
       Serial.println("[旋转] 参数应为 0/1/2/3");
     }
   }
+  else if (strcmp(cmd, "scan") == 0) {
+    print_scan();
+  }
+  else if (strcmp(cmd, "gnss") == 0) {
+    print_gnss();
+  }
   else if (strcmp(cmd, "mem") == 0) {
     print_mem();
   }
@@ -530,6 +642,25 @@ void setup()
   bool tp_ok = touch_init();
   rtc_ok = rtc_init();
 
+  /* GNSS：复用触摸/RTC 已初始化的同一条 I2C 总线（SDA=15, SCL=14） */
+  gnss_init(&gnss);
+  Serial.printf("[GNSS] 释放 GPS_RST(TCA9554 P7) %s\n",
+                gps_reset_release() ? "成功" : "失败（扩展器无响应）");
+
+  /*
+   * 关键（Quectel 论坛实测经验）：LC76G 上电/复位后会**在 SDA 线上产生一个脉冲**，
+   * 可能被主控误判为 I2C START，从而锁死总线；且模块启动期间不应有 I2C 活动。
+   * 因此：复位后等待 1 秒，然后**重新初始化 I2C 总线**，再进行握手。
+   * 参考：https://forums.quectel.com/t/lc76g-pa-i2c-firmware/26743
+   */
+  delay(1000);
+  Wire.end();
+  Wire.begin(IIC_SDA, IIC_SCL);
+  delay(50);
+
+  gnss_ok = gnss_lc76g_begin(&Wire);
+  Serial.printf("[GNSS] LC76G %s\n", gnss_ok ? "已握手" : "无响应（检查天线/模块）");
+
   lvgl_init();
 
   /* 时间来源：RTC（失败时界面会显示无效应有的样子） */
@@ -583,9 +714,42 @@ void setup()
   print_help();
 }
 
+/*
+ * 每轮从 LC76G 取一块 NMEA 文本，喂给平台无关解析器，再把结果推给速度页。
+ * 定位无效时显式置 fix=false（页面显示 NO FIX，不伪造数据）。
+ */
+static void gnss_poll(void)
+{
+  static uint32_t last_read = 0;
+
+  /* 官方示例 500ms 一轮；这里 200ms 提高响应，且单轮已限制长度 */
+  if (millis() - last_read < 200) return;
+  last_read = millis();
+
+  gnss_set_time(&gnss, millis());
+
+  if (!gnss_ok) return;
+
+  static char buf[1024];
+  size_t n = gnss_lc76g_read(&Wire, buf, sizeof(buf));
+  if (n == 0) return;
+
+  gnss_feed(&gnss, buf, n);
+
+  /* 推送到速度页 */
+  bool usable = gnss_is_usable(&gnss);
+  ui_speed_set_fix(usable, gnss.data.sats_used);
+
+  if (usable) {
+    ui_speed_set_speed(gnss.data.speed_kmh);
+    ui_speed_set_heading((int)(gnss.data.course_deg + 0.5f));
+  }
+}
+
 void loop()
 {
   handle_serial();            /* 串口命令：校时 / 切页 */
+  gnss_poll();                /* 读取 LC76G 并驱动速度页 */
   s_page_seen = (int)ui_pages_current(); /* 记录当前页，供手势诊断取 before */
   lv_timer_handler();
   delay(5);
