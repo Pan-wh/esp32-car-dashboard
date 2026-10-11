@@ -24,6 +24,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
 /* 一行最长长度（NMEA 标准 82 字符，留余量） */
 #ifndef GNSS_LINE_MAX
 #define GNSS_LINE_MAX 128
@@ -96,5 +101,9 @@ uint32_t gnss_age_ms(const gnss_ctx_t *ctx);
 
 /* 数据是否可用于显示：定位有效且未过期 */
 bool gnss_is_usable(const gnss_ctx_t *ctx);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* GNSS_NMEA_H */

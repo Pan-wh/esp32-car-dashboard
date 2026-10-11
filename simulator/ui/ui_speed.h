@@ -10,6 +10,11 @@
 #include "lvgl.h"
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
 /* 设计变体数量（选型用；定稿后保留选定的一种）
  * 0=V1 数字+外环弧, 1=V2 指针表, 2=V3 超大数字+底部弧带, 3=V4 分段条,
  * 4=V5 驾驶员表盘（外圈刻度 + 指针 + 中央插画 + 底部辅助信息） */
@@ -41,5 +46,9 @@ void ui_speed_set_driver_state(int state);
 
 /* 设置航向（度，0=正北顺时针）；GNSS 接入前为模拟值 */
 void ui_speed_set_heading(int deg);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* UI_SPEED_H */

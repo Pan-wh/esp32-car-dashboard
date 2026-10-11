@@ -20,6 +20,43 @@ firmware/dashboard/
 └── app_settings.*         # 设置项持久化
 ```
 
+## 当前实现（2026-10-10）
+
+```
+simulator/ui/                 ← 唯一源码（模拟器与固件共用）
+├── ui_pages.[ch]             页面管理（左右滑动切换）+ 点击目标修正
+├── ui_clock.[ch]             数字时钟（iPhone 息屏风格）
+├── ui_analog.[ch]            模拟指针时钟（lv_meter，跳秒/扫秒开关）
+├── ui_speed.[ch]             速度表盘（V1-V4 变体 + V5 驾驶员表盘）
+├── ui_timesrc.[ch]           统一时间源（系统时间 / RTC 提供者 / 冻结时间）
+├── gnss_nmea.[ch]            NMEA 解析（纯 C，无 LVGL/硬件依赖）
+├── ui_driver_images.c        驾驶员三态图像（由 tools/make_images.py 生成）
+└── font_*.c                  字模（由 tools/make_fonts.sh 生成）
+
+simulator/                    ← 仅模拟器
+├── main.c                    SDL2 绑定（显示/触摸/圆遮罩/截图/命令行）
+└── nmea_replay.[ch]          NMEA 日志回放（无硬件联调）
+
+firmware/dashboard/           ← 固件（Arduino）
+├── dashboard.ino             官方初始化流程 + 装配共享代码
+└── （共享源码由 tools/sync_firmware.sh 同步，gitignore）
+
+tests/                        ← PC 上运行的逻辑测试
+└── test_nmea.c               NMEA 解析 44 项断言
+
+tools/                        ← 资源与流程脚本
+├── make_fonts.sh             字体管线（VF→实例化→子集化→字模）
+├── make_images.py            PNG→LVGL 数组 + 临时底图
+├── cut_driver_sheet.py       组图切图
+├── prep_driver_png.py        单张素材预处理
+├── make_nmea_track.py        合成 NMEA 轨迹
+└── sync_firmware.sh          共享源码同步到固件
+```
+
+**共享策略**：`simulator/ui/` 为唯一源码；模拟器直接编译它，固件由
+`tools/sync_firmware.sh` 同步副本（Arduino 无法引用工程外源码）。
+共享模块均为平台无关 C，头文件带 `extern "C"` 保护，可被 C++ 的 `.ino` 调用。
+
 ## 原则
 
 1. 驱动层优先复用官方示例/配套库（`reference/.../examples/arduino/libraries`），只做薄封装。

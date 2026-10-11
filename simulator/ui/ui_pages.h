@@ -9,6 +9,11 @@
 
 #include "lvgl.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
 typedef enum {
     UI_PAGE_ANALOG = 0, /* 模拟指针时钟 */
     UI_PAGE_DIGITAL,    /* 数字时钟（iPhone 息屏风格） */
@@ -24,5 +29,9 @@ void ui_pages_show(ui_page_t page);
 
 /* 当前页 */
 ui_page_t ui_pages_current(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* UI_PAGES_H */

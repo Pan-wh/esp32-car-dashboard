@@ -11,6 +11,12 @@
 
 static bool s_frozen = false;
 static struct tm s_fixed;
+static ui_timesrc_provider_t s_provider = NULL;
+
+void ui_timesrc_set_provider(ui_timesrc_provider_t fn)
+{
+    s_provider = fn;
+}
 
 void ui_timesrc_freeze(int hour, int min, int sec)
 {
@@ -37,8 +43,13 @@ void ui_timesrc_now(struct tm *out)
         return;
     }
 
+    if (s_provider != NULL) { /* 固件：RTC 提供 */
+        s_provider(out);
+        return;
+    }
+
     time_t t = time(NULL);
-    localtime_r(&t, out);
+    localtime_r(&t, out); /* 模拟器：系统时间 */
 }
 
 void ui_timesrc_now_ms(struct tm *out, int *ms)
@@ -46,6 +57,17 @@ void ui_timesrc_now_ms(struct tm *out, int *ms)
     if (s_frozen) {
         /* 冻结时间用于截图验证：亚秒固定为 0，保证截图可复现 */
         *out = s_fixed;
+        *ms = 0;
+        return;
+    }
+
+    if (s_provider != NULL) {
+        /*
+         * 固件：PCF85063 只有整秒寄存器，没有亚秒。
+         * 当前秒针为跳秒模式（ANALOG_SECOND_SWEEP=0），不需要亚秒；
+         * 若日后启用扫秒，在此用 MCU 毫秒计时与 RTC 秒值做插值即可。
+         */
+        s_provider(out);
         *ms = 0;
         return;
     }

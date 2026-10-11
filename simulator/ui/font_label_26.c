@@ -1,13 +1,13 @@
 /*******************************************************************************
  * Size: 26 px
  * Bpp: 4
- * Opts: --font ../design/assets/fonts/src/inter-med-ascii-sub.ttf --size 26 --bpp 4 --format lvgl --no-compress -r 0x20-0x7E,0xB0 --lv-font-name label_26 -o ui/font_label_26.c
+ * Opts: --font ../design/assets/fonts/src/inter-med-ascii-sub.ttf --size 26 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h -r 0x20-0x7E,0xB0 --lv-font-name label_26 -o ui/font_label_26.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
 #else
-#include "lvgl/lvgl.h"
+#include "lvgl.h"
 #endif
 
 #ifndef LABEL_26

@@ -1,13 +1,13 @@
 /*******************************************************************************
  * Size: 150 px
  * Bpp: 4
- * Opts: --font ../design/assets/fonts/src/inter-bold-num-sub.ttf --size 150 --bpp 4 --format lvgl --no-compress -r 0x2D-0x39 --lv-font-name speed_num_150 -o ui/font_speed_num_150.c
+ * Opts: --font ../design/assets/fonts/src/inter-bold-num-sub.ttf --size 150 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h -r 0x2D-0x39 --lv-font-name speed_num_150 -o ui/font_speed_num_150.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
 #else
-#include "lvgl/lvgl.h"
+#include "lvgl.h"
 #endif
 
 #ifndef SPEED_NUM_150

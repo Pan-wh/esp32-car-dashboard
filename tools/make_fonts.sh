@@ -65,19 +65,19 @@ fi
 # ---- 4) 生成 LVGL 字模 C 文件 ----
 cd simulator
 npx --yes lv_font_conv --font "../$SRC/inter-el-sub.ttf" \
-  --size 138 --bpp 4 --format lvgl --no-compress \
+  --size 138 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h \
   -r 0x20-0x3A --lv-font-name clock_iphone_138 -o ui/font_clock_iphone_138.c
 npx --yes lv_font_conv --font "../$SRC/nunito-num-sub.ttf" \
-  --size 38 --bpp 4 --format lvgl --no-compress \
+  --size 38 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h \
   -r 0x30-0x39 --lv-font-name num_dial_38 -o ui/font_num_dial_38.c
 npx --yes lv_font_conv --font "../$SRC/noto-date-sub.ttf" \
-  --size 26 --bpp 4 --format lvgl --no-compress \
+  --size 26 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h \
   --symbols "0123456789月日星期一二三四五六 ·" --lv-font-name date_cjk_26 -o ui/font_date_cjk_26.c
 npx --yes lv_font_conv --font "../$SRC/inter-bold-num-sub.ttf" \
-  --size 150 --bpp 4 --format lvgl --no-compress \
+  --size 150 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h \
   -r 0x2D-0x39 --lv-font-name speed_num_150 -o ui/font_speed_num_150.c
 npx --yes lv_font_conv --font "../$SRC/inter-med-ascii-sub.ttf" \
-  --size 26 --bpp 4 --format lvgl --no-compress \
+  --size 26 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h \
   -r 0x20-0x7E,0xB0 --lv-font-name label_26 -o ui/font_label_26.c
 cd "$ROOT"
 
