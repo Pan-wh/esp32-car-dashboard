@@ -41,6 +41,24 @@ make run      # 交互模式：ESC 退出，S 键截图 screenshot.bmp
 | `--offscreen` | 无窗口（软件渲染，CI/验证用） |
 | `--ms N` | 运行 N 毫秒后自动退出 |
 | `--shot PATH` | 退出前截图到 PATH（24bit BMP，含圆形遮罩） |
+| `--variant N` | 速度表盘变体（0-4；4 = V5 驾驶员表盘） |
+| `--nmea FILE` | 回放 NMEA 日志，驱动速度页（无需硬件） |
+| `--nmea-speedup X` | 回放倍速（默认 10） |
+
+### NMEA 回放（Gnss 链路联调）
+
+```bash
+python3 ../tools/make_nmea_track.py          # 生成 90s 合成轨迹（含隧道断定位段）
+./dashboard_sim --page 2 --variant 4 --nmea ../tests/data/drive_sample.nmea --nmea-speedup 10
+NMEA_REPLAY_VERBOSE=1 ./dashboard_sim --offscreen --ms 3000 --page 2 --variant 4 \
+    --nmea ../tests/data/drive_sample.nmea --nmea-speedup 10 --shot /tmp/a.bmp   # 打印解析值
+```
+
+逻辑测试（不需要硬件）：
+
+```bash
+make test        # 等价于 cd ../tests && make run
+```
 
 ## 自动截图（无窗口，验证用）
 
