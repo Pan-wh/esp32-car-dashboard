@@ -58,7 +58,7 @@ LV_IMG_DECLARE(driver_speeding);
 
 /* ---- 状态 ---- */
 static lv_obj_t *s_root;
-static int s_variant;
+static int s_variant = 4; /* 默认 V5 驾驶员表盘（定稿设计）；其它变体可用 --variant / V 键切换 */
 static float s_speed = 88.0f; /* GNSS 接入前模拟值 */
 static bool s_valid = true;
 static int s_sats = 12;

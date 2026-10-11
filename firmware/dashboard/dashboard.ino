@@ -62,6 +62,30 @@ static TouchDrvCST92xx touch;
 static int16_t touch_x[5], touch_y[5];
 static int16_t last_x = 0, last_y = 0;
 
+/* 触摸采样环形缓冲（诊断用：`touch` 命令打印最近若干次采样） */
+#define TOUCH_LOG_N 40
+typedef struct {
+  uint32_t ms;
+  int16_t x, y;
+  uint8_t pressed;
+} touch_log_t;
+static touch_log_t s_tlog[TOUCH_LOG_N];
+static uint8_t s_tlog_head = 0, s_tlog_cnt = 0;
+
+/* 手势计数（诊断用：LVGL 是否识别到手势、方向为何） */
+static uint16_t s_gest_left = 0, s_gest_right = 0, s_gest_top = 0, s_gest_bottom = 0;
+static uint16_t s_gest_other = 0;
+
+static void tlog_add(int16_t x, int16_t y, bool pressed)
+{
+  s_tlog[s_tlog_head].ms = millis();
+  s_tlog[s_tlog_head].x = x;
+  s_tlog[s_tlog_head].y = y;
+  s_tlog[s_tlog_head].pressed = pressed ? 1 : 0;
+  s_tlog_head = (s_tlog_head + 1) % TOUCH_LOG_N;
+  if (s_tlog_cnt < TOUCH_LOG_N) s_tlog_cnt++;
+}
+
 /* ---------------- RTC ---------------- */
 
 static SensorPCF85063 rtc;
@@ -130,6 +154,7 @@ static void touchpad_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
   else {
     data->state = LV_INDEV_STATE_RELEASED;
   }
+  tlog_add(last_x, last_y, n > 0);
 
   data->point.x = last_x;
   data->point.y = last_y;
@@ -285,12 +310,86 @@ static void print_help(void)
   Serial.println("       set YYYY-MM-DD HH:MM:SS   手动校准 RTC 时间（例：set 2026-10-10 22:30:00）");
   Serial.println("       page N                   切换页面");
   Serial.println("       pages                    列出页面");
+  Serial.println("       mem                      显示 LVGL/ESP 内存情况");
+  Serial.println("       dump                     打印当前屏幕的元素树（排查元素缺失）");
+  Serial.println("       touch                    打印最近触摸采样（排查坐标镜像/旋转）");
   Serial.println("       help                     显示本帮助");
+}
+
+/* 打印 LVGL 内存与堆情况（排查元素缺失） */
+static void print_mem(void)
+{
+  lv_mem_monitor_t mon;
+  lv_mem_monitor(&mon);
+  Serial.printf("[内存] LVGL 池: 总 %u B, 已用 %u%%, 最大空闲块 %u B, 碎片 %u%%\n",
+                (unsigned)mon.total_size, (unsigned)mon.used_pct,
+                (unsigned)mon.free_biggest_size, (unsigned)mon.frag_pct);
+  Serial.printf("        ESP 空闲堆 %u B, 历史最低 %u B\n", (unsigned)ESP.getFreeHeap(),
+                (unsigned)ESP.getMinFreeHeap());
+}
+
+/* 递归打印对象树（排查页面上到底创建了哪些元素） */
+static void dump_obj(lv_obj_t *o, int depth)
+{
+  char ind[26];
+  int k = 0;
+  for (int i = 0; i < depth && k < 24; i++) { ind[k++] = ' '; ind[k++] = ' '; }
+  ind[k] = '\0';
+
+  const char *cls = "obj";
+  if (lv_obj_check_type(o, &lv_label_class)) cls = "label";
+  else if (lv_obj_check_type(o, &lv_img_class)) cls = "img";
+  else if (lv_obj_check_type(o, &lv_meter_class)) cls = "meter";
+  else if (lv_obj_check_type(o, &lv_arc_class)) cls = "arc";
+
+  Serial.printf("%s%s pos(%d,%d) size%dx%d%s\n", ind, cls, (int)lv_obj_get_x(o),
+                (int)lv_obj_get_y(o), (int)lv_obj_get_width(o), (int)lv_obj_get_height(o),
+                lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) ? " [hidden]" : "");
+
+  if (lv_obj_check_type(o, &lv_label_class)) {
+    Serial.printf("%s  text=\"%s\"\n", ind, lv_label_get_text(o));
+  }
+  else if (lv_obj_check_type(o, &lv_img_class)) {
+    const void *src = lv_img_get_src(o);
+    Serial.printf("%s  src=%p %s\n", ind, src,
+                  src ? ((const lv_img_dsc_t *)src)->header.w ? "已设置" : "?" : "空");
+  }
+
+  uint32_t n = lv_obj_get_child_cnt(o);
+  for (uint32_t i = 0; i < n; i++) dump_obj(lv_obj_get_child(o, i), depth + 1);
+}
+
+static void print_dump(void)
+{
+  Serial.println("[元素树] 当前屏幕对象：");
+  dump_obj(lv_scr_act(), 0);
+}
+
+static void print_touch_log(void)
+{
+  Serial.printf("[手势] 计数 LEFT=%u RIGHT=%u TOP=%u BOTTOM=%u 其他=%u\n",
+                (unsigned)s_gest_left, (unsigned)s_gest_right, (unsigned)s_gest_top,
+                (unsigned)s_gest_bottom, (unsigned)s_gest_other);
+  Serial.printf("[触摸] 最近 %u 次采样（x,y,pressed,时刻ms）：\n", (unsigned)s_tlog_cnt);
+  uint8_t start = (s_tlog_cnt < TOUCH_LOG_N) ? 0 : s_tlog_head;
+  for (uint8_t i = 0; i < s_tlog_cnt; i++) {
+    touch_log_t *t = &s_tlog[(start + i) % TOUCH_LOG_N];
+    Serial.printf("   %4d,%4d  %d  %u\n", t->x, t->y, t->pressed, (unsigned)t->ms);
+  }
 }
 
 static void process_command(char *cmd)
 {
-  if (strcmp(cmd, "help") == 0) {
+  if (strcmp(cmd, "mem") == 0) {
+    print_mem();
+  }
+  else if (strcmp(cmd, "dump") == 0) {
+    print_dump();
+  }
+  else if (strcmp(cmd, "touch") == 0) {
+    print_touch_log();
+  }
+  else if (strcmp(cmd, "help") == 0) {
     print_help();
   }
   else if (strcmp(cmd, "time") == 0) {
@@ -369,6 +468,20 @@ void setup()
   /* 时间来源：RTC（失败时界面会显示无效应有的样子） */
   ui_timesrc_set_provider(rtc_time_provider);
 
+  /* 诊断：屏幕级手势日志（若 LVGL 识别到手势但页面未切换，说明是事件目标问题） */
+  lv_obj_add_event_cb(lv_scr_act(), [](lv_event_t *e) {
+    (void)e;
+    lv_dir_t d = lv_indev_get_gesture_dir(lv_indev_get_act());
+    if (d == LV_DIR_LEFT) s_gest_left++;
+    else if (d == LV_DIR_RIGHT) s_gest_right++;
+    else if (d == LV_DIR_TOP) s_gest_top++;
+    else if (d == LV_DIR_BOTTOM) s_gest_bottom++;
+    else s_gest_other++;
+    const char *n = (d == LV_DIR_LEFT) ? "LEFT" : (d == LV_DIR_RIGHT) ? "RIGHT"
+                    : (d == LV_DIR_TOP) ? "TOP" : (d == LV_DIR_BOTTOM) ? "BOTTOM" : "?";
+    Serial.printf("[手势] 屏幕收到 %s\n", n);
+  }, LV_EVENT_GESTURE, NULL);
+
   /* 业务 UI：全部页面（模拟时钟 / 数字时钟 / 速度表盘） */
   ui_pages_init();
   ui_pages_show(DEFAULT_PAGE);
@@ -382,6 +495,7 @@ void setup()
   Serial.printf("[UI] 页面数 %d，默认页 %d(%s)，触摸%s\n", (int)UI_PAGE_COUNT, (int)DEFAULT_PAGE,
                 page_name((int)DEFAULT_PAGE), tp_ok ? "就绪" : "不可用");
   print_time();
+  print_mem();
   print_help();
 }
 
