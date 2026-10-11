@@ -30,6 +30,9 @@ void ui_pages_show(ui_page_t page);
 /* 当前页 */
 ui_page_t ui_pages_current(void);
 
+/* 取页面容器对象（供固件挂诊断/扩展回调用；找不到返回 NULL） */
+lv_obj_t *ui_pages_obj(ui_page_t page);
+
 #ifdef __cplusplus
 }
 #endif

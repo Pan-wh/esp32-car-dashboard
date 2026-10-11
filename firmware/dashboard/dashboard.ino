@@ -76,6 +76,14 @@ static uint8_t s_tlog_head = 0, s_tlog_cnt = 0;
 static uint16_t s_gest_left = 0, s_gest_right = 0, s_gest_top = 0, s_gest_bottom = 0;
 static uint16_t s_gest_other = 0;
 
+/* 最近一次手势的细节（持久化，便于事后读取） */
+static struct {
+  const char *dir;
+  const char *target;  /* "screen" / "page" / "其它" */
+  int page_before, page_after;
+} s_last_gest = { "-", "-", -1, -1 };
+static int s_page_seen = -1; /* loop 中持续记录，便于取 before */
+
 static void tlog_add(int16_t x, int16_t y, bool pressed)
 {
   s_tlog[s_tlog_head].ms = millis();
@@ -342,9 +350,11 @@ static void dump_obj(lv_obj_t *o, int depth)
   else if (lv_obj_check_type(o, &lv_meter_class)) cls = "meter";
   else if (lv_obj_check_type(o, &lv_arc_class)) cls = "arc";
 
-  Serial.printf("%s%s pos(%d,%d) size%dx%d%s\n", ind, cls, (int)lv_obj_get_x(o),
+  Serial.printf("%s%s pos(%d,%d) size%dx%d%s%s%s\n", ind, cls, (int)lv_obj_get_x(o),
                 (int)lv_obj_get_y(o), (int)lv_obj_get_width(o), (int)lv_obj_get_height(o),
-                lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) ? " [hidden]" : "");
+                lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) ? " [hidden]" : "",
+                lv_obj_has_flag(o, LV_OBJ_FLAG_CLICKABLE) ? " [clickable]" : " [NO-click]",
+                lv_obj_has_flag(o, LV_OBJ_FLAG_SCROLLABLE) ? " [scroll]" : "");
 
   if (lv_obj_check_type(o, &lv_label_class)) {
     Serial.printf("%s  text=\"%s\"\n", ind, lv_label_get_text(o));
@@ -367,6 +377,8 @@ static void print_dump(void)
 
 static void print_touch_log(void)
 {
+  Serial.printf("[手势-最近] 方向=%s 目标=%s 页 %d → %d\n", s_last_gest.dir, s_last_gest.target,
+                s_last_gest.page_before, s_last_gest.page_after);
   Serial.printf("[手势] 计数 LEFT=%u RIGHT=%u TOP=%u BOTTOM=%u 其他=%u\n",
                 (unsigned)s_gest_left, (unsigned)s_gest_right, (unsigned)s_gest_top,
                 (unsigned)s_gest_bottom, (unsigned)s_gest_other);
@@ -472,6 +484,22 @@ void setup()
   lv_obj_add_event_cb(lv_scr_act(), [](lv_event_t *e) {
     (void)e;
     lv_dir_t d = lv_indev_get_gesture_dir(lv_indev_get_act());
+    lv_obj_t *tgt = (lv_obj_t *)lv_event_get_target(e);
+    lv_obj_t *cur = (lv_obj_t *)lv_event_get_current_target(e);
+    bool tgt_is_scr = (tgt == lv_scr_act());
+    bool tgt_is_page = false;
+    for (int i = 0; i < (int)UI_PAGE_COUNT; i++) {
+      if (tgt == ui_pages_obj((ui_page_t)i)) tgt_is_page = true;
+    }
+    s_last_gest.dir = (d == LV_DIR_LEFT) ? "LEFT" : (d == LV_DIR_RIGHT) ? "RIGHT"
+                      : (d == LV_DIR_TOP) ? "TOP" : (d == LV_DIR_BOTTOM) ? "BOTTOM" : "?";
+    s_last_gest.target = tgt_is_scr ? "screen" : tgt_is_page ? "page" : "其它";
+    s_last_gest.page_before = s_page_seen;
+    s_last_gest.page_after = (int)ui_pages_current();
+    Serial.printf("[手势] 目标=%s current=%s 页 %d→%d\n", s_last_gest.target,
+                  (cur == lv_scr_act()) ? "screen" : "其它", s_last_gest.page_before,
+                  s_last_gest.page_after);
+
     if (d == LV_DIR_LEFT) s_gest_left++;
     else if (d == LV_DIR_RIGHT) s_gest_right++;
     else if (d == LV_DIR_TOP) s_gest_top++;
@@ -501,7 +529,8 @@ void setup()
 
 void loop()
 {
-  handle_serial(); /* 串口命令：校时 / 切页 */
+  handle_serial();            /* 串口命令：校时 / 切页 */
+  s_page_seen = (int)ui_pages_current(); /* 记录当前页，供手势诊断取 before */
   lv_timer_handler();
   delay(5);
 

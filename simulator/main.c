@@ -129,6 +129,27 @@ static int save_bmp(const char *path)
     return 0;
 }
 
+/* 诊断：打印对象类别名 */
+static const char *obj_cls_name(lv_obj_t *o)
+{
+    if (o == NULL) return "null";
+    if (lv_obj_check_type(o, &lv_label_class)) return "label";
+    if (lv_obj_check_type(o, &lv_img_class)) return "img";
+    if (lv_obj_check_type(o, &lv_meter_class)) return "meter";
+    if (lv_obj_check_type(o, &lv_arc_class)) return "arc";
+    if (lv_obj_check_type(o, &lv_btn_class)) return "btn";
+    return "obj";
+}
+
+/* 诊断：页面容器收到手势时的日志（--gesture-test 用） */
+static void page_gesture_probe_cb(lv_event_t *e)
+{
+    (void)e;
+    printf("[自测] 页面收到手势 dir=%d → 当前页=%d\n",
+           (int)lv_indev_get_gesture_dir(lv_indev_get_act()), (int)ui_pages_current());
+    fflush(stdout);
+}
+
 int main(int argc, char **argv)
 {
     int scale = 2;
@@ -143,6 +164,7 @@ int main(int argc, char **argv)
     int driver_state = UI_DRIVER_AUTO;
     const char *nmea_path = NULL;
     float nmea_speedup = 10.0f;
+    int gesture_test = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
@@ -154,6 +176,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--speed") && i + 1 < argc) speed_kmh = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--nofix")) nofix = 1;
         else if (!strcmp(argv[i], "--driver") && i + 1 < argc) driver_state = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--gesture-test")) gesture_test = 1;
         else if (!strcmp(argv[i], "--nmea") && i + 1 < argc) nmea_path = argv[++i];
         else if (!strcmp(argv[i], "--nmea-speedup") && i + 1 < argc) nmea_speedup = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
@@ -227,6 +250,16 @@ int main(int argc, char **argv)
     ui_pages_init();
     ui_pages_show((ui_page_t)start_page);
 
+    if (gesture_test) {
+        /* 诊断：确认手势事件是否真的送到页面容器 */
+        for (int i = 0; i < UI_PAGE_COUNT; i++) {
+            lv_obj_t *pg = ui_pages_obj((ui_page_t)i);
+            if (pg) {
+                lv_obj_add_event_cb(pg, page_gesture_probe_cb, LV_EVENT_GESTURE, NULL);
+            }
+        }
+    }
+
     /* NMEA 日志回放：无硬件时验证「NMEA → 解析 → UI」整条链路 */
     if (nmea_path != NULL) {
         if (nmea_replay_load(nmea_path)) {
@@ -277,6 +310,90 @@ int main(int argc, char **argv)
         if (now_tick != last_tick) {
             lv_tick_inc(now_tick - last_tick);
             last_tick = now_tick;
+        }
+
+        /*
+         * 手势自测（--gesture-test）：直接驱动 LVGL 输入，验证「按下→拖动→抬起」
+         * 能否被判定为手势并切页。用于在没有触摸屏时回归测试切页链路。
+         */
+        if (gesture_test) {
+            Uint32 t = SDL_GetTicks();
+            if (t > 300 && t < 900) {
+                g_mouse_down = true;
+                g_mouse_y = 233;
+                g_mouse_x = 33 + (int32_t)((t - 300) * 400 / 600); /* 33 → 433（右拖 400px）*/
+            }
+            else if (t >= 900 && t < 1400) {
+                g_mouse_down = false;
+                /* 拖拽结束后打印 LVGL 输入内部状态（诊断手势为何未触发） */
+                static int printed = 0;
+                if (printed < 1) {
+                    printed = 1;
+                    lv_indev_t *ind = lv_indev_get_next(NULL);
+                    if (ind) {
+                        printf("[自测] indev状态: act=(%d,%d) last=(%d,%d) act_obj=%p "
+                               "scroll_obj=%p gesture_sent=%d gesture_sum=(%d,%d)\n",
+                               (int)ind->proc.types.pointer.act_point.x,
+                               (int)ind->proc.types.pointer.act_point.y,
+                               (int)ind->proc.types.pointer.last_point.x,
+                               (int)ind->proc.types.pointer.last_point.y,
+                               (void *)ind->proc.types.pointer.act_obj,
+                               (void *)ind->proc.types.pointer.scroll_obj,
+                               (int)ind->proc.types.pointer.gesture_sent,
+                               (int)ind->proc.types.pointer.gesture_sum.x,
+                               (int)ind->proc.types.pointer.gesture_sum.y);
+                        /* 追查 act_obj 到底是哪个对象 */
+                        lv_obj_t *ao = ind->proc.types.pointer.act_obj;
+                        printf("[自测] act_obj=%p (%s)", (void *)ao, obj_cls_name(ao));
+                        for (int i = 0; i < UI_PAGE_COUNT; i++) {
+                            if (ao == ui_pages_obj((ui_page_t)i)) printf(" == 页面%d", i);
+                        }
+                        printf("  父链: ");
+                        lv_obj_t *pp = ao;
+                        for (int d = 0; d < 5 && pp; d++) {
+                            printf("%s(%p) ", obj_cls_name(pp), (void *)pp);
+                            pp = lv_obj_get_parent(pp);
+                        }
+                        printf("\n");
+                        fflush(stdout);
+                    }
+                }
+            }
+            else if (t >= 1400 && t < 1500) {
+                static int p1 = 0;
+                if (!p1) { p1 = 1; printf("[自测] 右拖 400px 后，当前页 = %d\n", (int)ui_pages_current()); fflush(stdout); }
+            }
+            else if (t >= 1500 && t < 2100) {
+                g_mouse_down = true;
+                g_mouse_y = 233;
+                g_mouse_x = 433 - (int32_t)((t - 1500) * 400 / 600); /* 433 → 33（左拖 400px）*/
+            }
+            else if (t >= 2100 && t < 2600) {
+                g_mouse_down = false;
+            }
+            else if (t >= 2600 && t < 2700) {
+                static int p2 = 0;
+                if (!p2) { p2 = 1; printf("[自测] 左拖 400px 后，当前页 = %d\n", (int)ui_pages_current()); fflush(stdout); }
+                /* 命中探测：看页面容器是否可被触摸命中 */
+                lv_obj_t *scr = lv_scr_act();
+                static int probed = 0;
+                if (!probed) {
+                probed = 1;
+                lv_point_t pt = { 233, 233 };
+                printf("[自测] 命中探测 (%d,%d)：屏幕子对象 %d 个\n", (int)pt.x, (int)pt.y,
+                       (int)lv_obj_get_child_cnt(scr));
+                for (uint32_t i = 0; i < lv_obj_get_child_cnt(scr); i++) {
+                    lv_obj_t *c = lv_obj_get_child(scr, i);
+                    printf("   #%u hit=%d clickable=%d hidden=%d scrollable=%d scroll_chain=%d\n",
+                           (unsigned)i, (int)lv_obj_hit_test(c, &pt),
+                           (int)lv_obj_has_flag(c, LV_OBJ_FLAG_CLICKABLE),
+                           (int)lv_obj_has_flag(c, LV_OBJ_FLAG_HIDDEN),
+                           (int)lv_obj_has_flag(c, LV_OBJ_FLAG_SCROLLABLE),
+                           (int)lv_obj_has_flag(c, LV_OBJ_FLAG_SCROLL_CHAIN));
+                }
+                fflush(stdout);
+                }
+            }
         }
 
         /* NMEA 回放推进（每帧检查，按时间倍速喂语句） */
