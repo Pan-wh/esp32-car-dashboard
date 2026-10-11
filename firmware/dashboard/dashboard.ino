@@ -43,6 +43,23 @@ extern "C" {
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2      /* 与官方示例一致 */
 #define DEFAULT_PAGE UI_PAGE_SPEED         /* 开机默认页：速度表盘（车机主视角） */
 
+/*
+ * 屏幕内容旋转（整机安装方向固定，故用固定值）：
+ *   0 = 不旋转   1 = 90°   2 = 180°   3 = 270°
+ *
+ * ⚠️ 90°/270° 实测**不可用**，保持 0（本机安装方向已按此调整）：
+ *   - CO5300 驱动无法用寄存器做 90° 旋转（Arduino_CO5300::setRotation 只做 X/Y 翻转，
+ *     源码注释 "CO5300 does not support rotation"；上游 master 同样如此）
+ *   - 退而用 LVGL 软件旋转（sw_rotate）时，466×466 下每帧都要经 10KB 临时缓冲旋转，
+ *     实测明显卡顿；分页滚动时旋转条带次序错乱，出现撕裂/果冻效应
+ *     （LVGL 源码 lv_refr.c 亦明确禁止 full_refresh + sw_rotate）
+ *   - 结论：本屏在 466×466 分辨率下不做整屏旋转；若日后确需竖屏，
+ *     应**按目标方向重新排版界面**，而非旋转像素
+ *
+ * 仅供调试保留：串口命令 `rot 0/1/2/3` 可运行时切换（会带来上述性能代价）。
+ */
+#define DISPLAY_ROT 0
+
 /* ---------------- 显示 ---------------- */
 
 static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
@@ -265,6 +282,26 @@ static void lvgl_init(void)
   disp_drv.flush_cb = disp_flush_cb;
   disp_drv.rounder_cb = rounder_cb;
   disp_drv.draw_buf = &draw_buf;
+
+  /*
+   * 软件旋转（sw_rotate）默认为关：实测在 466×466 全屏刷新下明显卡顿，
+   * 且滚动分页会出现撕裂/果冻效应（LVGL 官方也禁止 full_refresh + sw_rotate）。
+   * CO5300 无法用寄存器做 90° 旋转，故 90°/270° 不作为常规方案；
+   * 如确需 90°，应改用「界面按旋转后重新布局」而不是整屏软件旋转。
+   */
+#if DISPLAY_ROT != 0
+  disp_drv.sw_rotate = 1;
+#endif
+#if DISPLAY_ROT == 1
+  disp_drv.rotated = LV_DISP_ROT_90;
+#elif DISPLAY_ROT == 2
+  disp_drv.rotated = LV_DISP_ROT_180;
+#elif DISPLAY_ROT == 3
+  disp_drv.rotated = LV_DISP_ROT_270;
+#else
+  disp_drv.rotated = LV_DISP_ROT_NONE;
+#endif
+
   lv_disp_drv_register(&disp_drv);
 
   static lv_indev_drv_t indev_drv;
@@ -318,6 +355,7 @@ static void print_help(void)
   Serial.println("       set YYYY-MM-DD HH:MM:SS   手动校准 RTC 时间（例：set 2026-10-10 22:30:00）");
   Serial.println("       page N                   切换页面");
   Serial.println("       pages                    列出页面");
+  Serial.println("       rot 0|1|2|3              屏幕内容旋转（0=0° 1=90° 2=180° 3=270°）");
   Serial.println("       mem                      显示 LVGL/ESP 内存情况");
   Serial.println("       dump                     打印当前屏幕的元素树（排查元素缺失）");
   Serial.println("       touch                    打印最近触摸采样（排查坐标镜像/旋转）");
@@ -392,7 +430,24 @@ static void print_touch_log(void)
 
 static void process_command(char *cmd)
 {
-  if (strcmp(cmd, "mem") == 0) {
+  if (strncmp(cmd, "rot ", 4) == 0) {
+    int n = atoi(cmd + 4);
+    lv_disp_t *d = lv_disp_get_default();
+    if (d == NULL) {
+      Serial.println("[旋转] 显示未就绪");
+    }
+    else if (n >= 0 && n <= 3) {
+      lv_disp_rot_t r = (n == 1) ? LV_DISP_ROT_90
+                        : (n == 2) ? LV_DISP_ROT_180
+                        : (n == 3) ? LV_DISP_ROT_270 : LV_DISP_ROT_NONE;
+      lv_disp_set_rotation(d, r);
+      Serial.printf("[旋转] 已设为 %d（0=0° 1=90° 2=180° 3=270°）\n", n);
+    }
+    else {
+      Serial.println("[旋转] 参数应为 0/1/2/3");
+    }
+  }
+  else if (strcmp(cmd, "mem") == 0) {
     print_mem();
   }
   else if (strcmp(cmd, "dump") == 0) {
@@ -520,6 +575,7 @@ void setup()
    */
   ui_speed_set_fix(false, 0);
 
+  Serial.printf("[显示] 旋转 = %d（0=0° 1=90° 2=180° 3=270°），软件旋转已开启\n", DISPLAY_ROT);
   Serial.printf("[UI] 页面数 %d，默认页 %d(%s)，触摸%s\n", (int)UI_PAGE_COUNT, (int)DEFAULT_PAGE,
                 page_name((int)DEFAULT_PAGE), tp_ok ? "就绪" : "不可用");
   print_time();
