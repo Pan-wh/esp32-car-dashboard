@@ -14,6 +14,31 @@
 - 原因：AI 会话文件沙盒仅允许写项目工作区。
 - 解决：经授权的操作完成写入与核心安装；后续手动操作不受影响。
 
+## 2026-10-10 烧录后 USB 串口无任何输出（真机实测）
+
+- **现象**：官方 `01_HelloWorld` 烧录成功、屏幕有显示，但打开串口监视器（`/dev/cu.usbmodem101`）
+  完全收不到数据（esptool 能正常通信、烧录正常）。
+- **原因**：ESP32-S3 板卡选项默认 `USB CDC On Boot = Disabled`（`CDCOnBoot=default`）。
+  此时 Arduino 的 `Serial` 指向**硬件 UART0（GPIO43/44）**，而不是原生 USB CDC；
+  本板没有 USB-UART 桥接芯片，因此 USB 口只能烧录、看不到应用日志。
+- **解决**：编译时显式打开 USB CDC：
+  ```
+  --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc"
+  ```
+- **验证结果**：重新烧录后 8 秒收到 40 行 `loop`（每 200 ms 一次，与 HelloWorld 程序一致）✓
+- **对本项目的影响**：固件与所有官方示例的调试都必须带该选项，否则看不到 `Serial` 日志
+  （我们的 `dashboard.ino` 依赖 Serial 输出启动信息与心跳）。
+
+## 2026-10-11 RTC 显示 2024-09-24（不是故障）
+
+- **现象**：烧录官方 `03_LVGL_PCF85063_simpleTime` 后，RTC 时间恒为 `2024-09-24 11:09`。
+- **原因**：**官方示例自己写死了时间** —— `rtc.setDateTime(2024, 9, 24, 11, 9, 41)`
+  在每次上电时执行（示例源码第 78-87 行）。RTC 芯片本身走时正常（跨分钟进位正确）。
+- **处理**：本工程固件改为「RTC 早于编译时间才用编译时刻兜底」，并提供串口
+  `set YYYY-MM-DD HH:MM:SS` 手动校准；后续接入 GNSS 后用 RMC 的 UTC 时间自动校准。
+- **验证**：烧录本工程固件后 RTC 显示 2026-10-11，串口 `set` 校准到 16:11:22，
+  复查 16:11:24（正常走时）✓
+
 ## 记录模板
 
 ```

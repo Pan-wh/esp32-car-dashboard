@@ -185,12 +185,38 @@ static bool rtc_init(void)
   Serial.printf("[RTC] %04d-%02d-%02d %02d:%02d:%02d\n", (int)dt.getYear(), (int)dt.getMonth(),
                 (int)dt.getDay(), (int)dt.getHour(), (int)dt.getMinute(), (int)dt.getSecond());
 
-  /* 时间明显无效时（如掉电复位到 2000 年），设置一个合理初值便于观察 */
-  if ((int)dt.getYear() < 2020) {
-    rtc.setDateTime(2026, 10, 10, 12, 0, 0);
-    Serial.println("[RTC] 时间无效，已设为 2026-10-10 12:00:00");
-  }
+  rtc_apply_build_time_if_stale();
   return true;
+}
+
+/*
+ * 上电兜底：RTC 走时可信（有电池），但若它比固件编译时间还旧，
+ * 说明从未校准过（或电池耗尽），此时用**编译时刻**初始化，
+ * 以便串口/界面立刻有合理时间；之后可用串口命令手动校准或用 GNSS UTC 校准。
+ */
+static void rtc_apply_build_time_if_stale(void)
+{
+  static const char *mon_names[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+  char mon[4] = { 0 };
+  int day = 0, year = 0, hh = 0, mm = 0, ss = 0;
+
+  if (sscanf(__DATE__, "%3s %d %d", mon, &day, &year) != 3) return;
+  if (sscanf(__TIME__, "%d:%d:%d", &hh, &mm, &ss) != 3) return;
+
+  int month = 0;
+  for (int i = 0; i < 12; i++) {
+    if (strncmp(mon, mon_names[i], 3) == 0) { month = i + 1; break; }
+  }
+  if (month == 0) return;
+
+  RTC_DateTime dt = rtc.getDateTime();
+  if ((int)dt.getYear() >= year) return; /* RTC 不比编译时间旧 → 保留 */
+
+  rtc.setDateTime((uint16_t)year, (uint8_t)month, (uint8_t)day, (uint8_t)hh, (uint8_t)mm,
+                  (uint8_t)ss);
+  Serial.printf("[RTC] RTC 时间（%04d）早于固件编译时间，已按编译时刻设为 %04d-%02d-%02d %02d:%02d:%02d\n",
+                (int)dt.getYear(), year, month, day, hh, mm, ss);
 }
 
 static void lvgl_init(void)
@@ -221,6 +247,111 @@ static void lvgl_init(void)
   esp_timer_start_periodic(tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
 }
 
+/* ---------------- 串口命令（开发便利：校时 / 切页 / 查看状态） ---------------- */
+
+static const char *page_name(int i)
+{
+  switch (i) {
+    case UI_PAGE_ANALOG: return "模拟时钟";
+    case UI_PAGE_DIGITAL: return "数字时钟";
+    case UI_PAGE_SPEED: return "速度表盘";
+    default: return "未知";
+  }
+}
+
+static void print_time(void)
+{
+  if (!rtc_ok) {
+    Serial.println("[时间] RTC 不可用");
+    return;
+  }
+  RTC_DateTime dt = rtc.getDateTime();
+  Serial.printf("[时间] %04d-%02d-%02d %02d:%02d:%02d\n", (int)dt.getYear(), (int)dt.getMonth(),
+                (int)dt.getDay(), (int)dt.getHour(), (int)dt.getMinute(), (int)dt.getSecond());
+}
+
+static void print_pages(void)
+{
+  Serial.printf("[页面] 当前 = %d(%s)，共 %d 页\n", (int)ui_pages_current(),
+                page_name((int)ui_pages_current()), (int)UI_PAGE_COUNT);
+  for (int i = 0; i < (int)UI_PAGE_COUNT; i++) {
+    Serial.printf("        %d = %s\n", i, page_name(i));
+  }
+}
+
+static void print_help(void)
+{
+  Serial.println("[命令] time                     显示 RTC 时间");
+  Serial.println("       set YYYY-MM-DD HH:MM:SS   手动校准 RTC 时间（例：set 2026-10-10 22:30:00）");
+  Serial.println("       page N                   切换页面");
+  Serial.println("       pages                    列出页面");
+  Serial.println("       help                     显示本帮助");
+}
+
+static void process_command(char *cmd)
+{
+  if (strcmp(cmd, "help") == 0) {
+    print_help();
+  }
+  else if (strcmp(cmd, "time") == 0) {
+    print_time();
+  }
+  else if (strcmp(cmd, "pages") == 0) {
+    print_pages();
+  }
+  else if (strncmp(cmd, "page ", 5) == 0) {
+    int n = atoi(cmd + 5);
+    if (n >= 0 && n < (int)UI_PAGE_COUNT) {
+      ui_pages_show((ui_page_t)n);
+      print_pages();
+    }
+    else {
+      Serial.printf("[命令] 页码超出范围（0-%d）\n", (int)UI_PAGE_COUNT - 1);
+    }
+  }
+  else if (strncmp(cmd, "set ", 4) == 0) {
+    int y = 0, mo = 0, d = 0, h = 0, mi = 0, se = 0;
+    if (sscanf(cmd + 4, "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &se) == 6 && y >= 2020 &&
+        mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && h >= 0 && h < 24 && mi >= 0 && mi < 60 &&
+        se >= 0 && se < 60) {
+      if (!rtc_ok) {
+        Serial.println("[RTC] 不可用，无法校准");
+        return;
+      }
+      rtc.setDateTime((uint16_t)y, (uint8_t)mo, (uint8_t)d, (uint8_t)h, (uint8_t)mi, (uint8_t)se);
+      Serial.print("[RTC] 已校准为 ");
+      print_time();
+    }
+    else {
+      Serial.println("[命令] 格式应为 set 2026-10-10 22:30:00");
+    }
+  }
+  else {
+    Serial.printf("[命令] 未知命令: %s（输入 help 查看）\n", cmd);
+  }
+}
+
+/* 轮询串口输入（逐行处理） */
+static void handle_serial(void)
+{
+  static char line[64];
+  static uint8_t n = 0;
+
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == '\r' || c == '\n') {
+      if (n > 0) {
+        line[n] = '\0';
+        process_command(line);
+        n = 0;
+      }
+    }
+    else if (n < sizeof(line) - 1) {
+      line[n++] = c;
+    }
+  }
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -248,12 +379,15 @@ void setup()
    */
   ui_speed_set_fix(false, 0);
 
-  Serial.printf("[UI] 页面数 %d，默认页 %d，触摸%s\n", (int)UI_PAGE_COUNT, (int)DEFAULT_PAGE,
-                tp_ok ? "就绪" : "不可用");
+  Serial.printf("[UI] 页面数 %d，默认页 %d(%s)，触摸%s\n", (int)UI_PAGE_COUNT, (int)DEFAULT_PAGE,
+                page_name((int)DEFAULT_PAGE), tp_ok ? "就绪" : "不可用");
+  print_time();
+  print_help();
 }
 
 void loop()
 {
+  handle_serial(); /* 串口命令：校时 / 切页 */
   lv_timer_handler();
   delay(5);
 
