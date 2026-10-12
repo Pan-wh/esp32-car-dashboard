@@ -127,7 +127,9 @@ static void tlog_add(int16_t x, int16_t y, bool pressed)
 
 /* 主循环消费的遥测状态 */
 static telemetry_msg_t s_tel;
-static bool s_tel_valid = false; /* 是否有尚未过期的速度数据 */
+static bool s_tel_valid = false; /* 最新一包是否有可用速度/定位 */
+static bool s_had_data = false;  /* 是否收到过任意遥测（区分 WAIT LOC 与 STALE） */
+static ui_speed_status_t s_last_status = UI_STATUS_CONNECTING;
 
 /* 时间同步状态 */
 static bool s_time_synced = false;
@@ -433,6 +435,10 @@ static void print_ble(void)
   else {
     Serial.println("   时间同步=未同步");
   }
+
+  static const char *sn[] = { "BT OFF", "WAIT GPS", "NO FIX", "STALE", "LIVE" };
+  int si = (s_last_status >= 0 && s_last_status <= UI_STATUS_OK) ? (int)s_last_status : 0;
+  Serial.printf("   链路状态=%s\n", sn[si]);
 }
 
 /* 打印 LVGL 内存与堆情况（排查元素缺失） */
@@ -656,6 +662,7 @@ void setup()
    * 收到有效 BLE 遥测后由 ble_poll 驱动。
    */
   ui_speed_set_fix(false, 0);
+  ui_speed_set_status(UI_STATUS_CONNECTING); /* 初始 BT OFF */
   ui_clock_set_time_synced(false); /* 初始 TIME SYNC，BLE 校时后转 SYNCED */
 
   Serial.printf("[显示] 旋转 = %d（0=0° 1=90° 2=180° 3=270°），软件旋转已开启\n", DISPLAY_ROT);
@@ -731,44 +738,61 @@ static void ble_poll(void)
   if (!ble_telemetry_fetch(&m, &rx_ms)) return; /* 无新数据 */
 
   s_tel = m;
+  s_had_data = true;
 
   /* 时间同步：带 ts_utc_ms 的包触发（首次/漂移 >2s 才真正写 RTC） */
   if (m.has_ts) time_sync_maybe(m.ts_utc_ms);
 
   bool speed_ok = m.speed_valid && m.speed_mps >= 0.0f;
-  bool show_ok = m.location_valid || speed_ok;
-  s_tel_valid = show_ok;
+  s_tel_valid = m.location_valid || speed_ok;
 
   Serial.printf("[BLE] v=%d 速度=%.2f m/s(%.1f km/h) valid=%d 航向=%.1f° 定位=%d\n",
                 m.v, (double)m.speed_mps, (double)telemetry_speed_kmh(&m), (int)m.speed_valid,
                 (double)m.course_deg, (int)m.location_valid);
-
-  ui_speed_set_fix(show_ok, 0);
-
-  if (speed_ok) {
-    ui_speed_set_speed(telemetry_speed_kmh(&m));
-    if (m.has_course) ui_speed_set_heading((int)(m.course_deg + 0.5f));
-  }
 }
 
-/* 数据过期检测：超过阈值未收到有效遥测 → 速度置无效（不残留旧值） */
-static void ble_check_stale(void)
+/*
+ * 五态状态机（每循环执行，AI_TASK §6.4）：
+ *   未连接 → BT OFF；已连接未收到 → WAIT GPS；收到但无效 → NO FIX；
+ *   数据超时 → STALE；新鲜有效 → LIVE。
+ * 同时驱动指针/数字：只有 LIVE 才显示速度，其余状态指针归零、不残留旧值。
+ */
+static void ble_update(void)
 {
-  if (!s_tel_valid) return; /* 本就无效 */
+  ui_speed_status_t st;
 
-  uint32_t age = ble_telemetry_age_ms();
-  if (age != UINT32_MAX && age > BLE_STALE_MS) {
-    s_tel_valid = false;
-    ui_speed_set_fix(false, 0);
-    Serial.println("[BLE] 数据过期，速度置无效");
+  if (!ble_telemetry_connected()) {
+    st = UI_STATUS_CONNECTING;
+  }
+  else {
+    uint32_t age = ble_telemetry_age_ms();
+    if (!s_had_data)       st = UI_STATUS_WAIT_LOC;   /* 已连接，还没收到任何包 */
+    else if (age == UINT32_MAX || age > BLE_STALE_MS) st = UI_STATUS_STALE;  /* 超时 */
+    else if (!s_tel_valid) st = UI_STATUS_INVALID;    /* 收到但无效 */
+    else                   st = UI_STATUS_OK;         /* 正常 */
+  }
+
+  ui_speed_set_status(st);
+  s_last_status = st;
+
+  if (st == UI_STATUS_OK) {
+    bool speed_ok = s_tel.speed_valid && s_tel.speed_mps >= 0.0f;
+    ui_speed_set_fix(true, 0);
+    if (speed_ok) {
+      ui_speed_set_speed(telemetry_speed_kmh(&s_tel));
+      if (s_tel.has_course) ui_speed_set_heading((int)(s_tel.course_deg + 0.5f));
+    }
+  }
+  else {
+    ui_speed_set_fix(false, 0); /* 指针归零，不显示旧值 */
   }
 }
 
 void loop()
 {
   handle_serial();            /* 串口命令：校时 / 切页 */
-  ble_poll();                 /* 消费 BLE 遥测并驱动速度页 */
-  ble_check_stale();          /* 数据过期 → 速度置无效 */
+  ble_poll();                 /* 取 BLE 遥测 + 校时（无新数据直接返回） */
+  ble_update();               /* 五态状态机，每循环驱动速度页 */
   s_page_seen = (int)ui_pages_current(); /* 记录当前页，供手势诊断取 before */
   lv_timer_handler();
   delay(5);

@@ -62,6 +62,7 @@ static int s_variant = 4; /* 默认 V5 驾驶员表盘（定稿设计）；其�
 static float s_speed = 88.0f; /* GNSS 接入前模拟值 */
 static bool s_valid = true;
 static int s_sats = 12;
+static ui_speed_status_t s_status_state = UI_STATUS_CONNECTING;
 
 /* ---- 各变体的动态部件 ---- */
 static lv_obj_t *s_big;              /* 大数字（所有变体） */
@@ -73,7 +74,7 @@ static lv_obj_t *s_segs[SEG_CNT];    /* V4 分段 */
 
 /* V5 部件 */
 static lv_obj_t *s_driver_img;
-static lv_obj_t *s_nofix; /* 无定位提示（仅无效时显示） */
+static lv_obj_t *s_status5; /* V5 顶部链路状态标签（五态文案） */
 static lv_meter_indicator_t *s_needle5; /* V5 指针（与 V2 区分，绘制时外移内端） */
 static lv_point_t s_marker_inner;       /* 指针内端缓存（必须静态：存活到绘制调用） */
 static int s_driver_state = UI_DRIVER_AUTO;
@@ -265,6 +266,31 @@ static void build_v4(lv_obj_t *p)
 /*   无定位时顶部显示 NO FIX（不伪造速度）                              */
 /* ------------------------------------------------------------------ */
 
+/* V5 链路状态 → 文案（ASCII，label_26 无 CJK） */
+static const char *status5_text(void)
+{
+    switch (s_status_state) {
+        case UI_STATUS_CONNECTING: return "BT OFF";
+        case UI_STATUS_WAIT_LOC:   return "WAIT GPS";
+        case UI_STATUS_INVALID:    return "NO FIX";
+        case UI_STATUS_STALE:      return "STALE";
+        case UI_STATUS_OK:         return "LIVE";
+        default:                   return "";
+    }
+}
+
+static uint32_t status5_color(void)
+{
+    switch (s_status_state) {
+        case UI_STATUS_CONNECTING: return C_TEXT_DIM_L; /* 灰  */
+        case UI_STATUS_WAIT_LOC:   return C_TEXT_DIM_L; /* 灰  */
+        case UI_STATUS_INVALID:    return C_WARN;       /* 橙  */
+        case UI_STATUS_STALE:      return 0xFF3B30;     /* 红  */
+        case UI_STATUS_OK:         return 0x34C759;     /* 绿  */
+        default:                   return C_TEXT_DIM_L;
+    }
+}
+
 static int driver_state_from_speed(void)
 {
     if (!s_valid) return UI_DRIVER_NORMAL;
@@ -390,10 +416,9 @@ static void build_v5(lv_obj_t *p)
                      (lv_coord_t)lroundf(178.0f * sinf(a)));
     }
 
-    /* ---- 无定位提示（仅在无效时显示）---- */
-    s_nofix = make_label(p, &label_26, C_BAD_L, "NO FIX");
-    lv_obj_align(s_nofix, LV_ALIGN_TOP_MID, 0, 30);
-    lv_obj_add_flag(s_nofix, LV_OBJ_FLAG_HIDDEN);
+    /* ---- 顶部链路状态标签（五态，白底可见）---- */
+    s_status5 = make_label(p, &label_26, status5_color(), status5_text());
+    lv_obj_align(s_status5, LV_ALIGN_TOP_MID, 0, 30);
 }
 
 static void apply_state(void)
@@ -411,9 +436,9 @@ static void apply_state(void)
                            st == UI_DRIVER_SPEEDING ? &driver_speeding :
                            st == UI_DRIVER_SPIRITED ? &driver_spirited : &driver_normal);
         }
-        if (s_nofix) {
-            if (s_valid) lv_obj_add_flag(s_nofix, LV_OBJ_FLAG_HIDDEN);
-            else lv_obj_clear_flag(s_nofix, LV_OBJ_FLAG_HIDDEN);
+        if (s_status5) {
+            lv_label_set_text(s_status5, status5_text());
+            lv_obj_set_style_text_color(s_status5, lv_color_hex(status5_color()), 0);
         }
         return;
     }
@@ -471,7 +496,7 @@ static void build(lv_obj_t *parent)
     s_needle = NULL;
     s_needle5 = NULL;
     s_driver_img = NULL;
-    s_nofix = NULL;
+    s_status5 = NULL;
     for (int i = 0; i < SEG_CNT; i++) s_segs[i] = NULL;
 
     lv_obj_set_style_bg_color(parent, lv_color_hex(C_BG), 0);
@@ -534,5 +559,13 @@ void ui_speed_set_driver_state(int state)
 void ui_speed_set_heading(int deg)
 {
     s_heading = ((deg % 360) + 360) % 360;
+    apply_state();
+}
+
+void ui_speed_set_status(ui_speed_status_t st)
+{
+    if ((int)st < 0 || st > UI_STATUS_OK) st = UI_STATUS_CONNECTING;
+    if (st == s_status_state) return;
+    s_status_state = st;
     apply_state();
 }

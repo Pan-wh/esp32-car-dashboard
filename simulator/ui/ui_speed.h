@@ -47,6 +47,20 @@ void ui_speed_set_driver_state(int state);
 /* 设置航向（度，0=正北顺时针）；GNSS 接入前为模拟值 */
 void ui_speed_set_heading(int deg);
 
+/*
+ * 数据链路状态（AI_TASK §6.4 五态）：驱动速度页顶部状态标签。
+ * 与 ui_speed_set_fix()（控制指针/数字）正交：fix 管数值有效，status 管链路态。
+ */
+typedef enum {
+    UI_STATUS_CONNECTING = 0, /* BLE 未连接 / 扫描中            → "BT OFF"  */
+    UI_STATUS_WAIT_LOC,       /* 已连接，尚未收到定位           → "WAIT GPS"*/
+    UI_STATUS_INVALID,        /* 收到数据但定位/速度无效          → "NO FIX"  */
+    UI_STATUS_STALE,          /* 数据超时（超过 BLE_STALE_MS）    → "STALE"   */
+    UI_STATUS_OK              /* 正常（有新鲜有效数据）           → "LIVE"    */
+} ui_speed_status_t;
+
+void ui_speed_set_status(ui_speed_status_t st);
+
 #ifdef __cplusplus
 }
 #endif
