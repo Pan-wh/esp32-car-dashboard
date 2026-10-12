@@ -29,6 +29,20 @@ final class LocationService: NSObject, ObservableObject {
         manager.requestWhenInUseAuthorization()
     }
 
+    /// 驾驶会话开始时调用：升级到「始终」授权并开启后台定位（阶段 4）。
+    /// 需 Info.plist 配置 NSLocationAlwaysAndWhenInUseUsageDescription 并在
+    /// Capabilities 勾选 Background Modes → Location updates。
+    func requestBackground() {
+        manager.requestWhenInUseAuthorization()
+        manager.requestAlwaysAuthorization()
+#if os(iOS)
+        manager.allowsBackgroundLocationUpdates = true // 后台持续定位（iOS only）
+        if #available(iOS 17.0, *) {
+            manager.showsBackgroundLocationIndicator = true // 后台定位状态指示
+        }
+#endif
+    }
+
     func start() {
         manager.startUpdatingLocation()
         // 注：航向用 CLLocation.course（地面行进方向），不用 startUpdatingHeading（那是磁罗盘方向）

@@ -28,6 +28,7 @@ final class DriveSessionManager: ObservableObject {
 
     func startDriving() {
         isDriving = true
+        location.requestBackground() // 阶段4：申请后台定位能力（含始终授权）
         location.start()
         ble.scanAndConnect()
         sendTimer = Timer.scheduledTimer(withTimeInterval: Self.sendInterval, repeats: true) { [weak self] _ in
