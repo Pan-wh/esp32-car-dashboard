@@ -131,6 +131,8 @@ static bool s_tel_valid = false; /* 最新一包是否有可用速度/定位 */
 static bool s_had_data = false;  /* 是否收到过任意遥测（区分 WAIT LOC 与 STALE） */
 static ui_speed_status_t s_last_status = UI_STATUS_CONNECTING;
 static uint32_t s_implausible = 0; /* 被丢弃的不合理包计数（§7） */
+static const char *s_reset_reason = "未知"; /* 本次启动的复位原因（启动时记录） */
+static int s_reset_reason_code = -1;        /* esp_reset_reason() 原始值 */
 
 /* 时间同步状态 */
 static bool s_time_synced = false;
@@ -441,6 +443,8 @@ static void print_ble(void)
   static const char *sn[] = { "BT OFF", "WAIT GPS", "NO FIX", "STALE", "LIVE" };
   int si = (s_last_status >= 0 && s_last_status <= UI_STATUS_OK) ? (int)s_last_status : 0;
   Serial.printf("   链路状态=%s\n", sn[si]);
+  Serial.printf("   本次启动复位原因=%s(码 %d)，已运行 %lu s\n", s_reset_reason,
+                s_reset_reason_code, (unsigned long)(millis() / 1000));
 }
 
 /* 打印 LVGL 内存与堆情况（排查元素缺失） */
@@ -611,6 +615,32 @@ void setup()
   delay(200);
   Serial.println("\n=== ESP32 车载仪表 启动 ===");
   Serial.printf("LVGL %d.%d.%d\n", lv_version_major(), lv_version_minor(), lv_version_patch());
+
+  /* 复位原因：便于区分上电/软件复位/崩溃/看门狗/欠压（稳定性验收要用） */
+  {
+    esp_reset_reason_t rr = esp_reset_reason();
+    const char *rn = "未知";
+    switch (rr) {
+      case ESP_RST_POWERON:  rn = "上电"; break;
+      case ESP_RST_SW:       rn = "软件复位(esp_restart)"; break;
+      case ESP_RST_PANIC:    rn = "异常/崩溃(PANIC)"; break;
+      case ESP_RST_INT_WDT:  rn = "中断看门狗"; break;
+      case ESP_RST_TASK_WDT: rn = "任务看门狗"; break;
+      case ESP_RST_WDT:      rn = "其他看门狗"; break;
+      case ESP_RST_BROWNOUT: rn = "欠压(BROWNOUT)"; break;
+      case ESP_RST_DEEPSLEEP:rn = "深睡唤醒"; break;
+      case ESP_RST_EXT:      rn = "外部复位"; break;
+      case ESP_RST_SDIO:     rn = "SDIO 复位"; break;
+      case ESP_RST_USB:      rn = "USB 复位（烧录/USB-JTAG，正常）"; break;
+      case ESP_RST_JTAG:     rn = "JTAG 复位"; break;
+      case ESP_RST_UNKNOWN:  rn = "无法确定"; break;
+      default: break;
+    }
+    s_reset_reason = rn;
+    s_reset_reason_code = (int)rr;
+    Serial.printf("[启动] 复位原因=%d(%s) 空闲堆=%u B\n", (int)rr, rn,
+                  (unsigned)ESP.getFreeHeap());
+  }
 
   display_init();
 
