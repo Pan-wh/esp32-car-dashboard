@@ -435,15 +435,25 @@ static void apply_state(void)
     /* V5：无中央大数字，走独立分支（指针 + 驾驶员表情 + 底部辅助信息） */
     if (s_variant == 4) {
         if (s_meter && s_needle5) lv_meter_set_indicator_value(s_meter, s_needle5, v);
+        /* 插画：状态三态只在跨过 90/120 阈值时变化，用已显示状态防止重复 set_src */
+        static int driver_shown = -2; /* -2 保证首帧必设 */
         if (s_driver_img) {
             int st = current_driver_state();
-            lv_img_set_src(s_driver_img,
-                           st == UI_DRIVER_SPEEDING ? &driver_speeding :
-                           st == UI_DRIVER_SPIRITED ? &driver_spirited : &driver_normal);
+            if (st != driver_shown) {
+                driver_shown = st;
+                lv_img_set_src(s_driver_img,
+                               st == UI_DRIVER_SPEEDING ? &driver_speeding :
+                               st == UI_DRIVER_SPIRITED ? &driver_spirited : &driver_normal);
+            }
         }
+        /* 状态标签：同文案不重复 set_text（避免每次 apply_state 都 invalidate） */
+        static int status_shown = -1;
         if (s_status5) {
-            lv_label_set_text(s_status5, status5_text());
-            lv_obj_set_style_text_color(s_status5, lv_color_hex(status5_color()), 0);
+            if ((int)s_status_state != status_shown) {
+                status_shown = (int)s_status_state;
+                lv_label_set_text(s_status5, status5_text());
+                lv_obj_set_style_text_color(s_status5, lv_color_hex(status5_color()), 0);
+            }
         }
         return;
     }
@@ -544,12 +554,22 @@ int ui_speed_get_variant(void)
 
 void ui_speed_set_speed(float kmh)
 {
+    /*
+     * 变更检测（性能关键）：固件 ble_update 以约 50Hz 调用本函数，而
+     * lv_meter_set_indicator_value() 在 LVGL 8.4 中**无条件 invalidate**
+     * （值相同也会把指针区域标脏）。此前不加检测 → 空闲时也以每秒
+     * 几十次的频率重绘整块区域，真机表现为全局卡顿（滑动掉帧、秒针卡住）。
+     * EMA 平滑收敛后值不再变化，浮点相等成立，检测即命中。
+     */
+    if (kmh == s_speed) return;
     s_speed = kmh;
     apply_state();
 }
 
 void ui_speed_set_fix(bool valid, int sats)
 {
+    /* 变更检测：同 set_speed 注释，防无效化风暴 */
+    if (valid == s_valid && sats == s_sats) return;
     s_valid = valid;
     s_sats = sats;
     apply_state();
@@ -557,13 +577,17 @@ void ui_speed_set_fix(bool valid, int sats)
 
 void ui_speed_set_driver_state(int state)
 {
-    s_driver_state = (state < -1 || state > UI_DRIVER_SPEEDING) ? UI_DRIVER_AUTO : state;
+    int st = (state < -1 || state > UI_DRIVER_SPEEDING) ? UI_DRIVER_AUTO : state;
+    if (st == s_driver_state) return; /* 变更检测 */
+    s_driver_state = st;
     apply_state();
 }
 
 void ui_speed_set_heading(int deg)
 {
-    s_heading = ((deg % 360) + 360) % 360;
+    int h = ((deg % 360) + 360) % 360;
+    if (h == s_heading) return; /* 变更检测 */
+    s_heading = h;
     apply_state();
 }
 
