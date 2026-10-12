@@ -159,6 +159,7 @@ int main(int argc, char **argv)
     int start_page = 0;
     int fh = -1, fm = 0, fs = 0;
     int speed_variant = 0;
+    int status_state = -1; /* --status N：设置五态链路状态（用于安全区/文案验证） */
     float speed_kmh = 88.0f;
     int nofix = 0;
     int driver_state = UI_DRIVER_AUTO;
@@ -175,6 +176,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--variant") && i + 1 < argc) speed_variant = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--speed") && i + 1 < argc) speed_kmh = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--nofix")) nofix = 1;
+        else if (!strcmp(argv[i], "--status") && i + 1 < argc) status_state = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--driver") && i + 1 < argc) driver_state = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--gesture-test")) gesture_test = 1;
         else if (!strcmp(argv[i], "--nmea") && i + 1 < argc) nmea_path = argv[++i];
@@ -191,6 +193,7 @@ int main(int argc, char **argv)
     ui_speed_set_variant(speed_variant);
     ui_speed_set_speed(speed_kmh);
     ui_speed_set_fix(nofix ? false : true, 12);
+    if (status_state >= 0) ui_speed_set_status((ui_speed_status_t)status_state);
     ui_speed_set_driver_state(driver_state);
 
     if (offscreen) SDL_SetHint(SDL_HINT_VIDEODRIVER, "dummy");
