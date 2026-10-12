@@ -50,3 +50,7 @@ tools/output/
 
 # 密钥/私有配置（如后续有 Wi-Fi 凭据等，勿提交）
 secrets/
+
+# 单测编译产物
+tests/test_nmea
+tests/test_telemetry

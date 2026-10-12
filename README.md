@@ -17,7 +17,10 @@
 - [x] 页面切换：左右滑动（模拟时钟 ⇄ 数字时钟，`simulator/ui/ui_pages.c`）
 - [x] 官方示例 01_HelloWorld 烧录验证（**真机通过**：屏幕显示 + 串口每 200ms 输出）
 - [x] 官方示例 03_LVGL_PCF85063_simpleTime 烧录验证（**真机通过**：LVGL 渲染 + RTC 每秒走时）
-- [x] 本工程固件烧录运行（**真机通过**：3 页 UI、串口命令、RTC 校时；GNSS 待接天线）
+- [x] 本工程固件烧录运行（**真机通过**：3 页 UI、串口命令、RTC 校时）
+- [x] **数据源切换为 iPhone Core Location + BLE**（本机无 LC76G GNSS）：阶段 1 完成——
+      固件广播 `CarDashboard`、接收并重组解析 JSON 遥测、线程安全、数据过期置无效；
+      **真机+macOS 联调通过**（发现/连接/写入 203 字节/解析 68.5 km/h，见 `docs/ble.md`）
 - [ ] 官方示例 03_LVGL_PCF85063_simpleTime 烧录验证（RTC）
 - [ ] 官方示例 09_LC76G_I2C 烧录验证（GNSS）
 - [x] 速度表盘 V5（驾驶员三态 + 白底 + 速度渐变，像素级验证）
