@@ -811,6 +811,10 @@ static void ble_update(void)
   else {
     uint32_t age = ble_telemetry_age_ms();
     if (!s_had_data)       st = UI_STATUS_WAIT_LOC;   /* 已连接，还没收到任何包 */
+    else if (age == BLE_AGE_UNKNOWN) {
+      /* 并发中取不到状态：保持上一次判断，避免 LIVE→STALE 闪跳 */
+      st = s_last_status;
+    }
     else if (age == UINT32_MAX || age > BLE_STALE_MS) st = UI_STATUS_STALE;  /* 超时 */
     else if (!s_tel_valid) st = UI_STATUS_INVALID;    /* 收到但无效 */
     else                   st = UI_STATUS_OK;         /* 正常 */

@@ -30,7 +30,12 @@ bool ble_telemetry_connected(void);
  */
 bool ble_telemetry_fetch(telemetry_msg_t *out, uint32_t *rx_ms);
 
-/* 距最后一条有效遥测的毫秒数；从未收到过返回 UINT32_MAX */
+/*
+ * 距最后一条有效遥测的毫秒数：
+ *   UINT32_MAX        = 从未收到过
+ *   BLE_AGE_UNKNOWN   = 暂时取不到状态（并发中），调用方应保持当前状态而非判为超时
+ */
+#define BLE_AGE_UNKNOWN (UINT32_MAX - 1)
 uint32_t ble_telemetry_age_ms(void);
 
 /* 累计统计（排障日志用） */
