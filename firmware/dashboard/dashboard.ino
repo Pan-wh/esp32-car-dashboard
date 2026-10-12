@@ -131,6 +131,7 @@ static bool s_tel_valid = false; /* 最新一包是否有可用速度/定位 */
 static bool s_had_data = false;  /* 是否收到过任意遥测（区分 WAIT LOC 与 STALE） */
 static ui_speed_status_t s_last_status = UI_STATUS_CONNECTING;
 static uint32_t s_implausible = 0; /* 被丢弃的不合理包计数（§7） */
+static telemetry_smooth_t s_smooth;  /* 速度平滑（§5.4，限制滞后、失效即重置） */
 static const char *s_reset_reason = "未知"; /* 本次启动的复位原因（启动时记录） */
 static int s_reset_reason_code = -1;        /* esp_reset_reason() 原始值 */
 
@@ -445,6 +446,9 @@ static void print_ble(void)
   Serial.printf("   链路状态=%s\n", sn[si]);
   Serial.printf("   本次启动复位原因=%s(码 %d)，已运行 %lu s\n", s_reset_reason,
                 s_reset_reason_code, (unsigned long)(millis() / 1000));
+  Serial.printf("   平滑速度=%.1f km/h（原始 %.1f）\n",
+                (double)s_smooth.value_kmh,
+                (double)(s_tel_valid ? telemetry_speed_kmh(&s_tel) : 0.0f));
 }
 
 /* 打印 LVGL 内存与堆情况（排查元素缺失） */
@@ -819,12 +823,18 @@ static void ble_update(void)
     bool speed_ok = s_tel.speed_valid && s_tel.speed_mps >= 0.0f;
     ui_speed_set_fix(true, 0);
     if (speed_ok) {
-      ui_speed_set_speed(telemetry_speed_kmh(&s_tel));
+      /* 低速抖动抑制：减速立即跟随、加速轻量平滑，滞后有界（§5.4） */
+      float kmh = telemetry_smooth_step(&s_smooth, telemetry_speed_kmh(&s_tel), true);
+      ui_speed_set_speed(kmh);
       if (s_tel.has_course) ui_speed_set_heading((int)(s_tel.course_deg + 0.5f));
+    }
+    else {
+      telemetry_smooth_reset(&s_smooth); /* 速度不可信：清平滑状态 */
     }
   }
   else {
-    ui_speed_set_fix(false, 0); /* 指针归零，不显示旧值 */
+    telemetry_smooth_reset(&s_smooth); /* 失效/超时/断连：立即重置，绝不残留旧值 */
+    ui_speed_set_fix(false, 0);        /* 指针归零，不显示旧值 */
   }
 }
 

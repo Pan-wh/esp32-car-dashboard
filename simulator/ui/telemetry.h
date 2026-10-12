@@ -84,6 +84,35 @@ float telemetry_speed_kmh(const telemetry_msg_t *m);
  */
 bool telemetry_plausible(const telemetry_msg_t *m);
 
+/*
+ * 轻量速度平滑（§5.4：「低速时 GPS 速度可能跳动；可以增加轻量平滑，
+ * 但必须限制滞后，不能让仪表明显延迟」）。
+ *
+ * 设计取舍：
+ *   - 用一阶低通（EMA），系数固定 → 滞后有界、行为可预测；
+ *   - 只在**加速方向**上限制步进，减速立即跟随（车速下降必须即时反映，安全优先）；
+ *   - 数据无效/超时/速度跳变过大时**立即重置**，绝不把旧值平滑出来（遵守"不显示旧值"）。
+ */
+typedef struct {
+    bool  inited;
+    float value_kmh;   /* 平滑后的速度 */
+} telemetry_smooth_t;
+
+/* 平滑系数（0..1，越大越跟手、越小越平滑）。集中定义便于调整。 */
+#define TELEMETRY_SMOOTH_ALPHA 0.45f
+
+/* 与上一值的最大合理跳变（km/h）：超过则认为换源/异常，直接重置而非平滑 */
+#define TELEMETRY_SMOOTH_JUMP_KMH 40.0f
+
+/* 重置（数据失效/超时/断连时调用，避免平滑出旧值） */
+void telemetry_smooth_reset(telemetry_smooth_t *st);
+
+/*
+ * 喂入一个新速度并返回平滑结果（km/h）。
+ * 传入 invalid=true 时会重置并返回 0（调用方应据此显示失效，而非旧值）。
+ */
+float telemetry_smooth_step(telemetry_smooth_t *st, float kmh, bool valid);
+
 #ifdef __cplusplus
 }
 #endif
