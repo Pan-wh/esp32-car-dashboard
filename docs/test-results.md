@@ -27,6 +27,8 @@
 | 11a | GATT 契约：Service/Telemetry(Write)/Status(Read+Notify)（§4） | ✅ | `tools/ble_status_test.swift`：属性 0x12=Read\|Notify，读回 "time-synced"，写入后收到 Notify |
 | 11d | 版本不符包 v=2（§4 版本化） | ✅ | `解析错` 计数 +1，未入库 |
 | 11e | 超长包 ~1000B（缓冲上限 512B） | ✅ | 未影响状态与计数，设备继续运行（不崩溃/不越界） |
+| 11f | 两层校验协同（iOS 质量门槛 × 固件兜底） | ✅ | iOS 形状的「精度差」包（valid=false 但带经纬度）被固件**接受**而非误判为不合理；「定位好/测速差」包按预期处理 |
+| 11g | 速度平滑（§5.4） | ✅ | 真机：抖动 44/40 → 稳定 40；无效值 → 0.0 且 NO FIX（不残留旧值）；跳变 50 → 重置 |
 | 11c | 精度质量门槛（§5.4） | ✅（代码+编译） | `TelemetryQuality` 阈值集中可调；按 horizontalAccuracy/speedAccuracy 置 valid。真机阈值需实测微调 |
 
 ## 需要真机（iPhone App）完成的场景
