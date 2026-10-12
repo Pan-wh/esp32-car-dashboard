@@ -1,0 +1,42 @@
+# XcodeGen 工程定义 —— CarDashboardPhone（iPhone 数据源 App）
+#
+# 用法（本机需要 xcodegen）：
+#   brew install xcodegen             # 仅一次
+#   cd ios/CarDashboardPhone && xcodegen generate
+# 产出的 CarDashboardPhone.xcodeproj 可直接用 Xcode 打开、选 Team 后真机运行。
+#
+# 生成的 .xcodeproj 会一并提交，因此**无 xcodegen 也能直接用 Xcode 打开**。
+
+name: CarDashboardPhone
+options:
+  bundleIdPrefix: com.cardashboard
+  deploymentTarget:
+    iOS: "17.0"          # 用户设备 iOS 17.0.2；speedAccuracy 需 iOS 17
+  createIntermediateGroups: true
+
+targets:
+  CarDashboardPhone:
+    type: application
+    platform: iOS
+    sources:
+      - CarDashboardPhone
+    info:
+      path: CarDashboardPhone/Info.plist
+      properties:
+        CFBundleDisplayName: CarDashboard
+        UILaunchScreen: {}
+        NSLocationWhenInUseUsageDescription: 驾驶会话中读取您的车速、航向与位置
+        NSLocationAlwaysAndWhenInUseUsageDescription: 锁屏/后台驾驶时继续更新车速
+        NSBluetoothAlwaysUsageDescription: 连接车载仪表并发送驾驶数据
+        NSBluetoothPeripheralUsageDescription: 连接车载仪表并发送驾驶数据
+        UIBackgroundModes:
+          - location
+          - bluetooth-central
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.cardashboard.CarDashboardPhone
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"

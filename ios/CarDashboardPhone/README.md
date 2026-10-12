@@ -27,32 +27,36 @@ Service `7D2A0001-8F4A-4B7C-9D21-5E6A3B8C1000`；
 Telemetry（Write）`7D2A0002-…`；Status（Read/Notify）`7D2A0003-…`。
 JSON 字段与语义见 `../../docs/ble.md` 与 `TelemetryPacket.swift` 的 CodingKeys。
 
-## 在 Xcode 中创建工程并接入（手动，唯一未自动化步骤）
+## 在 Xcode 中运行（**已生成可直接打开的工程**）
 
-1. Xcode → **File → New → Project → iOS → App**，产品名 `CarDashboardPhone`，
-   Interface 选 **SwiftUI**，Language **Swift**。
-2. 删除模板自带的 `ContentView.swift` 与 `CarDashboardPhoneApp.swift`，
-   将本目录 6 个 `.swift` 文件**拖入** project navigator（勾选 Copy if needed）。
-3. **Info.plist** 增加以下键（隐私文案，首次弹窗会展示）：
+`CarDashboardPhone.xcodeproj` 已随仓库提交，**直接双击打开**即可（无需 xcodegen、无需手动建工程）：
 
-   | Key | Value（示例文案） |
-   |-----|------------------|
-   | `NSLocationWhenInUseUsageDescription` | 用于在驾驶会话中读取您的车速、航向与位置 |
-   | `NSLocationAlwaysAndWhenInUseUsageDescription` | 锁屏/后台驾驶时继续更新车速 |
-   | `NSBluetoothAlwaysUsageDescription` | 用于连接车载仪表并发送驾驶数据 |
-   | `NSBluetoothPeripheralUsageDescription` | （同上，兼容旧 iOS）|
+1. 打开 `CarDashboardPhone.xcodeproj` → 选 target `CarDashboardPhone` → **Signing & Capabilities**
+   选择你的 Team（Personal Team 即可）。
+2. 若 Xcode 提示缺少 iOS 平台组件：**Xcode → Settings → Components** 下载 iOS 模拟器/设备支持
+   （本机 Xcode 26.5 只有 SDK，未下载平台运行时，故命令行 `xcodebuild` 无可用 destination）。
+3. 连接 iPhone SE 3（iOS 17.0.2），选中设备后 Run。
 
-4. **Target → Signing & Capabilities**：选择你的 Team；添加 **Background Modes**，
-   勾选 `Location updates` 与 `Uses Bluetooth LE accessories`（阶段 4 后台必需）。
-5. **Build Settings** → Deployment Target 建议 ≥ iOS 16.0（`CLLocation` /
-   `CBManager` API 基线；若需 `CLLocation.speedAccuracy` 则 ≥ iOS 17.0，当前代码未用）。
-6. 真机运行（Core Location / Core Bluetooth 功能无法在模拟器完整验证）。
+> 工程文件由 `project.yml`（XcodeGen）生成，改工程配置请改 `project.yml` 后执行
+> `brew install xcodegen && xcodegen generate`，避免手改 pbxproj。
+> Info.plist 的定位/蓝牙隐私键与 `UIBackgroundModes` 已由 `project.yml` 自动生成。
+
+### 已验证的编译状态
+
+| 项目 | 结果 |
+|------|------|
+| 6 个源文件 `swiftc -typecheck`（macOS SDK） | ✅ 通过 |
+| **对 iOS 26.5 SDK / Swift 6.3 `-typecheck`（target ios17.0）** | ✅ 通过 |
+| **模拟器版编译+链接（arm64-apple-ios17.0-simulator）** | ✅ 产出可执行文件 |
+| **设备版编译+链接（arm64-apple-ios17.0）** | ✅ 通过 |
+| Info.plist 隐私键 + 后台模式 | ✅ 已生成并核对 |
+| 真机运行 / 后台 / CarPlay | ⚠️ **未验证**（需你的 iPhone + 下载 iOS 平台组件）|
 
 ## 后台（阶段 4）注意事项
 
 - 后台定位与 BLE 能否持续，取决于权限、系统版本、App 状态；**强制退出 App 后 iOS 不保证继续发送**。
 - 代码里 `CLLocationManager.activityType = .otherNavigation`、关闭自动暂停，是为导航场景优化；
-  如需后台持续定位，还需 `allowsBackgroundLocationUpdates = true`（阶段 4 接入）。
+  `requestBackground()` 会申请「始终」授权并开启 `allowsBackgroundLocationUpdates`。
 - App/权限失效时，仪表端不会收到新数据 → 固件按 `BLE_STALE_MS`(2.5s) 自动把速度置无效（已实现）。
 
 ## 验证思路
