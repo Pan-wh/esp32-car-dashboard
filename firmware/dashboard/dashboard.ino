@@ -804,6 +804,16 @@ static void ble_poll(void)
 static void ble_update(void)
 {
   /*
+   * UI 驱动限频 50Hz：手机遥测本身 2Hz，更高频率的调用在 setter 的变更检测
+   * 下虽不会触发重绘，但限频可进一步压低空转成本（状态切换延迟 ≤20ms，
+   * 相对 2.5s 超时阈值可忽略）。
+   */
+  static uint32_t last_ui_ms = 0;
+  uint32_t now_ms = millis();
+  if (now_ms - last_ui_ms < 20) return;
+  last_ui_ms = now_ms;
+
+  /*
    * 状态判定用共享的纯 C 状态机（simulator/ui/telemetry.c），
    * 已有 11 项单元测试覆盖（五态 + 并发 HOLD + 阈值边界），
    * 避免"固件里一份、测试里一份"的双份逻辑漂移。

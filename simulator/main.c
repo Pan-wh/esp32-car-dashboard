@@ -32,8 +32,11 @@ static lv_color_t g_buf1[SIM_W * SIM_H];
 static lv_color_t g_buf2[SIM_W * SIM_H];
 static lv_color_t g_frame[SIM_W * SIM_H]; /* 完整帧缓存：呈现与截图共用 */
 
+static uint32_t s_flush_cnt = 0; /* 性能诊断：flush 次数（无效化风暴的客观指标） */
+
 static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *colors)
 {
+    s_flush_cnt++;
     int32_t w = area->x2 - area->x1 + 1;
     for (int32_t y = area->y1; y <= area->y2; y++) {
         memcpy(&g_frame[y * SIM_W + area->x1], colors, (size_t)w * sizeof(lv_color_t));
@@ -166,6 +169,7 @@ int main(int argc, char **argv)
     const char *nmea_path = NULL;
     float nmea_speedup = 10.0f;
     int gesture_test = 0;
+    int ble_sim = 0; /* 复刻固件 ble_update 每帧调用 setter 的行为（性能回归复现） */
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
@@ -179,6 +183,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--status") && i + 1 < argc) status_state = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--driver") && i + 1 < argc) driver_state = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--gesture-test")) gesture_test = 1;
+        else if (!strcmp(argv[i], "--ble-sim")) ble_sim = 1;
         else if (!strcmp(argv[i], "--nmea") && i + 1 < argc) nmea_path = argv[++i];
         else if (!strcmp(argv[i], "--nmea-speedup") && i + 1 < argc) nmea_speedup = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
@@ -316,6 +321,15 @@ int main(int argc, char **argv)
         }
 
         /*
+         * 复刻固件行为（--ble-sim）：dashboard.ino 的 ble_update() 每圈主循环
+         * 都调用 ui_speed_set_fix()/set_speed()。真机上这曾是无效化风暴的
+         * 根因（setter 不做变更检测 → LVGL 无条件重绘）。此模式用于回归复现。
+         */
+        if (ble_sim) {
+            ui_speed_set_fix(false, 0); /* 模拟 BT OFF 分支的每帧调用 */
+        }
+
+        /*
          * 手势自测（--gesture-test）：直接驱动 LVGL 输入，验证「按下→拖动→抬起」
          * 能否被判定为手势并切页。用于在没有触摸屏时回归测试切页链路。
          */
@@ -419,6 +433,11 @@ int main(int argc, char **argv)
     }
 
 done:
+    if (ble_sim || s_flush_cnt > 0) {
+        Uint32 elapsed = SDL_GetTicks();
+        printf("[性能] flush 总次数=%u，平均 %.1f 次/秒（--ble-sim=%d）\n",
+               (unsigned)s_flush_cnt, elapsed ? (double)s_flush_cnt * 1000.0 / elapsed : 0.0, ble_sim);
+    }
     if (shot && !deadline) save_bmp(shot);
     SDL_DestroyTexture(frame_tex);
     SDL_DestroyTexture(mask_tex);
