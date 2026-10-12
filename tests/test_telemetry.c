@@ -135,6 +135,49 @@ static void test_speed_kmh_conversion(void)
     CHECK_NEAR(telemetry_speed_kmh(&m), 19.03 * 3.6, 0.001, "km/h = m/s × 3.6");
 }
 
+/* 合理性校验（§7 超范围/自相矛盾） */
+static void test_plausible(void)
+{
+    /* 正常 */
+    {
+        telemetry_msg_t m = parse("{\"v\":1,\"speed_mps\":19.03,\"speed_valid\":true,"
+                                  "\"latitude\":1.35,\"longitude\":103.8,\"course_deg\":120}");
+        CHECK(telemetry_plausible(&m), "正常包应合理");
+    }
+    /* 速度超范围（>400km/h ≈ 111.1m/s） */
+    {
+        telemetry_msg_t m = parse("{\"v\":1,\"speed_mps\":200.0,\"speed_valid\":true}");
+        CHECK(!telemetry_plausible(&m), "555km/h 应判为不合理");
+    }
+    /* 负速度（iOS 无效语义）允许 */
+    {
+        telemetry_msg_t m = parse("{\"v\":1,\"speed_mps\":-1.0,\"speed_valid\":false}");
+        CHECK(telemetry_plausible(&m), "负速度(无效语义)应允许");
+    }
+    /* 航向超范围 */
+    {
+        telemetry_msg_t m = parse("{\"v\":1,\"course_deg\":400.0}");
+        CHECK(!telemetry_plausible(&m), "航向 400 应不合理");
+    }
+    /* 纬度超范围 */
+    {
+        telemetry_msg_t m = parse("{\"v\":1,\"latitude\":95.0}");
+        CHECK(!telemetry_plausible(&m), "纬度 95 应不合理");
+    }
+    /* 经度超范围 */
+    {
+        telemetry_msg_t m = parse("{\"v\":1,\"longitude\":-200.0}");
+        CHECK(!telemetry_plausible(&m), "经度 -200 应不合理");
+    }
+    /* 定位有效但无经纬度 → 自相矛盾 */
+    {
+        telemetry_msg_t m = parse("{\"v\":1,\"location_valid\":true}");
+        CHECK(!telemetry_plausible(&m), "location_valid 但无经纬度应不合理");
+    }
+    /* NULL 安全 */
+    CHECK(!telemetry_plausible(NULL), "NULL 应返回 false");
+}
+
 int main(void)
 {
     g_pass = g_fail = 0;
@@ -147,6 +190,7 @@ int main(void)
     test_scientific_notation();
     test_malformed();
     test_speed_kmh_conversion();
+    test_plausible();
 
     printf("结果: %d 通过, %d 失败\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
