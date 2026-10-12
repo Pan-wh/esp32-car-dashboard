@@ -29,6 +29,7 @@ static SemaphoreHandle_t s_mtx = NULL;
 static telemetry_msg_t s_last;
 static bool s_new = false;
 static uint32_t s_rx_ms = 0;
+static bool s_have_rx = false; /* 是否收到过至少一条有效遥测（与 s_rx_ms==0 区分开） */
 
 static volatile bool s_connected = false;
 
@@ -47,6 +48,7 @@ static void inline store_msg(const telemetry_msg_t *m)
     if (s_mtx && xSemaphoreTake(s_mtx, pdMS_TO_TICKS(50)) == pdTRUE) {
         s_last = *m;
         s_rx_ms = millis();
+        s_have_rx = true;
         s_new = true;
         xSemaphoreGive(s_mtx);
     }
@@ -182,11 +184,17 @@ bool ble_telemetry_fetch(telemetry_msg_t *out, uint32_t *rx_ms)
 uint32_t ble_telemetry_age_ms(void)
 {
     uint32_t r = 0;
-    if (s_mtx && xSemaphoreTake(s_mtx, pdMS_TO_TICKS(10)) == pdTRUE) {
-        r = s_rx_ms;
-        xSemaphoreGive(s_mtx);
+    bool have = false;
+
+    if (s_mtx == NULL) return BLE_AGE_UNKNOWN;
+    if (xSemaphoreTake(s_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return BLE_AGE_UNKNOWN; /* 取锁失败：不可当作"从未收到"，否则会误报超时 */
     }
-    if (r == 0) return UINT32_MAX; /* 从未收到过 */
+    r = s_rx_ms;
+    have = s_have_rx;
+    xSemaphoreGive(s_mtx);
+
+    if (!have) return UINT32_MAX; /* 确实从未收到过 */
 
     uint32_t now = millis();
     return (now >= r) ? (now - r) : (UINT32_MAX - r + now); /* 处理 49 天回绕 */
