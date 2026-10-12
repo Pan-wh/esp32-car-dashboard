@@ -24,6 +24,9 @@
 | 10 | 连续运行 ≥30 分钟（固件侧） | ✅ | 运行 **1856s（≈30.9min）** 无崩溃/无重启；空闲堆恒为 137,024 B（历史最低 136,840 B，差 184 B → 无泄漏）；LVGL 碎片 0%；期间含 8 次 BLE 连接/写入/断连 |
 | 11 | GPS 无效 / 室内无定位 / 隧道短时丢失 | ✅ | 等价于 #3+#5：无效→`NO FIX`；丢失→超时→`STALE`+速度清零 |
 | 11b | 超范围/自相矛盾数据校验（§7） | ✅ | 720 km/h 与纬度 95 的包被 `telemetry_plausible()` 丢弃并计数；正常包接受 |
+| 11a | GATT 契约：Service/Telemetry(Write)/Status(Read+Notify)（§4） | ✅ | `tools/ble_status_test.swift`：属性 0x12=Read\|Notify，读回 "time-synced"，写入后收到 Notify |
+| 11d | 版本不符包 v=2（§4 版本化） | ✅ | `解析错` 计数 +1，未入库 |
+| 11e | 超长包 ~1000B（缓冲上限 512B） | ✅ | 未影响状态与计数，设备继续运行（不崩溃/不越界） |
 | 11c | 精度质量门槛（§5.4） | ✅（代码+编译） | `TelemetryQuality` 阈值集中可调；按 horizontalAccuracy/speedAccuracy 置 valid。真机阈值需实测微调 |
 
 ## 需要真机（iPhone App）完成的场景
