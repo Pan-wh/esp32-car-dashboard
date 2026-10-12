@@ -37,6 +37,8 @@ firmware/dashboard/ui_*.c
 firmware/dashboard/ui_*.h
 firmware/dashboard/gnss_*.c
 firmware/dashboard/gnss_*.h
+firmware/dashboard/telemetry.c
+firmware/dashboard/telemetry.h
 firmware/dashboard/font_*.c
 
 # 字体管线中间产物与 Python 库（tools/make_fonts.sh 可重建）
