@@ -11,6 +11,8 @@ final class BLEClient: NSObject, ObservableObject {
     @Published var state: CBManagerState = .unknown
     @Published var isConnected = false
     @Published var discoveredName: String?
+    /// 最近一次失败/等待原因（供 UI 显示，避免"点了没反应"）
+    @Published var lastNotice: String?
 
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
@@ -31,8 +33,34 @@ final class BLEClient: NSObject, ObservableObject {
     }
 
     func scanAndConnect() {
-        guard state == .poweredOn else { return }
-        central.scanForPeripherals(withServices: [serviceUUID], options: nil)
+        switch state {
+        case .poweredOn:
+            lastNotice = "扫描中…请确认仪表已上电"
+            central.scanForPeripherals(withServices: [serviceUUID], options: nil)
+        case .unknown, .resetting:
+            lastNotice = "蓝牙尚未就绪，请稍候再试"
+        case .unsupported:
+            lastNotice = "此设备不支持蓝牙 LE"
+        case .unauthorized:
+            lastNotice = "未授权蓝牙：请在 设置 → 隐私与安全性 → 蓝牙 中允许本 App"
+        case .poweredOff:
+            lastNotice = "蓝牙已关闭：请在控制中心或设置中打开蓝牙"
+        @unknown default:
+            lastNotice = "蓝牙状态异常"
+        }
+    }
+
+    /// 供 UI 显示的状态文案
+    var stateText: String {
+        switch state {
+        case .poweredOn: return isConnected ? "已连接" : "蓝牙就绪"
+        case .unknown: return "初始化中"
+        case .resetting: return "重置中"
+        case .unsupported: return "不支持 BLE"
+        case .unauthorized: return "未授权"
+        case .poweredOff: return "蓝牙已关闭"
+        @unknown default: return "未知"
+        }
     }
 
     func send(packet: TelemetryPacket) {
@@ -51,6 +79,13 @@ extension BLEClient: CBCentralManagerDelegate {
         if central.state != .poweredOn {
             isConnected = false
         }
+        if central.state == .poweredOn, discoveredName == nil {
+            lastNotice = "蓝牙就绪，点「连接仪表」开始扫描"
+        } else if central.state == .unauthorized {
+            lastNotice = "未授权蓝牙：请在 设置 → 隐私与安全性 → 蓝牙 中允许本 App"
+        } else if central.state == .poweredOff {
+            lastNotice = "蓝牙已关闭：请在控制中心或设置中打开蓝牙"
+        }
     }
 
     func centralManager(_ central: CBCentralManager,
@@ -67,16 +102,19 @@ extension BLEClient: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         isConnected = true
+        lastNotice = nil
         peripheral.delegate = self
         peripheral.discoverServices([serviceUUID])
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         isConnected = false
+        lastNotice = "连接失败：\(error?.localizedDescription ?? "未知原因")"
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         isConnected = false
+        lastNotice = "已断开，正在尝试重连…"
         telemetryChar = nil
         statusChar = nil
         // 自动重连（固件断连后会重新广播）
