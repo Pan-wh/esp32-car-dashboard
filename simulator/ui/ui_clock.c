@@ -23,10 +23,23 @@
 
 LV_FONT_DECLARE(clock_iphone_138); /* Inter ExtraLight 138px，数字+冒号 */
 LV_FONT_DECLARE(date_cjk_26);       /* Noto Sans SC 26px，日期用字形 */
+LV_FONT_DECLARE(label_26);          /* 26px ASCII，状态标签用 */
+
+#define UI_FG_OK  0x3ABF6E  /* 已同步：弱绿 */
 
 static lv_obj_t *s_label_time;
 static lv_obj_t *s_label_date;
+static lv_obj_t *s_label_sync;
 static lv_timer_t *s_timer;
+
+/* BLE 校时状态（TIME SYNC → SYNCED） */
+void ui_clock_set_time_synced(bool synced)
+{
+    if (s_label_sync == NULL) return;
+    lv_label_set_text(s_label_sync, synced ? "SYNCED" : "TIME SYNC");
+    lv_obj_set_style_text_color(s_label_sync,
+        lv_color_hex(synced ? UI_FG_OK : UI_FG_DIM), 0);
+}
 
 /* 预留：真机版由 RTC 模块调用（当前静态稿用系统时钟驱动） */
 void ui_clock_set_time(int hour, int minute, int mon, int mday, int wday)
@@ -69,6 +82,13 @@ void ui_clock_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_label_time, lv_color_hex(UI_FG_MAIN), 0);
     lv_label_set_text(s_label_time, "0:00");
     lv_obj_align(s_label_time, LV_ALIGN_CENTER, 0, 16);
+
+    /* 时间同步状态（默认未同步，BLE 校时后置 SYNCED） */
+    s_label_sync = lv_label_create(parent);
+    lv_obj_set_style_text_font(s_label_sync, &label_26, 0);
+    lv_obj_set_style_text_color(s_label_sync, lv_color_hex(UI_FG_DIM), 0);
+    lv_label_set_text(s_label_sync, "TIME SYNC");
+    lv_obj_align(s_label_sync, LV_ALIGN_CENTER, 0, 100);
 
     /* 每秒刷新；先立即刷一次 */
     clock_tick_cb(NULL);

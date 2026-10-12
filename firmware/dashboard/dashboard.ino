@@ -24,6 +24,8 @@
 #include <Wire.h>
 #include <SPI.h>
 #include <lvgl.h>
+#include <time.h>       /* time/gmtime/time_t */
+#include <sys/time.h>   /* settimeofday/timeval */
 
 #include "Arduino_GFX_Library.h"
 #include "pin_config.h"        /* 由 libraries/Mylibrary 提供 */
@@ -35,6 +37,7 @@
 extern "C" {
 #include "ui_pages.h"
 #include "ui_speed.h"
+#include "ui_clock.h"    /* 数字时钟页（时间同步状态标签） */
 #include "ui_timesrc.h"
 #include "telemetry.h"   /* BLE 遥测协议解析（纯 C，模拟器/固件共用） */
 }
@@ -119,9 +122,17 @@ static void tlog_add(int16_t x, int16_t y, bool pressed)
 /* 数据过期阈值：超过该时长无有效遥测 → 速度置无效（不显示旧值） */
 #define BLE_STALE_MS 2500
 
+/* 显示/存储时区：UTC+8（中国标准时间，无夏令时），第一版固定 */
+#define TZ_OFFSET_HOURS 8
+
 /* 主循环消费的遥测状态 */
 static telemetry_msg_t s_tel;
 static bool s_tel_valid = false; /* 是否有尚未过期的速度数据 */
+
+/* 时间同步状态 */
+static bool s_time_synced = false;
+static uint32_t s_last_sync_ms = 0;      /* 本机 millis，上次同步时刻 */
+static int64_t s_last_sync_utc_ms = 0;   /* 上次同步的 UTC epoch 毫秒 */
 
 /* ---------------- RTC ---------------- */
 
@@ -414,6 +425,14 @@ static void print_ble(void)
                   s_tel.v, (double)s_tel.speed_mps, (double)telemetry_speed_kmh(&s_tel),
                   (double)s_tel.course_deg, (int)s_tel.location_valid);
   }
+
+  if (s_time_synced) {
+    Serial.printf("   时间同步=已同步（UTC %lld，%.1f s 前）\n",
+                  (long long)s_last_sync_utc_ms, (double)(millis() - s_last_sync_ms) / 1000.0);
+  }
+  else {
+    Serial.println("   时间同步=未同步");
+  }
 }
 
 /* 打印 LVGL 内存与堆情况（排查元素缺失） */
@@ -637,6 +656,7 @@ void setup()
    * 收到有效 BLE 遥测后由 ble_poll 驱动。
    */
   ui_speed_set_fix(false, 0);
+  ui_clock_set_time_synced(false); /* 初始 TIME SYNC，BLE 校时后转 SYNCED */
 
   Serial.printf("[显示] 旋转 = %d（0=0° 1=90° 2=180° 3=270°），软件旋转已开启\n", DISPLAY_ROT);
   Serial.printf("[UI] 页面数 %d，默认页 %d(%s)，触摸%s\n", (int)UI_PAGE_COUNT, (int)DEFAULT_PAGE,
@@ -644,6 +664,58 @@ void setup()
   print_time();
   print_mem();
   print_help();
+}
+
+/*
+ * 时间同步：收到有效 UTC epoch 毫秒后：
+ *   1) settimeofday 校准系统时钟（UTC）；2) 写 PCF85063 RTC（本地时区）；
+ *   3) 标记同步状态并更新屏幕标签 + Status 特征。
+ * 避免 1-2Hz 反复写 RTC：已同步且与系统时钟偏差 ≤ 2s → 跳过。
+ */
+static bool time_sync_maybe(int64_t utc_ms)
+{
+  if (utc_ms <= 0) return false;
+
+  /* 已同步且偏差小：不重写（手机 1-2Hz 连续发同一时间） */
+  time_t now = time(NULL);
+  int64_t diff_ms = (int64_t)now * 1000 - utc_ms;
+  if (s_time_synced && diff_ms >= -2000 && diff_ms <= 2000) return false;
+
+  /* 合理性校验（换算成日历后年份区间） */
+  time_t utc = (time_t)(utc_ms / 1000);
+  time_t local = utc + (time_t)TZ_OFFSET_HOURS * 3600;
+  struct tm *lt = gmtime(&local);
+  if (lt == NULL) return false;
+  int y = lt->tm_year + 1900;
+  if (y < 2020 || y > 2080) {
+    Serial.printf("[同步] UTC 时间戳不合理（%d 年），忽略\n", y);
+    return false;
+  }
+
+  /* 系统时钟（UTC） */
+  struct timeval tv;
+  tv.tv_sec = utc;
+  tv.tv_usec = (suseconds_t)((utc_ms % 1000) * 1000);
+  settimeofday(&tv, NULL);
+
+  /* RTC：存本地时区时间（显示 provider 直接读，无需再换算） */
+  if (rtc_ok) {
+    rtc.setDateTime((uint16_t)y, (uint8_t)(lt->tm_mon + 1), (uint8_t)lt->tm_mday,
+                    (uint8_t)lt->tm_hour, (uint8_t)lt->tm_min, (uint8_t)lt->tm_sec);
+  }
+
+  bool first = !s_time_synced;
+  s_time_synced = true;
+  s_last_sync_ms = millis();
+  s_last_sync_utc_ms = utc_ms;
+  ui_clock_set_time_synced(true);
+
+  Serial.printf("[同步] %sBLE UTC → RTC %04d-%02d-%02d %02d:%02d:%02d（UTC+%d）\n",
+                first ? "首次 " : "重校 ", y, lt->tm_mon + 1, lt->tm_mday, lt->tm_hour,
+                lt->tm_min, lt->tm_sec, (int)TZ_OFFSET_HOURS);
+
+  ble_telemetry_set_status("time-synced");
+  return true;
 }
 
 /*
@@ -659,6 +731,10 @@ static void ble_poll(void)
   if (!ble_telemetry_fetch(&m, &rx_ms)) return; /* 无新数据 */
 
   s_tel = m;
+
+  /* 时间同步：带 ts_utc_ms 的包触发（首次/漂移 >2s 才真正写 RTC） */
+  if (m.has_ts) time_sync_maybe(m.ts_utc_ms);
+
   bool speed_ok = m.speed_valid && m.speed_mps >= 0.0f;
   bool show_ok = m.location_valid || speed_ok;
   s_tel_valid = show_ok;

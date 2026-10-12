@@ -8,6 +8,7 @@
 #define UI_CLOCK_H
 
 #include "lvgl.h"
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -16,6 +17,9 @@ extern "C" {
 
 /* 创建主时钟表盘；parent 通常传 lv_scr_act() */
 void ui_clock_create(lv_obj_t *parent);
+
+/* 时间同步状态（BLE 校时成功后置 true）；影响底部状态标签 */
+void ui_clock_set_time_synced(bool synced);
 
 #ifdef __cplusplus
 }
