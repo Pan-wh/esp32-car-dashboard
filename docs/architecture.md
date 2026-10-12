@@ -81,7 +81,12 @@ iOS 侧纯逻辑（Foundation/CoreLocation，**可在 macOS 本机直接跑**，
 `tools/test_ios_logic.swift` —— 协议字段名契约、nil 省略、质量门槛边界、
 负速度不外发、精度差仍带经纬度、静止(0)为合法速度 | 32 |
 
-一键运行全部：`cd tests && make run`（44 + 81 + 32 = 157 断言）。
+UI 像素级回归（工具）：`tools/ui_regression.py` —— 渲染各页面/状态并断言设计不变量
+（圆屏遮罩、时钟黑底与橙色秒针、V5 白底、五态配色、状态文字安全区留边）| 10 |
+
+一键运行全部：`cd tests && make run`（44 + 81 + 32 + 10 = 167 断言）。
+> UI 回归需要带 Pillow 的解释器；缺省会**优雅跳过**并提示
+> `PYTHON=<带Pillow的python3> make run`。
 
 固件侧 `ble_update()` 直接调用状态机（不再内联判断）；枚举取值与
 `ui_speed_status_t` 一一对应，改动需同步（已在两处标注）。
