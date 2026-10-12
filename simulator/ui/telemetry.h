@@ -72,6 +72,44 @@ bool telemetry_parse(const char *json, size_t len, telemetry_msg_t *out);
 float telemetry_speed_kmh(const telemetry_msg_t *m);
 
 /*
+ * 数据龄哨兵（与固件 ble_telemetry.h 的 BLE_AGE_UNKNOWN 对齐，集中定义避免两端漂移）
+ */
+#define TELEMETRY_AGE_NEVER   (UINT32_MAX)     /* 从未收到过 */
+#define TELEMETRY_AGE_UNKNOWN (UINT32_MAX - 1) /* 并发中取不到状态 */
+
+/*
+ * 链路状态机（AI_TASK §6.4 五态）。纯逻辑，便于单元测试与模拟器复用。
+ *
+ *   未连接                      → LINK_CONNECTING (BT OFF)
+ *   已连接但从未收到            → LINK_WAIT_LOC   (WAIT GPS)
+ *   取不到状态(并发)            → LINK_HOLD：沿用 previous，避免 LIVE→STALE 闪跳
+ *   数据超时                    → LINK_STALE      (STALE)
+ *   收到但无效                  → LINK_INVALID    (NO FIX)
+ *   正常                        → LINK_OK         (LIVE)
+ */
+typedef enum {
+    LINK_CONNECTING = 0,
+    LINK_WAIT_LOC,
+    LINK_INVALID,
+    LINK_STALE,
+    LINK_OK,
+    LINK_HOLD /* 不是"状态"，而是"保持上一次"的指令 */
+} telemetry_link_t;
+
+/*
+ * 计算当前链路状态。
+ *   connected   : BLE 是否已连接
+ *   had_data    : 是否收到过任意遥测
+ *   age_ms      : 距最后一条有效遥测的毫秒数（UINT32_MAX=从未收到；UINT32_MAX-1=并发中取不到）
+ *   data_valid  : 最新一包是否有可用速度/定位
+ *   stale_ms    : 超时阈值
+ *   previous    : 上一次的状态（仅 LINK_HOLD 时使用）
+ */
+telemetry_link_t telemetry_link_state(bool connected, bool had_data, uint32_t age_ms,
+                                     bool data_valid, uint32_t stale_ms,
+                                     telemetry_link_t previous);
+
+/*
  * 速度合理性上限（km/h）。超过视为异常数据（§7「对无效、过期、超范围数据做校验」）。
  * 乘用车不可能达到，用于拦截明显错误的包。集中定义，便于调整。
  */

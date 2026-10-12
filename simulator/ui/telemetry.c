@@ -251,6 +251,23 @@ float telemetry_speed_kmh(const telemetry_msg_t *m)
     return m->speed_mps * 3.6f;
 }
 
+telemetry_link_t telemetry_link_state(bool connected, bool had_data, uint32_t age_ms,
+                                     bool data_valid, uint32_t stale_ms,
+                                     telemetry_link_t previous)
+{
+    if (!connected) return LINK_CONNECTING;
+    if (!had_data) return LINK_WAIT_LOC;
+
+    /* 并发中取不到状态：沿用上一次，避免误判超时造成 LIVE→STALE 闪跳 */
+    if (age_ms == TELEMETRY_AGE_UNKNOWN) return LINK_HOLD;
+
+    if (age_ms == TELEMETRY_AGE_NEVER || age_ms > stale_ms) return LINK_STALE;
+    if (!data_valid) return LINK_INVALID;
+
+    (void)previous; /* 仅 HOLD 时语义相关，由调用方处理 */
+    return LINK_OK;
+}
+
 void telemetry_smooth_reset(telemetry_smooth_t *st)
 {
     if (st == NULL) return;

@@ -224,6 +224,46 @@ static void test_smoothing(void)
     CHECK(1, "smooth_reset(NULL) 未崩溃");
 }
 
+/* 链路状态机（§6.4 五态 + 并发保持） */
+static void test_link_state(void)
+{
+    const uint32_t STALE = 2500;
+
+    /* 未连接 → BT OFF（无论其它输入） */
+    CHECK(telemetry_link_state(false, false, TELEMETRY_AGE_NEVER, false, STALE, LINK_OK)
+              == LINK_CONNECTING, "未连接 → CONNECTING");
+    CHECK(telemetry_link_state(false, true, 100, true, STALE, LINK_OK)
+              == LINK_CONNECTING, "未连接优先于有数据");
+
+    /* 已连接但从未收到 → WAIT GPS */
+    CHECK(telemetry_link_state(true, false, TELEMETRY_AGE_NEVER, false, STALE, LINK_OK)
+              == LINK_WAIT_LOC, "已连接未收到 → WAIT_LOC");
+
+    /* 数据超时 → STALE */
+    CHECK(telemetry_link_state(true, true, STALE + 1, true, STALE, LINK_OK) == LINK_STALE,
+          "超过阈值 → STALE");
+    CHECK(telemetry_link_state(true, true, STALE, true, STALE, LINK_OK) == LINK_OK,
+          "恰好等于阈值不算超时");
+    CHECK(telemetry_link_state(true, true, TELEMETRY_AGE_NEVER, true, STALE, LINK_OK)
+              == LINK_STALE, "从未收到(有 had_data 标记) → STALE");
+
+    /* 并发取不到状态 → HOLD（由调用方沿用 previous） */
+    CHECK(telemetry_link_state(true, true, TELEMETRY_AGE_UNKNOWN, true, STALE, LINK_OK)
+              == LINK_HOLD, "并发取不到 → HOLD");
+    CHECK(telemetry_link_state(true, true, TELEMETRY_AGE_UNKNOWN, true, STALE, LINK_STALE)
+              == LINK_HOLD, "并发取不到 → HOLD（与 previous 无关）");
+
+    /* 收到但无效 → NO FIX */
+    CHECK(telemetry_link_state(true, true, 100, false, STALE, LINK_OK) == LINK_INVALID,
+          "有效期内但数据无效 → INVALID");
+
+    /* 正常 → LIVE */
+    CHECK(telemetry_link_state(true, true, 0, true, STALE, LINK_OK) == LINK_OK,
+          "新鲜有效 → OK");
+    CHECK(telemetry_link_state(true, true, STALE - 1, true, STALE, LINK_OK) == LINK_OK,
+          "阈值内 → OK");
+}
+
 int main(void)
 {
     g_pass = g_fail = 0;
@@ -238,6 +278,7 @@ int main(void)
     test_speed_kmh_conversion();
     test_plausible();
     test_smoothing();
+    test_link_state();
 
     printf("结果: %d 通过, %d 失败\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

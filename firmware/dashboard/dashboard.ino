@@ -803,22 +803,16 @@ static void ble_poll(void)
  */
 static void ble_update(void)
 {
-  ui_speed_status_t st;
-
-  if (!ble_telemetry_connected()) {
-    st = UI_STATUS_CONNECTING;
-  }
-  else {
-    uint32_t age = ble_telemetry_age_ms();
-    if (!s_had_data)       st = UI_STATUS_WAIT_LOC;   /* 已连接，还没收到任何包 */
-    else if (age == BLE_AGE_UNKNOWN) {
-      /* 并发中取不到状态：保持上一次判断，避免 LIVE→STALE 闪跳 */
-      st = s_last_status;
-    }
-    else if (age == UINT32_MAX || age > BLE_STALE_MS) st = UI_STATUS_STALE;  /* 超时 */
-    else if (!s_tel_valid) st = UI_STATUS_INVALID;    /* 收到但无效 */
-    else                   st = UI_STATUS_OK;         /* 正常 */
-  }
+  /*
+   * 状态判定用共享的纯 C 状态机（simulator/ui/telemetry.c），
+   * 已有 11 项单元测试覆盖（五态 + 并发 HOLD + 阈值边界），
+   * 避免"固件里一份、测试里一份"的双份逻辑漂移。
+   * 枚举值刻意与 ui_speed_status_t 对齐。
+   */
+  telemetry_link_t link = telemetry_link_state(ble_telemetry_connected(), s_had_data,
+                                               ble_telemetry_age_ms(), s_tel_valid,
+                                               BLE_STALE_MS, (telemetry_link_t)s_last_status);
+  ui_speed_status_t st = (link == LINK_HOLD) ? s_last_status : (ui_speed_status_t)link;
 
   ui_speed_set_status(st);
   s_last_status = st;
