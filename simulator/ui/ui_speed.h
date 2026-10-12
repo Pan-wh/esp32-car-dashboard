@@ -51,6 +51,8 @@ void ui_speed_set_heading(int deg);
  * 数据链路状态（AI_TASK §6.4 五态）：驱动速度页顶部状态标签。
  * 与 ui_speed_set_fix()（控制指针/数字）正交：fix 管数值有效，status 管链路态。
  */
+/* ⚠️ 取值与 telemetry.h 的 telemetry_link_t 前五项一一对应（CONNECTING/WAIT_LOC/
+ *    INVALID/STALE/OK），固件可直接转换。改动其一必须同步另一个。 */
 typedef enum {
     UI_STATUS_CONNECTING = 0, /* BLE 未连接 / 扫描中            → "BT OFF"  */
     UI_STATUS_WAIT_LOC,       /* 已连接，尚未收到定位           → "WAIT GPS"*/

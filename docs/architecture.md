@@ -63,3 +63,19 @@ tools/                        ← 资源与流程脚本
 2. 数据模块与 UI 模块解耦：数据结构定义共享，UI 只读数据。
 3. GNSS 无效/低速时向 UI 输出明确状态位，UI 负责呈现无效状态，不伪造数据。
 4. 共用 I2C 总线只初始化一次，句柄传递（硬件约束，见 docs/hardware.md）。
+
+## 可测核心逻辑（共享纯 C 层）
+
+以下逻辑刻意放在 `simulator/ui/`（平台无关纯 C），由 `tests/` 在 PC 上单元测试，
+固件与模拟器共用同一份实现，避免"固件一份、测试一份"的双份漂移：
+
+| 模块 | 职责 | 测试数 |
+|------|------|--------|
+| `gnss_nmea.c` | NMEA 解析（休眠资产） | 44 |
+| `telemetry.c` 解析 | BLE 遥测 JSON 解析 | 46+ |
+| `telemetry.c` 校验 | `telemetry_plausible()` 超范围/自相矛盾 | 15 |
+| `telemetry.c` 平滑 | `telemetry_smooth_step()` 限滞后平滑 | 9 |
+| `telemetry.c` 状态机 | `telemetry_link_state()` §6.4 五态 + 并发 HOLD | 11 |
+
+固件侧 `ble_update()` 直接调用状态机（不再内联判断）；枚举取值与
+`ui_speed_status_t` 一一对应，改动需同步（已在两处标注）。
