@@ -40,3 +40,24 @@ targets:
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
+
+  # XCUITest：驾驶会话 UI 自动化（验证 开始驾驶→定位流入→遥测计数→结束 全链路）
+  CarDashboardPhoneUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - CarDashboardPhoneUITests
+    dependencies:
+      - target: CarDashboardPhone
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  CarDashboardPhone:
+    build:
+      targets:
+        CarDashboardPhone: all
+    test:
+      targets:
+        - CarDashboardPhoneUITests

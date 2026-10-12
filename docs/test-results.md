@@ -34,6 +34,18 @@
 | 11h | iOS 协议契约与质量门槛单测 | ✅ | `tools/test_ios_logic.swift` 32 项：字段名与固件一致、nil 字段省略不输出 null、hacc/speed 门限边界、**负速度不外发**、精度差仍带经纬度、静止(0)为合法 |
 | 11c | 精度质量门槛（§5.4） | ✅（代码+编译） | `TelemetryQuality` 阈值集中可调；按 horizontalAccuracy/speedAccuracy 置 valid。真机阈值需实测微调 |
 
+## 模拟器验证（2026-10-12，iOS 平台运行时下载后新增）
+
+| # | 场景 | 结果 | 证据摘要 |
+|---|------|------|---------|
+| S1 | **xcodebuild 完整构建管线**（非手动 swiftc） | ✅ | `** BUILD SUCCEEDED **`（iPhone 17 模拟器目标）|
+| S2 | App 安装、启动、持续运行 | ✅ | PID 存活于 launchctl；无崩溃 |
+| S3 | UI 完整渲染 | ✅ | 截图像素分析：BLE 状态行（橙）、「连接仪表」与「开始驾驶」两颗蓝色按钮均在预期位置 |
+| S4 | 权限流程（免弹窗路径） | ✅ | `simctl privacy` 预授 location / location-always 后 App 正常启动 |
+| S5 | **XCUITest：驾驶会话开/关** | ✅ | `testDriveSessionStartsAndStops` 通过（7.3s）|
+| S6 | **XCUITest：定位→编码→计数全链路** | ✅ | Freeway Drive 场景下 `testPacketsCountIncrementsWhileDriving` 通过（10.1s）——CLLocation 流入、质量门槛放行、`TelemetryPacket.encode()` 成功、累计发送 >0 |
+| S7 | 蓝牙权限弹窗 | ➖ | Apple Silicon 模拟器未拦截 BLE 初始化（无需处理）；真机首启若有弹窗由用户点允许 |
+
 ## 需要真机（iPhone App）完成的场景
 
 > 阻塞原因：本机 Xcode 26.5 **未下载 iOS 平台运行时**（`xcodebuild` 报

@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		3325EE76B686D6EB495C914E /* BLEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DE0D4C728A95FAA998B576A /* BLEClient.swift */; };
 		7E4EACB073A1F46147DC479B /* TelemetryQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32314E9EB764F0A3F2BBE843 /* TelemetryQuality.swift */; };
+		8CD13893D8207814F5D90067 /* CarDashboardPhoneUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0D22E82D27FEF70D93C0BC2 /* CarDashboardPhoneUITests.swift */; };
 		ADB735B3B0B903C576498A3E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FB8403418EFFC9FF3B4E519 /* ContentView.swift */; };
 		B235513F0C1CCE3B55EC7E93 /* DriveSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F24318EB88B2A85793A51CDA /* DriveSessionManager.swift */; };
 		BC1731E6285D1D59745CC0CB /* TelemetryPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41E0AF98E7F8E07D4F845669 /* TelemetryPacket.swift */; };
@@ -16,8 +17,19 @@
 		ED2CF185151F8E4F62825E63 /* CarDashboardPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90328C9C31C539EC52E1A87D /* CarDashboardPhoneApp.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		50F7DFC6C827C3761B5615B7 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 918D5F90B8CD18818C49790F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F914EAEDCB033D53C67A89CF;
+			remoteInfo = CarDashboardPhone;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		32314E9EB764F0A3F2BBE843 /* TelemetryQuality.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryQuality.swift; sourceTree = "<group>"; };
+		3B5F263755A2A9A3BD832304 /* CarDashboardPhoneUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CarDashboardPhoneUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		41E0AF98E7F8E07D4F845669 /* TelemetryPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryPacket.swift; sourceTree = "<group>"; };
 		44C43BB0CCB313C4FB88F21C /* CarDashboardPhone.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CarDashboardPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5FB8403418EFFC9FF3B4E519 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -25,14 +37,24 @@
 		90328C9C31C539EC52E1A87D /* CarDashboardPhoneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarDashboardPhoneApp.swift; sourceTree = "<group>"; };
 		9D701C08799DB6BAE20DB1FE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		A77792F272247B65306766CE /* LocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationService.swift; sourceTree = "<group>"; };
+		B0D22E82D27FEF70D93C0BC2 /* CarDashboardPhoneUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarDashboardPhoneUITests.swift; sourceTree = "<group>"; };
 		F24318EB88B2A85793A51CDA /* DriveSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DriveSessionManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		1D4C155F90026C2A2A64A479 /* CarDashboardPhoneUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B0D22E82D27FEF70D93C0BC2 /* CarDashboardPhoneUITests.swift */,
+			);
+			path = CarDashboardPhoneUITests;
+			sourceTree = "<group>";
+		};
 		62DEE0012B961E28AA263A85 = {
 			isa = PBXGroup;
 			children = (
 				A926ABD64FF2D09C47869F63 /* CarDashboardPhone */,
+				1D4C155F90026C2A2A64A479 /* CarDashboardPhoneUITests */,
 				8C903AF84EEABE01C72A7B8B /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +63,7 @@
 			isa = PBXGroup;
 			children = (
 				44C43BB0CCB313C4FB88F21C /* CarDashboardPhone.app */,
+				3B5F263755A2A9A3BD832304 /* CarDashboardPhoneUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -63,6 +86,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		95D78B3B17E073C4417BFF4B /* CarDashboardPhoneUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5702413C4EEB682F19CB7C2B /* Build configuration list for PBXNativeTarget "CarDashboardPhoneUITests" */;
+			buildPhases = (
+				FBC2C605A4B43FDE297B04CC /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CDD2FE2F65B7D21BA6E1A03F /* PBXTargetDependency */,
+			);
+			name = CarDashboardPhoneUITests;
+			packageProductDependencies = (
+			);
+			productName = CarDashboardPhoneUITests;
+			productReference = 3B5F263755A2A9A3BD832304 /* CarDashboardPhoneUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		F914EAEDCB033D53C67A89CF /* CarDashboardPhone */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 4863ED7D7F881A9B331E08DD /* Build configuration list for PBXNativeTarget "CarDashboardPhone" */;
@@ -89,6 +130,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					95D78B3B17E073C4417BFF4B = {
+						TestTargetID = F914EAEDCB033D53C67A89CF;
+					};
 					F914EAEDCB033D53C67A89CF = {
 						ProvisioningStyle = Automatic;
 					};
@@ -109,6 +153,7 @@
 			projectRoot = "";
 			targets = (
 				F914EAEDCB033D53C67A89CF /* CarDashboardPhone */,
+				95D78B3B17E073C4417BFF4B /* CarDashboardPhoneUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -128,7 +173,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FBC2C605A4B43FDE297B04CC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8CD13893D8207814F5D90067 /* CarDashboardPhoneUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		CDD2FE2F65B7D21BA6E1A03F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F914EAEDCB033D53C67A89CF /* CarDashboardPhone */;
+			targetProxy = 50F7DFC6C827C3761B5615B7 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		63C8F0821D1EEAF04153777E /* Release */ = {
@@ -146,6 +207,23 @@
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		716104814D5C02FBDA1994E7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.cardashboard.CarDashboardPhoneUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = CarDashboardPhone;
 			};
 			name = Release;
 		};
@@ -286,6 +364,23 @@
 			};
 			name = Release;
 		};
+		EA3088F6429E0650C3B1A26E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.cardashboard.CarDashboardPhoneUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = CarDashboardPhone;
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -294,6 +389,15 @@
 			buildConfigurations = (
 				B8D6D438E397C4A94005B119 /* Debug */,
 				63C8F0821D1EEAF04153777E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		5702413C4EEB682F19CB7C2B /* Build configuration list for PBXNativeTarget "CarDashboardPhoneUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EA3088F6429E0650C3B1A26E /* Debug */,
+				716104814D5C02FBDA1994E7 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
