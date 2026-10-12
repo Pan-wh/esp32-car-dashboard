@@ -77,5 +77,11 @@ tools/                        ← 资源与流程脚本
 | `telemetry.c` 平滑 | `telemetry_smooth_step()` 限滞后平滑 | 9 |
 | `telemetry.c` 状态机 | `telemetry_link_state()` §6.4 五态 + 并发 HOLD | 11 |
 
+iOS 侧纯逻辑（Foundation/CoreLocation，**可在 macOS 本机直接跑**，无需 iOS 运行时）：
+`tools/test_ios_logic.swift` —— 协议字段名契约、nil 省略、质量门槛边界、
+负速度不外发、精度差仍带经纬度、静止(0)为合法速度 | 32 |
+
+一键运行全部：`cd tests && make run`（44 + 81 + 32 = 157 断言）。
+
 固件侧 `ble_update()` 直接调用状态机（不再内联判断）；枚举取值与
 `ui_speed_status_t` 一一对应，改动需同步（已在两处标注）。
