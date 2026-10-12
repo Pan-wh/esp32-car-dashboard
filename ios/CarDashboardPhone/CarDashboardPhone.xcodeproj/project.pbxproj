@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		3325EE76B686D6EB495C914E /* BLEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DE0D4C728A95FAA998B576A /* BLEClient.swift */; };
+		7E4EACB073A1F46147DC479B /* TelemetryQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32314E9EB764F0A3F2BBE843 /* TelemetryQuality.swift */; };
 		ADB735B3B0B903C576498A3E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FB8403418EFFC9FF3B4E519 /* ContentView.swift */; };
 		B235513F0C1CCE3B55EC7E93 /* DriveSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F24318EB88B2A85793A51CDA /* DriveSessionManager.swift */; };
 		BC1731E6285D1D59745CC0CB /* TelemetryPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41E0AF98E7F8E07D4F845669 /* TelemetryPacket.swift */; };
@@ -16,6 +17,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		32314E9EB764F0A3F2BBE843 /* TelemetryQuality.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryQuality.swift; sourceTree = "<group>"; };
 		41E0AF98E7F8E07D4F845669 /* TelemetryPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryPacket.swift; sourceTree = "<group>"; };
 		44C43BB0CCB313C4FB88F21C /* CarDashboardPhone.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CarDashboardPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5FB8403418EFFC9FF3B4E519 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -53,6 +55,7 @@
 				9D701C08799DB6BAE20DB1FE /* Info.plist */,
 				A77792F272247B65306766CE /* LocationService.swift */,
 				41E0AF98E7F8E07D4F845669 /* TelemetryPacket.swift */,
+				32314E9EB764F0A3F2BBE843 /* TelemetryQuality.swift */,
 			);
 			path = CarDashboardPhone;
 			sourceTree = "<group>";
@@ -121,6 +124,7 @@
 				B235513F0C1CCE3B55EC7E93 /* DriveSessionManager.swift in Sources */,
 				E6D1D8986CC6A5AF1EBD96A7 /* LocationService.swift in Sources */,
 				BC1731E6285D1D59745CC0CB /* TelemetryPacket.swift in Sources */,
+				7E4EACB073A1F46147DC479B /* TelemetryQuality.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

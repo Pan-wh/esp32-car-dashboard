@@ -250,3 +250,30 @@ float telemetry_speed_kmh(const telemetry_msg_t *m)
     if (m == NULL) return 0.0f;
     return m->speed_mps * 3.6f;
 }
+
+bool telemetry_plausible(const telemetry_msg_t *m)
+{
+    if (m == NULL) return false;
+
+    /* 速度：负值允许（iOS 用负表示无效，由 speed_valid 表达），但绝对值不得超范围 */
+    if (m->has_speed_acc || m->speed_valid) {
+        float kmh = m->speed_mps * 3.6f;
+        if (kmh < -1.0f || kmh > TELEMETRY_SPEED_MAX_KMH) return false;
+    }
+
+    /* 航向：0..360（含边界容差） */
+    if (m->has_course && (m->course_deg < -0.5f || m->course_deg > 360.5f)) return false;
+
+    /* 经纬度：地理范围 */
+    if (m->has_lat && (m->latitude < -90.0 || m->latitude > 90.0)) return false;
+    if (m->has_lon && (m->longitude < -180.0 || m->longitude > 180.0)) return false;
+
+    /* 精度值不得为负（-1 表示未知，允许） */
+    if (m->has_hacc && m->horizontal_accuracy_m < -1.0f) return false;
+    if (m->has_speed_acc && m->speed_accuracy_mps < -1.0f) return false;
+
+    /* 定位有效但完全没有位置信息 → 自相矛盾 */
+    if (m->location_valid && !m->has_lat && !m->has_lon) return false;
+
+    return true;
+}

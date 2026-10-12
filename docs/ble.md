@@ -43,6 +43,21 @@
 - 固件在 `ble_telemetry.cpp` 里做**重组**（累积到 `{...}` 完整后再解析），实测 203 字节能正确重组解析。
 - 若后续字段继续增多，优先**收紧包体**或改用紧凑二进制协议（见任务书 §4）。
 
+## 数据质量与校验（§5.4 / §7）
+
+分两层，职责不重叠：
+
+1. **iOS 侧质量门槛（§5.4）** —— `ios/.../TelemetryQuality.swift`，阈值集中可调：
+   - `maxHorizontalAccuracyMeters = 50`：水平精度差于此 → `location_valid=false`
+   - `maxSpeedAccuracyMPS = 2.0`（iOS 17+ `speedAccuracy`）：速度不可信 → `speed_valid=false`
+   - 判定结果写进 `location_valid`/`speed_valid`，**仪表端不需要重复这套业务规则**
+2. **固件侧兜底校验（§7）** —— `telemetry_plausible()`（纯 C，含单测）拒绝超范围/自相矛盾：
+   - 速度 > `TELEMETRY_SPEED_MAX_KMH`(400) 或 < -1 m/s 语义矛盾
+   - 航向越界、经纬度越界、精度为负、`location_valid` 却无经纬度
+   - 被丢弃的包计入 `不合理` 计数并在串口打印，**不驱动 UI**
+
+> 实测：正常包接受（54 km/h）；720 km/h 与纬度 95 的包均被丢弃并计数。
+
 ## 线程与数据过期
 
 - BLE 写回调运行在 BLE 任务，只在回调里**解析+加锁入库**（`FreeRTOS` 互斥量 `s_mtx`），不触碰 LVGL。

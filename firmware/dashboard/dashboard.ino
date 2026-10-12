@@ -130,6 +130,7 @@ static telemetry_msg_t s_tel;
 static bool s_tel_valid = false; /* 最新一包是否有可用速度/定位 */
 static bool s_had_data = false;  /* 是否收到过任意遥测（区分 WAIT LOC 与 STALE） */
 static ui_speed_status_t s_last_status = UI_STATUS_CONNECTING;
+static uint32_t s_implausible = 0; /* 被丢弃的不合理包计数（§7） */
 
 /* 时间同步状态 */
 static bool s_time_synced = false;
@@ -420,7 +421,8 @@ static void print_ble(void)
 
   uint32_t rb = 0, ok = 0, pe = 0;
   ble_telemetry_stats(&rb, &ok, &pe);
-  Serial.printf("  收到=%u B / 成功=%u / 解析错=%u\n", (unsigned)rb, (unsigned)ok, (unsigned)pe);
+  Serial.printf("  收到=%u B / 成功=%u / 解析错=%u / 不合理=%u\n",
+                (unsigned)rb, (unsigned)ok, (unsigned)pe, (unsigned)s_implausible);
 
   if (s_tel_valid) {
     Serial.printf("   最新: v=%d 速度=%.2f m/s (%.1f km/h) 航向=%.1f° 定位有效=%d\n",
@@ -736,6 +738,14 @@ static void ble_poll(void)
   uint32_t rx_ms = 0;
 
   if (!ble_telemetry_fetch(&m, &rx_ms)) return; /* 无新数据 */
+
+  /* §7 兜底：超范围/自相矛盾的包直接丢弃（iOS 侧另有精度质量门槛，见 §5.4） */
+  if (!telemetry_plausible(&m)) {
+    s_implausible++;
+    Serial.printf("[BLE] 丢弃不合理数据（累计 %u）：速度=%.1f km/h 航向=%.0f°\n",
+                  (unsigned)s_implausible, (double)telemetry_speed_kmh(&m), (double)m.course_deg);
+    return;
+  }
 
   s_tel = m;
   s_had_data = true;

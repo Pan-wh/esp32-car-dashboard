@@ -48,9 +48,11 @@ struct TelemetryPacket: Codable {
 
     /// 从一次 CoreLocation 更新构造。
     /// iOS 的 CLLocation.speed < 0 表示无效。
+    /// 质量门槛集中在 TelemetryQuality（§5.4）：定位/速度不可信时置 valid=false，不伪造数据。
     static func from(location: CLLocation, nowMs: Int64) -> TelemetryPacket {
         let speed = location.speed
-        let speedIsValid = speed >= 0
+        let speedIsValid = TelemetryQuality.isSpeedUsable(location)
+        let locationIsValid = TelemetryQuality.isLocationUsable(location)
         let course = location.course
         let courseIsValid = course >= 0
 
@@ -64,13 +66,13 @@ struct TelemetryPacket: Codable {
         return TelemetryPacket(
             v: protocolVersion,
             tsUtcMs: nowMs,
-            speedMps: speedIsValid ? location.speed : nil,
+            speedMps: (speedIsValid && speed >= 0) ? speed : nil,
             speedAccuracyMps: speedAccuracy,
             latitude: location.coordinate.latitude,
             longitude: location.coordinate.longitude,
             horizontalAccuracyM: location.horizontalAccuracy,
             courseDeg: courseIsValid ? location.course : nil,
-            locationValid: true,
+            locationValid: locationIsValid,
             speedValid: speedIsValid
         )
     }

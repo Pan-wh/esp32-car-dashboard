@@ -71,6 +71,19 @@ bool telemetry_parse(const char *json, size_t len, telemetry_msg_t *out);
 /* 速度换算：km/h = m/s × 3.6 */
 float telemetry_speed_kmh(const telemetry_msg_t *m);
 
+/*
+ * 速度合理性上限（km/h）。超过视为异常数据（§7「对无效、过期、超范围数据做校验」）。
+ * 乘用车不可能达到，用于拦截明显错误的包。集中定义，便于调整。
+ */
+#define TELEMETRY_SPEED_MAX_KMH 400.0f
+
+/*
+ * 数据合理性校验：字段语义与物理范围检查。
+ * 返回 false 表示该包应被丢弃（超范围/自相矛盾）。用于固件侧兜底校验，
+ * 不替代 iOS 侧的质量门槛（§5.4，在 App 内按精度阈值判定 speed_valid/location_valid）。
+ */
+bool telemetry_plausible(const telemetry_msg_t *m);
+
 #ifdef __cplusplus
 }
 #endif
