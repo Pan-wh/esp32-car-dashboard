@@ -65,6 +65,11 @@
   无有效遥测即**把速度置无效**（不残留旧值）。
 - 速度有效定义：`speed_valid && speed_mps >= 0`。
 
+## Status 特征（Read/Notify）
+
+固件在校时等状态变化时 `ble_telemetry_set_status()`，App 可读可订阅。实测（`tools/ble_status_test.swift`）：
+属性 `0x12`(=Read|Notify)；读回 `"time-synced"`；写入遥测触发校时后收到 Notify ✓
+
 ## 验证方式
 
 1. 固件侧编译烧录后，`ble` 串口命令看连接/统计。

@@ -1,7 +1,8 @@
 // ContentView.swift —— 前台 MVP UI（连接 / 状态 / 驾驶按钮 / 调试值）
 //
 // 任务书 §5.2 最小范围：
-//   连接页 / 状态区域（蓝牙 + 定位）/ 按钮（连接、开始驾驶、结束驾驶）/ 调试值
+//   连接页 / 状态区域（蓝牙 + 定位 + 最后数据时间）/ 按钮（连接、开始驾驶、结束驾驶）/ 调试值
+// 要求：用户首次启动时先解释为何需要蓝牙与定位权限，不要在无解释的情况下连续弹权限。
 import SwiftUI
 import CoreLocation
 import CoreBluetooth
@@ -12,6 +13,16 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             Form {
+                if session.needsPermissionExplanation {
+                    Section("为什么需要权限") {
+                        Text("定位：驾驶会话中读取车速、航向与位置，用于车载仪表显示。")
+                        Text("蓝牙：与车载仪表（CarDashboard）连接并发送这些数据。")
+                        Text("数据只在本机与仪表之间通过蓝牙传输，不上传云端。")
+                            .font(.footnote).foregroundColor(.secondary)
+                        Button("我了解了，申请权限") { session.requestPermissions() }
+                    }
+                }
+
                 Section("仪表连接") {
                     HStack {
                         Text("BLE 状态")
@@ -35,6 +46,10 @@ struct ContentView: View {
                         else { session.requestPermissions(); session.startDriving() }
                     }
                     .foregroundColor(session.isDriving ? .red : .blue)
+
+                    row("累计发送", "\(session.sentCount) 包")
+                    row("最近发送", timeText(session.lastSendTime))
+                    row("定位数据时间", timeText(session.lastLocationTime))
                 }
 
                 Section("实时数据") {
@@ -55,10 +70,6 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("CarDashboard")
-            .onAppear {
-                // 首次进入先解释权限，不连续弹窗
-                session.requestPermissions()
-            }
         }
     }
 
@@ -66,11 +77,19 @@ struct ContentView: View {
         HStack { Text(label); Spacer(); Text(value).monospacedDigit() }
     }
 
+    private func timeText(_ d: Date?) -> String {
+        guard let d = d else { return "--" }
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: d)
+    }
+
     private var bleConnected: Bool { session.bleConnected }
     private var bleStateText: String { bleConnected ? "已连接" : "未连接/未授权" }
     private var locationPermissionText: String {
         switch session.locationStatus {
-        case .authorizedAlways, .authorizedWhenInUse: return "已授权"
+        case .authorizedAlways: return "始终"
+        case .authorizedWhenInUse: return "使用期间"
         case .denied: return "已拒绝"
         case .restricted: return "受限"
         case .notDetermined: return "待授权"
