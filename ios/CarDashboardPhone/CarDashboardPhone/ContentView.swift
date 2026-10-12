@@ -27,7 +27,10 @@ struct ContentView: View {
                     HStack {
                         Text("BLE 状态")
                         Spacer()
-                        Text(bleStateText).foregroundColor(bleConnected ? .green : .orange)
+                        Text(session.ble.stateText).foregroundColor(bleConnected ? .green : .orange)
+                    }
+                    if let notice = session.ble.lastNotice {
+                        Text(notice).font(.footnote).foregroundColor(.secondary)
                     }
                     HStack {
                         Text("定位权限")
@@ -85,7 +88,6 @@ struct ContentView: View {
     }
 
     private var bleConnected: Bool { session.bleConnected }
-    private var bleStateText: String { bleConnected ? "已连接" : "未连接/未授权" }
     private var locationPermissionText: String {
         switch session.locationStatus {
         case .authorizedAlways: return "始终"
