@@ -16,6 +16,8 @@ test_telemetry: test_telemetry.c ../simulator/ui/telemetry.c
 run: test_nmea test_telemetry
 	./test_nmea
 	./test_telemetry
+	@echo "--- iOS 侧纯逻辑（无需 iOS 运行时）---"
+	@swift ../tools/test_ios_logic.swift
 
 clean:
 	rm -f $(TESTS)
