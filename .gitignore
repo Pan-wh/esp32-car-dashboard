@@ -54,3 +54,9 @@ secrets/
 # 单测编译产物
 tests/test_nmea
 tests/test_telemetry
+
+# Xcode 用户数据 / 构建产物（xcodeproj 本身要提交，便于直接打开）
+ios/**/xcuserdata/
+ios/**/*.xcuserstate
+ios/**/DerivedData/
+ios/**/build/

@@ -54,11 +54,18 @@ struct TelemetryPacket: Codable {
         let course = location.course
         let courseIsValid = course >= 0
 
+        // speedAccuracy（精度，m/s）iOS 17.0+；<0 表示未知，此时不发送
+        var speedAccuracy: Double? = nil
+        if #available(iOS 17.0, *) {
+            let sa = location.speedAccuracy
+            if sa >= 0 { speedAccuracy = sa }
+        }
+
         return TelemetryPacket(
             v: protocolVersion,
             tsUtcMs: nowMs,
             speedMps: speedIsValid ? location.speed : nil,
-            speedAccuracyMps: nil, // speedAccuracy 需 iOS 17+，见 LocationService 注释
+            speedAccuracyMps: speedAccuracy,
             latitude: location.coordinate.latitude,
             longitude: location.coordinate.longitude,
             horizontalAccuracyM: location.horizontalAccuracy,
