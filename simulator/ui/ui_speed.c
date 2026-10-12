@@ -416,7 +416,12 @@ static void build_v5(lv_obj_t *p)
                      (lv_coord_t)lroundf(178.0f * sinf(a)));
     }
 
-    /* ---- 顶部链路状态标签（五态，白底可见）---- */
+    /* ---- 顶部链路状态标签（五态，白底可见）----
+     * ⚠️ 已知问题（待定稿决策，见 docs/ui-guidelines.md）：
+     * 指针扫过半径 168..220，而本标签位于半径约 171..203 的同一环带，
+     * 因此行驶速度下指针会与状态文字重叠；且实测 lv_obj_move_foreground()
+     * 无法让标签盖住指针（指针由 lv_meter 自身绘制流程输出）。
+     * 结论：文字本身可读，但指针穿过时观感不佳，需调整位置或指针长度。 */
     s_status5 = make_label(p, &label_26, status5_color(), status5_text());
     lv_obj_align(s_status5, LV_ALIGN_TOP_MID, 0, 30);
 }
