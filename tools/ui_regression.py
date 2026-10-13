@@ -26,9 +26,17 @@ SHOTS = "/tmp/ui_regression"
 # 与 ui_speed.c / ui_clock.c 中的设计常量保持一致（改设计需同步这里）
 WHITE_V5 = (255, 255, 255)
 BLACK_BG = (0, 0, 0)
-ORANGE_SECOND = (0xFF, 0x95, 0x00)   # 秒针 / 指针橙
+ORANGE_SECOND = (0xFF, 0x95, 0x00)   # 模拟时钟秒针：橙
 GREEN_LIVE = (0x34, 0xC7, 0x59)      # LIVE
 RED_STALE = (0xFF, 0x3B, 0x30)       # STALE
+COLOR_CLOCK_BG = (0x09, 0x09, 0x0D)
+COLOR_CLOCK_DIGITS = [
+    (0xA2, 0x91, 0xEE),
+    (0xF1, 0xA9, 0xED),
+    (0x78, 0x68, 0xEF),
+    (0x81, 0x87, 0xEE),
+]
+COLOR_CLOCK_COLON = (0xE8, 0xDA, 0xF9)
 CX = CY = 233.0
 R = 233.0
 
@@ -115,14 +123,25 @@ def main():
         ok, n = has_text_like(im_d, (60, 180, 406, 300), BLACK_BG)
         check(ok, f"数字时钟中部应有时间文字（非背景像素 {n}）")
 
-    # ---------- 4. 速度页 V5：白底 ----------
+    # ---------- 4. 多彩时钟：统一黑底 + 四色数字 + 浅色冒号 ----------
+    im_c = shot("page3_color_clock", "--page", "3", "--time", "12:39:00")
+    if im_c:
+        n_bg = count_color(im_c, COLOR_CLOCK_BG, tol=8, region=(20, 150, 446, 316))
+        check(n_bg > 15000, f"多彩时钟应为统一黑底（背景像素 {n_bg}）")
+        for i, color in enumerate(COLOR_CLOCK_DIGITS, 1):
+            n_color = count_color(im_c, color, tol=16)
+            check(n_color > 500, f"多彩时钟第 {i} 色位缺失（匹配像素 {n_color}）")
+        n_colon = count_color(im_c, COLOR_CLOCK_COLON, tol=16)
+        check(n_colon > 500, f"多彩时钟冒号颜色缺失（匹配像素 {n_colon}）")
+
+    # ---------- 5. 速度页 V5：白底 ----------
     im_s = shot("speed_v5", "--page", "2", "--speed", "0", "--status", "4")
     if im_s:
         # 白底（V5 表盘底色为纯白；模拟器经圆遮罩后会有些许偏差，容差放宽）
         n_white = count_color(im_s, WHITE_V5, tol=10, region=(60, 60, 406, 406))
         check(n_white > 40000, f"速度页 V5 应为白底（白像素 {n_white}）")
 
-    # ---------- 5. 五态：文案颜色各不相同且符合约定 ----------
+    # ---------- 6. 五态：文案颜色各不相同且符合约定 ----------
     state_colors = {
         4: ("LIVE", GREEN_LIVE),
         3: ("STALE", RED_STALE),
@@ -133,7 +152,7 @@ def main():
             n = count_color(im_st, col, tol=14)
             check(n > 30, f"状态 {name} 的文字应以 {col} 显示（匹配像素 {n}）")
 
-    # ---------- 6. 状态文字必须位于圆内（安全区） ----------
+    # ---------- 7. 状态文字必须位于圆内（安全区） ----------
     # 标签几何由固件 `dump` 实测：pos(190,30) size 87x32，居中于 x=233。
     # 注意：测量窗口必须只覆盖标签本身——若放大到整条顶部带会把刻度环算进来
     # （刻度本就靠近边缘，属正常），从而产生假失败。

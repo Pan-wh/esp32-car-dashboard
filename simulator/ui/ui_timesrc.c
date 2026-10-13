@@ -18,6 +18,11 @@ void ui_timesrc_set_provider(ui_timesrc_provider_t fn)
     s_provider = fn;
 }
 
+int ui_timesrc_uses_provider(void)
+{
+    return s_provider != NULL;
+}
+
 void ui_timesrc_freeze(int hour, int min, int sec)
 {
     if (hour < 0) {
@@ -62,11 +67,7 @@ void ui_timesrc_now_ms(struct tm *out, int *ms)
     }
 
     if (s_provider != NULL) {
-        /*
-         * 固件：PCF85063 只有整秒寄存器，没有亚秒。
-         * 当前秒针为跳秒模式（ANALOG_SECOND_SWEEP=0），不需要亚秒；
-         * 若日后启用扫秒，在此用 MCU 毫秒计时与 RTC 秒值做插值即可。
-         */
+        /* PCF85063 只有整秒寄存器；扫秒动画由机械表页面的 MCU 时钟驱动。 */
         s_provider(out);
         *ms = 0;
         return;

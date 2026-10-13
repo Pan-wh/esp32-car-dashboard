@@ -17,6 +17,7 @@
 用法：python3 tools/make_dial_faces.py
 输出：simulator/ui/ui_dial_faces.c（lv_img_dsc_t: dial_analog）
 """
+import argparse
 import math
 import os
 
@@ -30,20 +31,32 @@ SIZE = 466          # 屏幕边长
 CENTER = SIZE / 2.0
 SS = 4              # 超采样倍数（先放大再缩小 → 平滑边缘）
 
-# ---- 与 ui_analog.c 保持一致的常量 ----
-R_EDGE = 220.0
-TICK_LEN_MIN = 8.0
-TICK_LEN_MAJ = 16.0
+# ---- 模拟时钟：Apple StandBy 小组件风格 ----
+R_EDGE = 216.0
+TICK_LEN_MIN = 7.0
+TICK_LEN_MAJ = 12.0
 TICK_W_MIN = 2.0
 TICK_W_MAJ = 3.0
-NUM_RADIUS = 177.0
+NUM_RADIUS = 160.0
 NUM_Y_NUDGE = -2.0
-NUM_FONT_SIZE = 38.0
+NUM_FONT_SIZE_MAIN = 52.0
+NUM_FONT_SIZE_MINOR = 40.0
 
 C_BG = (0x00, 0x00, 0x00)
-C_TICK_MINOR = (0x5A, 0x5A, 0x5F)
-C_TICK_MAJOR = (0xC8, 0xC8, 0xCE)
+C_TICK_MINOR = (0x5E, 0x5E, 0x63)
+C_TICK_MAJOR = (0xE5, 0xE5, 0xEA)
+C_TICK_CARDINAL = (0xFF, 0x95, 0x00)
 C_NUM = (0xF5, 0xF5, 0xF7)
+
+# 指针使用改版前的几何；秒针改为连续扫秒（ui_analog.c 同值）。
+HAND_HOUR_LEN = 106.0
+HAND_MIN_LEN = 150.0
+HAND_SEC_LEN = 166.0
+HAND_HOUR_W = 9.0
+HAND_MIN_W = 5.0
+HAND_SEC_W = 3.0
+C_HAND_WHITE = (0xF5, 0xF5, 0xF7)
+C_HAND_SEC = (0xFF, 0x95, 0x00)
 
 
 def _font(size_px):
@@ -70,7 +83,7 @@ def _tick(d, angle_deg, r_out, r_in, width):
 
 
 def render_analog_face():
-    """模拟时钟表盘：61 分钟刻度 + 13 整点刻度 + 数字 1-12"""
+    """Apple StandBy 风格：短刻度 + 四个主数字 + 八个次数字。"""
     img = Image.new("RGB", (SIZE * SS, SIZE * SS), C_BG)
     d = ImageDraw.Draw(img)
 
@@ -80,37 +93,61 @@ def render_analog_face():
     def dot(x, y, r, fill):
         d.ellipse([x - r, y - r, x + r, y + r], fill=fill)
 
-    # 分钟刻度：61 个（60 段 × 6°），内端 212，外端 220
-    for i in range(61):
+    # 60 个短刻度：整点更亮、更长，其余分钟刻度弱化。
+    for i in range(60):
         a = math.radians(270.0 + i * 6.0)
-        r_in, r_out = R_EDGE - TICK_LEN_MIN, R_EDGE
+        major = i % 5 == 0
+        tick_len = TICK_LEN_MAJ if major else TICK_LEN_MIN
+        cardinal = i % 15 == 0
+        tick_w = 4.0 if cardinal else (TICK_W_MAJ if major else TICK_W_MIN)
+        color = C_TICK_CARDINAL if cardinal else (C_TICK_MAJOR if major else C_TICK_MINOR)
+        r_in, r_out = R_EDGE - tick_len, R_EDGE
         x1, y1 = (CENTER + math.cos(a) * r_in) * SS, (CENTER + math.sin(a) * r_in) * SS
         x2, y2 = (CENTER + math.cos(a) * r_out) * SS, (CENTER + math.sin(a) * r_out) * SS
-        line((x1, y1), (x2, y2), C_TICK_MINOR, TICK_W_MIN)
-        rr = TICK_W_MIN * SS / 2.0
-        dot(x1, y1, rr, C_TICK_MINOR)
-        dot(x2, y2, rr, C_TICK_MINOR)
+        line((x1, y1), (x2, y2), color, tick_w)
+        rr = tick_w * SS / 2.0
+        dot(x1, y1, rr, color)
+        dot(x2, y2, rr, color)
 
-    # 整点刻度：13 个（12 段 × 30°），内端 204，外端 220，更粗更亮
-    for i in range(13):
-        a = math.radians(270.0 + i * 30.0)
-        r_in, r_out = R_EDGE - TICK_LEN_MAJ, R_EDGE
-        x1, y1 = (CENTER + math.cos(a) * r_in) * SS, (CENTER + math.sin(a) * r_in) * SS
-        x2, y2 = (CENTER + math.cos(a) * r_out) * SS, (CENTER + math.sin(a) * r_out) * SS
-        line((x1, y1), (x2, y2), C_TICK_MAJOR, TICK_W_MAJ)
-        rr = TICK_W_MAJ * SS / 2.0
-        dot(x1, y1, rr, C_TICK_MAJOR)
-        dot(x2, y2, rr, C_TICK_MAJOR)
-
-    # 数字 1-12：与 ui_analog.c 的摆放一致（sin/cos + Y 微调）
-    font = _font(NUM_FONT_SIZE)
+    # Apple 小组件以 12/3/6/9 建立主层级，其余数字更小。
+    font_main = _font(NUM_FONT_SIZE_MAIN)
+    font_minor = _font(NUM_FONT_SIZE_MINOR)
     for h in range(1, 13):
         a = math.radians(h * 30.0)
         cx = (CENTER + NUM_RADIUS * math.sin(a)) * SS
         cy = (CENTER - NUM_RADIUS * math.cos(a) + NUM_Y_NUDGE) * SS
+        font = font_main if h in (3, 6, 9, 12) else font_minor
         d.text((cx, cy), str(h), font=font, fill=C_NUM, anchor="mm")
 
     return img.resize((SIZE, SIZE), Image.LANCZOS)
+
+
+def render_analog_preview(face, hour, minute, second):
+    """用与 LVGL 相同的指针参数生成审批预览，不依赖模拟器编译。"""
+    img = face.copy()
+    d = ImageDraw.Draw(img)
+
+    def hand(angle_deg, length, width, color):
+        a = math.radians(angle_deg - 90.0)
+        x2 = CENTER + math.cos(a) * length
+        y2 = CENTER + math.sin(a) * length
+        w = int(round(width))
+        d.line([(CENTER, CENTER), (x2, y2)], fill=color, width=w)
+        r = width / 2.0
+        d.ellipse([CENTER - r, CENTER - r, CENTER + r, CENTER + r], fill=color)
+        d.ellipse([x2 - r, y2 - r, x2 + r, y2 + r], fill=color)
+
+    total_seconds = minute * 60.0 + second
+    hand((hour % 12) * 30.0 + total_seconds / 120.0,
+         HAND_HOUR_LEN, HAND_HOUR_W, C_HAND_WHITE)
+    hand(minute * 6.0 + second / 10.0,
+         HAND_MIN_LEN, HAND_MIN_W, C_HAND_WHITE)
+    hand(second * 6.0, HAND_SEC_LEN, HAND_SEC_W, C_HAND_SEC)
+
+    # 改版前的中心轴：18px 白底 + 8px 橙色轴心。
+    d.ellipse([CENTER - 9, CENTER - 9, CENTER + 9, CENTER + 9], fill=C_HAND_WHITE)
+    d.ellipse([CENTER - 4, CENTER - 4, CENTER + 4, CENTER + 4], fill=C_HAND_SEC)
+    return img
 
 
 
@@ -212,11 +249,33 @@ const lv_img_dsc_t {name} = {{
 
 
 def main():
+    parser = argparse.ArgumentParser(description="生成 LVGL 表盘资源或 UI 审批预览")
+    parser.add_argument("--preview", help="只生成静态预览 PNG，不改仓库生成物")
+    parser.add_argument("--preview-gif", help="只生成 1 秒扫秒预览 GIF，不改仓库生成物")
+    parser.add_argument("--time", default="09:40:30", help="预览时间 H:M:S")
+    args = parser.parse_args()
+
     if not os.path.exists(FONT_DIR):
         raise SystemExit(f"缺少字体目录 {FONT_DIR}")
 
     print("渲染模拟时钟表盘…")
     analog = render_analog_face()
+    if args.preview or args.preview_gif:
+        try:
+            hour, minute, second = (int(v) for v in args.time.split(":"))
+        except ValueError as exc:
+            raise SystemExit("--time 格式应为 H:M:S") from exc
+        if args.preview:
+            render_analog_preview(analog, hour, minute, float(second)).save(args.preview)
+            print(f"已写出静态预览 {args.preview}")
+        if args.preview_gif:
+            frames = [render_analog_preview(analog, hour, minute, second + i / 20.0)
+                      for i in range(20)]
+            frames[0].save(args.preview_gif, save_all=True, append_images=frames[1:],
+                           duration=50, loop=0)
+            print(f"已写出扫秒预览 {args.preview_gif}")
+        return
+
     os.makedirs(os.path.join(ROOT, "design", "assets", "images"), exist_ok=True)
     analog.save(os.path.join(ROOT, "design", "assets", "images", "dial_analog_466.png"))
 

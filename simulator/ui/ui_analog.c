@@ -1,11 +1,11 @@
 /**
- * ui_analog.c —— 模拟指针时钟 v1（极简风格）
+ * ui_analog.c —— Apple StandBy 小组件风格模拟时钟
  *
  * 设计规范详见 design/wireframes/analog-clock.md：
  *   - 纯黑背景（AMOLED 息屏省电）
- *   - 外围 60 个灰色分钟刻度；12 个整点刻度更长更亮
- *   - 白色阿拉伯数字 1-12
- *   - 白色时针（粗短）/ 分针（细长）；橙色秒针（默认**每秒跳动**，可切连续滑动）
+ *   - 外围 60 个短刻度；12/3/6/9 对应刻度为加粗橙色
+ *   - 12/3/6/9 为主数字，其余八个数字缩小
+ *   - 指针使用上一版几何：白色时分针 + 橙色细秒针
  *   - 中心圆点连接三针
  *
  * 实现要点（依据 LVGL 8.4 源码 lv_meter.c 实测语义）：
@@ -26,26 +26,26 @@
 
 /* ---- 设计常量（与 design/wireframes/analog-clock.md 对应）---- */
 #define UI_BG_COLOR    0x000000  /* 背景：纯黑 */
-#define UI_TICK_MINOR  0x5A5A5F  /* 分钟刻度：灰 */
-#define UI_TICK_MAJOR  0xC8C8CE  /* 整点刻度：浅灰（更醒目） */
+#define UI_TICK_MINOR  0x5E5E63  /* 分钟刻度：灰 */
+#define UI_TICK_MAJOR  0xE5E5EA  /* 整点刻度：浅灰（更醒目） */
 #define UI_NUM_COLOR   0xF5F5F7  /* 数字：白 */
 #define UI_HAND_WHITE  0xF5F5F7  /* 时针/分针：白 */
 #define UI_HAND_SEC    0xFF9500  /* 秒针：橙 */
 
-#define METER_SIZE     440  /* 表盘直径，r=220（距屏缘 13px） */
-#define R_EDGE         220  /* = METER_SIZE / 2，指针长度基准 */
-#define TICK_LEN_MIN   8
-#define TICK_LEN_MAJ   16
-#define NEEDLE_HOUR    106  /* 时针长度 ≈ 0.48R */
-#define NEEDLE_MIN     150  /* 分针长度 ≈ 0.68R（数字加大后留出间隙）*/
-#define NEEDLE_SEC     166  /* 秒针长度 ≈ 0.75R */
-#define NUM_RADIUS     177  /* 数字中心半径（38px 字号）*/
+#define METER_SIZE     432  /* 表盘直径，r=216（与当前数字/表圈保持一致） */
+#define R_EDGE         216  /* = METER_SIZE / 2，指针长度基准 */
+#define TICK_LEN_MIN   7
+#define TICK_LEN_MAJ   12
+#define NEEDLE_HOUR    106  /* 还原上一版时针长度 */
+#define NEEDLE_MIN     150  /* 还原上一版分针长度 */
+#define NEEDLE_SEC     166  /* 还原上一版秒针长度 */
+#define NUM_RADIUS     160  /* 数字整体向圆心收，建立刻度与数字间留白 */
 #define NUM_Y_NUDGE    (-2) /* 字体框含降部空间，视觉中心微调 */
 
 LV_IMG_DECLARE(dial_analog); /* 烘焙好的静态表盘（刻度 + 数字 1-12），见 tools/make_dial_faces.py */
 
-/* 秒针模式：1 = 连续滑动扫秒（20Hz）；0 = 每秒跳动（默认，经典石英表观感）
- * 两种模式都已实现并验证，切换本宏即可（详见 design/wireframes/analog-clock.md 第 6 节） */
+/* 秒针模式：1 = 连续线性扫秒；0 = 每秒跳动（当前）。
+ * 两种模式共用同一时间源，切换本宏即可（详见 design/wireframes/analog-clock.md 第 6 节）。 */
 #define ANALOG_SECOND_SWEEP 0
 
 /* 量表满量程 = 1 小时 = 3600 单位 */
@@ -58,6 +58,9 @@ typedef struct {
     lv_meter_indicator_t *ind_sec;
     int32_t last_hour; /* 缓存上次值，避免无谓重绘 */
     int32_t last_min;
+    struct tm rtc_time;
+    uint32_t rtc_read_tick;
+    int rtc_time_valid;
 } analog_ctx_t;
 
 static analog_ctx_t s_ctx;
@@ -66,13 +69,37 @@ static lv_obj_t *s_dot_inner;
 static void update_hands(void)
 {
     struct tm t;
-    int ms;
-    ui_timesrc_now_ms(&t, &ms);
+    int ms = 0;
+    uint32_t tick = lv_tick_get();
+    int rtc_provider = ui_timesrc_uses_provider();
+
+    if (rtc_provider) {
+        /*
+         * PCF85063 没有亚秒寄存器。时分针每秒从 RTC 校准一次；秒针仅作为
+         * 连续动画，由 MCU 单调时钟驱动，避免每 50ms 读取一次 I2C RTC。
+         */
+        if (!s_ctx.rtc_time_valid ||
+            (uint32_t)(tick - s_ctx.rtc_read_tick) >= 1000U) {
+            ui_timesrc_now(&s_ctx.rtc_time);
+            s_ctx.rtc_read_tick = tick;
+            s_ctx.rtc_time_valid = 1;
+        }
+        t = s_ctx.rtc_time;
+    } else {
+        /* 模拟器继续使用系统亚秒；冻结时间仍保持确定性截图。 */
+        ui_timesrc_now_ms(&t, &ms);
+    }
 
     int32_t v_sec;
 #if ANALOG_SECOND_SWEEP
-    /* 连续滑动：量表 3600 单位 = 60 分钟 → 1 秒 = 60 单位 = 6°，1 毫秒 ≈ 0.06 单位 */
-    v_sec = (int32_t)t.tm_sec * 60 + (int32_t)ms * 60 / 1000;
+    if (rtc_provider) {
+        /* 秒针精度不参与报时：独立做 60 秒一圈的约 30Hz 连续动画。 */
+        uint32_t phase_ms = tick % 60000U;
+        v_sec = (int32_t)(phase_ms * SCALE_MAX / 60000U);
+    } else {
+        /* 模拟器使用真实时间：1 秒 = 60 单位 = 6°。 */
+        v_sec = (int32_t)t.tm_sec * 60 + (int32_t)ms * 60 / 1000;
+    }
 #else
     /* 每秒跳动：位置只取决于整秒 */
     (void)ms;
@@ -119,7 +146,7 @@ static void meter_draw_cb(lv_event_t *e)
  * 12 个 lv_label 的绘制开销随之消失；字体 num_dial_38 已随之删除）。
  */
 
-/* 中心圆点（连接三针）：白色底 + 橙色内点 */
+/* 还原上一版中心轴：18px 白底 + 8px 橙色轴心。 */
 static void create_center_dot(lv_obj_t *parent)
 {
     lv_obj_t *outer = lv_obj_create(parent);
@@ -180,7 +207,7 @@ lv_obj_t *ui_analog_create(lv_obj_t *parent)
                              lv_color_hex(UI_TICK_MAJOR));
     lv_meter_set_scale_range(s_ctx.meter, sc_hour, 0, SCALE_MAX, 360, 270);
 
-    /* 三根指针：时针粗短、分针细长、秒针橙色最细 */
+    /* 还原上一版绘制顺序与线宽：时针 9、分针 5、秒针 3。 */
     s_ctx.ind_hour = lv_meter_add_needle_line(s_ctx.meter, sc_min, 9,
                                               lv_color_hex(UI_HAND_WHITE),
                                               -(R_EDGE - NEEDLE_HOUR));
@@ -197,9 +224,10 @@ lv_obj_t *ui_analog_create(lv_obj_t *parent)
     /* 初始化指针位置并启动刷新定时器 */
     s_ctx.last_hour = -1;
     s_ctx.last_min = -1;
+    s_ctx.rtc_time_valid = 0;
     update_hands();
 #if ANALOG_SECOND_SWEEP
-    lv_timer_create(analog_tick_cb, 50, NULL);   /* 20 Hz → 每秒 6° 平滑扫过 */
+    lv_timer_create(analog_tick_cb, 33, NULL);   /* 约 30 Hz → 每秒 6° 平滑扫过 */
 #else
     lv_timer_create(analog_tick_cb, 1000, NULL); /* 1 Hz → 每秒跳一格 */
 #endif

@@ -603,6 +603,7 @@ static const char *page_name(int i)
     case UI_PAGE_ANALOG: return "模拟时钟";
     case UI_PAGE_DIGITAL: return "数字时钟";
     case UI_PAGE_SPEED: return "速度表盘";
+    case UI_PAGE_COLOR_CLOCK: return "多彩时钟";
     default: return "未知";
   }
 }
