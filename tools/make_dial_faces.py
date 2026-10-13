@@ -20,8 +20,12 @@
 import argparse
 import math
 import os
+import sys
 
 from PIL import Image, ImageDraw, ImageFont
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lvgl_img import img_to_lvgl_indexed8, write_atomic  # noqa: E402  （同目录工具）
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FONT_DIR = os.path.join(ROOT, "design", "assets", "fonts", "src")
@@ -221,31 +225,13 @@ def render_speed_face():
 
 
 def img_to_lvgl_c(img, name):
-    """RGB888 → LVGL RGB565 (LV_IMG_CF_TRUE_COLOR) C 数组"""
-    w, h = img.size
-    px = img.load()
-    data = []
-    for y in range(h):
-        for x in range(w):
-            r, g, b = px[x, y]
-            v = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
-            data.append(v & 0xFF)
-            data.append((v >> 8) & 0xFF)  # 小端：LV_COLOR_16_SWAP=0
-    body = ",".join(str(b) for b in data)
-    return f"""
-/* {name}：{w}×{h} RGB565（LV_IMG_CF_TRUE_COLOR，无 alpha） */
-static const uint8_t {name}_map[] = {{{body}}};
+    """PIL 图像 → LVGL 源码片段（8bpp 索引色，编码规则见 tools/lvgl_img.py）
 
-const lv_img_dsc_t {name} = {{
-    .header.cf = LV_IMG_CF_TRUE_COLOR,
-    .header.always_zero = 0,
-    .header.reserved = 0,
-    .header.w = {w},
-    .header.h = {h},
-    .data_size = {len(data)},
-    .data = {name}_map,
-}};
-"""
+    改用索引色的原因：真机应用分区仅 3 MB，而单张 466×466 RGB565 底图占 434 KB。
+    表盘颜色很少（245 / 132 色），8bpp 索引色可**逐像素无损**减半占用。
+    """
+    palette_note = "表盘底图"
+    return img_to_lvgl_indexed8(img, name, note=palette_note)
 
 
 def main():
@@ -279,24 +265,35 @@ def main():
     os.makedirs(os.path.join(ROOT, "design", "assets", "images"), exist_ok=True)
     analog.save(os.path.join(ROOT, "design", "assets", "images", "dial_analog_466.png"))
 
-    with open(OUT_C, "w", encoding="utf-8") as f:
-        f.write("""/**
+    # 先在内存里组装完整内容，最后原子写出。
+    # ⚠️ 不要边生成边写：中途抛异常会把仓库里的生成物**截断**（已实际踩到过一次）。
+    parts = ["""/**
  * ui_dial_faces.c —— 静态表盘烘焙图（由 tools/make_dial_faces.py 生成，请勿手改）
  *
  * 刻度与数字都是不变的，烘焙成图片后运行时只需重绘会动的指针，
  * 可显著降低整屏重绘（滑页）成本。几何与 ui_analog.c 的设计常量一致。
+ *
+ * 存储格式：LV_IMG_CF_INDEXED_8BIT（8 位索引色）
+ *   真机应用分区仅 3 MB，而单张 466×466 的 RGB565 底图就占 434 KB。
+ *   改为索引色后每张约 213 KB，两张共省约 434 KB。
+ *   颜色数超 256 时由生成脚本自适应量化（不抖动），量化损失见生成日志。
+ *   编码细节见 tools/lvgl_img.py。
  */
 #include "lvgl.h"
 
-""")
-        f.write(img_to_lvgl_c(analog, "dial_analog"))
+"""]
+    parts.append(img_to_lvgl_c(analog, "dial_analog"))
+
     print("渲染速度表盘…")
     speed = render_speed_face()
     speed.save(os.path.join(ROOT, "design", "assets", "images", "dial_speed_466.png"))
-    with open(OUT_C, "a", encoding="utf-8") as f:
-        f.write(img_to_lvgl_c(speed, "dial_speed"))
-    size_kb = os.path.getsize(OUT_C) // 1024
+    parts.append(img_to_lvgl_c(speed, "dial_speed"))
+
+    content = "".join(parts)
+    write_atomic(OUT_C, content)
+    size_kb = len(content.encode("utf-8")) // 1024
     print(f"已写出 {OUT_C}（{size_kb} KB 源码）")
+    print("  （8bpp 索引色：真机 Flash 占用约为源码体积的一半）")
 
 
 if __name__ == "__main__":

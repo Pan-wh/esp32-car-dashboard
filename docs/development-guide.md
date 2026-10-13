@@ -368,3 +368,35 @@ tools/run_ios_tests.sh                     # 5 项 XCUITest
 | **数据龄** | 距上次收到有效遥测的毫秒数 |
 | **斜坡（ramp）** | 按时间匀速逼近目标速度，消除跳针 |
 | **防抖（debounce）** | STALE 需连续 3 次判定才切换，消除闪烁 |
+
+## 烘焙图管线（8bpp 索引色 + 启动充气）
+
+新增/修改烘焙图时，**不要手改生成物**（`ui_dial_faces.c` / `ui_driver_images.c`），
+改源并重跑脚本：
+
+```bash
+python3 tools/make_dial_faces.py    # 表盘底图（466×466）
+python3 tools/make_images.py        # 驾驶员插画（300×300）
+```
+
+**存储与运行方式（两段式）**：
+
+| 阶段 | 格式 | 好处 |
+|------|------|------|
+| Flash 存储 | `LV_IMG_CF_INDEXED_8BIT` | 比 RGB565 小一半（本批图省 683 KB）|
+| 运行时（启动时充气）| `LV_IMG_CF_TRUE_COLOR`，数据在 PSRAM | 直接内存拷贝，滑页不退化 |
+
+**为什么必须充气**：LVGL 对索引图是**逐像素查表解码**，全屏图每帧 21.7 万次查表，
+滑页实测 123ms → 168ms。启动时解码一次即可恢复（实测 110ms）。
+
+- 充气入口：`inflate_baked_images()`（`firmware/dashboard/dashboard.ino`，在 `ui_pages_init()` 之前）
+- 共用实现：`simulator/ui/ui_img_inflate.c`（模拟器用 malloc、真机用 PSRAM 分配器，
+  保证两边走**同一条渲染路径**，像素回归才有意义）
+- 纯解码逻辑：`simulator/ui/img_indexed.{h,c}`（不依赖 LVGL，可 PC 单测）
+
+**新增图片时必须同步登记**：`simulator/ui/ui_baked_images.h`
+（非 const 声明 —— 不能用 `LV_IMG_DECLARE`，否则无法就地充气）。
+漏登记只会退化性能，不会崩溃。
+
+**颜色数限制**：索引色最多 256 色。超限时生成脚本会自适应量化（不抖动）并打印
+色差统计；若某图量化后肉眼可见损失，应改回 RGB565 或改用别的画法。

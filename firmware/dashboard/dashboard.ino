@@ -41,6 +41,8 @@ extern "C" {
 #include "ui_pages.h"
 #include "ui_speed.h"
 #include "ui_nav.h"      /* 导航指引卡片（阶段 1：UI 原型） */
+#include "ui_baked_images.h" /* 烘焙图声明（非 const，启动时可充气）*/
+#include "ui_img_inflate.h"  /* 索引图 → PSRAM RGB565 直通图 */
 #include "nav.h"         /* 导航状态/动作枚举与文案（纯 C，共用） */
 #include "ui_clock.h"    /* 数字时钟页（时间同步状态标签） */
 #include "ui_timesrc.h"
@@ -163,6 +165,32 @@ static volatile uint16_t s_tp_release_cnt = 0, s_tp_flick_cnt = 0;
 static volatile int16_t s_last_dx = 0, s_last_dy = 0;
 static volatile uint32_t s_last_dt = 0;
 static portMUX_TYPE s_tp_mux = portMUX_INITIALIZER_UNLOCKED;
+
+/*
+ * flick 方向判定的**旋转补偿**（详见 docs/rotation-tearing-fieldtest.md）。
+ * 采样拿到的是**面板原始坐标**，而"左滑/右滑"应按 **LVGL 逻辑坐标**判定。
+ * LVGL 自己的 indev 会对指针坐标做逆变换（lv_indev.c: indev_pointer_proc），
+ * 但这条 100Hz 自建快路径绕过了它 → 90°/270° 时"左右滑"在面板上变成上下滑，
+ * flick 判不出来，翻页退化成慢速原生拖拽。
+ * 默认开启；串口 `flickrot 0|1` 可运行时 A/B，现场对比用。
+ */
+static bool s_flick_rot_fix = true;
+
+/** 面板原始位移 → LVGL 逻辑位移（映射与 lv_indev.c 的旋转规则严格一致）*/
+static void flick_delta_to_logical(int *dx, int *dy)
+{
+  if (!s_flick_rot_fix) return;
+  lv_disp_t *d = lv_disp_get_default();
+  if (d == NULL || d->driver == NULL) return;
+
+  int rx = *dx, ry = *dy;   /* 面板原始位移 */
+  switch (d->driver->rotated) {
+    case LV_DISP_ROT_90:  *dx = -ry; *dy =  rx; break;  /* x'=V-y-1, y'=x */
+    case LV_DISP_ROT_180: *dx = -rx; *dy = -ry; break;  /* 双轴取反 */
+    case LV_DISP_ROT_270: *dx =  ry; *dy = -rx; break;  /* x'=y, y'=H-x-1 */
+    default: break;                                     /* NONE：原始即逻辑 */
+  }
+}
 
 static void tlog_add(int16_t x, int16_t y, bool pressed)
 {
@@ -303,11 +331,15 @@ static void touch_sample_cb(void *)
       /*
        * 抬起瞬间：判定是否快速划动。
        * 阈值：时长 < 600ms、水平位移 > 50px、且明显偏水平（水平 > 1.2×垂直）。
+       * ⚠️ 位移在**逻辑坐标**下判定：原始面板位移先按当前屏幕方向做逆变换，
+       *    否则 90°/270° 时"左右滑"在面板上变成上下滑，flick 永远判不出来。
        * 命中则置 flick，由主循环消费（LVGL 调用必须回到主循环做）。
        */
-      int dx = (int)s_tp_x - (int)s_tp_start_x;
-      int dy = (int)s_tp_y - (int)s_tp_start_y;
+      int raw_dx = (int)s_tp_x - (int)s_tp_start_x;
+      int raw_dy = (int)s_tp_y - (int)s_tp_start_y;
       uint32_t dt = millis() - s_tp_start_ms;
+      int dx = raw_dx, dy = raw_dy;
+      flick_delta_to_logical(&dx, &dy);   /* 逻辑坐标（判定与翻页方向都用它）*/
       int adx = dx < 0 ? -dx : dx;
       int ady = dy < 0 ? -dy : dy;
       s_tp_release_cnt++;
@@ -317,13 +349,13 @@ static void touch_sample_cb(void *)
       if (dt < 600 && adx > 50 && adx > (ady * 12) / 10) {
         s_tp_flick = (dx < 0) ? 1 : -1; /* 左滑 → 下一页 */
         s_tp_flick_cnt++;
-        Serial.printf("[触摸] flick dx=%d dy=%d dt=%lu ms\n", (int)dx, (int)dy,
-                      (unsigned long)dt);
+        Serial.printf("[触摸] flick dx=%d dy=%d（原始 %d,%d）dt=%lu ms\n", (int)dx, (int)dy,
+                      raw_dx, raw_dy, (unsigned long)dt);
       }
       else {
         s_tp_settle = true; /* 缓慢拖拽：按最近页吸附 */
-        Serial.printf("[触摸] 抬起 dx=%d dy=%d dt=%lu ms（未达 flick 阈值→吸附）\n",
-                      (int)dx, (int)dy, (unsigned long)dt);
+        Serial.printf("[触摸] 抬起 dx=%d dy=%d（原始 %d,%d）dt=%lu ms（未达 flick 阈值→吸附）\n",
+                      (int)dx, (int)dy, raw_dx, raw_dy, (unsigned long)dt);
       }
     }
   }
@@ -730,6 +762,7 @@ static void print_help(void)
   Serial.println("       lvrot [0|1|2|3]          【运行时】LVGL 软件旋转 0/90/180/270°（不带参数=查询）");
   Serial.println("       madctl <hex>              【实验】直写面板 MADCTL(0x36) 验证硬件旋转");
   Serial.println("                                 参考: 00=0° 60=90° C0=180° A0=270°；恢复 madctl 0");
+  Serial.println("       flickrot [0|1]           flick 方向判定的旋转补偿（现场 A/B，不带参数=查询）");
   Serial.println("       mem                      显示 LVGL/ESP 内存情况");
   Serial.println("       dump                     打印当前屏幕的元素树（排查元素缺失）");
   Serial.println("       touch                    打印最近触摸采样（排查坐标镜像/旋转）");
@@ -1037,6 +1070,22 @@ static void process_command(char *cmd)
       }
     }
   }
+  else if (strncmp(cmd, "flickrot", 8) == 0) {
+    /*
+     * 【现场 A/B】flick 方向判定是否按当前屏幕方向做坐标逆变换。
+     *   0 = 旧行为：直接用面板原始坐标 → 90°/270° 下"左右滑"判不出 flick
+     *   1 = 修正行为（默认）：换算到 LVGL 逻辑坐标再判定
+     */
+    const char *arg = cmd + 8;
+    if (*arg == '\0') {
+      Serial.printf("[触摸] flick 旋转补偿 = %d（0=旧行为 1=修正）\n", s_flick_rot_fix ? 1 : 0);
+      Serial.println("       用法: flickrot 0|1（现场 A/B：切到 90° 后左右滑动对比）");
+    }
+    else {
+      s_flick_rot_fix = (atoi(arg) != 0);
+      Serial.printf("[触摸] flick 旋转补偿 -> %d\n", s_flick_rot_fix ? 1 : 0);
+    }
+  }
   else if (strncmp(cmd, "face", 4) == 0) {
     const char *arg = cmd + 4;
     if (*arg == '\0') {
@@ -1207,6 +1256,38 @@ static void handle_serial(void)
   }
 }
 
+/*
+ * 启动时把烘焙图充气到 PSRAM。
+ *
+ * 为什么必须做（真机实测）：8bpp 索引图每帧都要逐像素查调色板，
+ * 全屏 466×466 滑页时渲染峰值从 123ms 升到 **168ms**（+45ms，+37%）。
+ * 启动时解码一次成 RGB565 后恢复直接内存拷贝，速度回到 ~123ms，
+ * 而 Flash 仍保持索引图的占用（省约 683 KB）。
+ *
+ * 内存：5 张图合计 2×434KB + 3×180KB ≈ 1.4 MB；本板 8MB PSRAM（实测空闲 7.9MB）。
+ * 失败降级：分配不到 PSRAM 就保持索引图 —— **功能不受影响**，只是滑页慢约 45ms，
+ *          不会白屏或崩溃（宁可慢，不可坏）。
+ */
+static void *psram_alloc(size_t n)
+{
+  return heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
+}
+
+static void inflate_baked_images(void)
+{
+  lv_img_dsc_t *imgs[] = {
+    &dial_analog, &dial_speed,
+    &driver_normal, &driver_spirited, &driver_speeding,
+  };
+  const int n = (int)(sizeof(imgs) / sizeof(imgs[0]));
+
+  uint32_t before = ESP.getFreePsram();
+  int ok = ui_img_inflate_all(imgs, NULL, n, psram_alloc);
+  uint32_t after = ESP.getFreePsram();
+  Serial.printf("[图] 充气 %d/%d 张，开销 %u KB，PSRAM 空闲 %u KB\n",
+                ok, n, (unsigned)((before - after) / 1024), (unsigned)(after / 1024));
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -1282,6 +1363,10 @@ void setup()
                     : (d == LV_DIR_TOP) ? "TOP" : (d == LV_DIR_BOTTOM) ? "BOTTOM" : "?";
     Serial.printf("[手势] 屏幕收到 %s\n", n);
   }, LV_EVENT_GESTURE, NULL);
+
+  /* 烘焙图充气：必须在 ui_pages_init() 之前 —— 表盘构建时会 lv_img_set_src
+   * 引用这些 dsc，提前改好可避免"先引用旧格式、后改写"的隐患。 */
+  inflate_baked_images();
 
   /* 业务 UI：全部页面（模拟时钟 / 数字时钟 / 速度表盘） */
   ui_pages_init();

@@ -16,6 +16,7 @@
 | [`docs/ai-task-boundaries.md`](docs/ai-task-boundaries.md) | **AI 任务边界**：给 AI 划定任务域，防止越界改坏代码（6 种任务模式）|
 | [`docs/test-results.md`](docs/test-results.md) | **测试台账**（单一事实来源）：§9 矩阵 12 项、DoD 8 项、复测指引 |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | 排障记录：按主题索引，含根因分析与踩坑 |
+| [`docs/rotation-tearing-fieldtest.md`](docs/rotation-tearing-fieldtest.md) | **现场测试清单**：旋转后撕裂/果冻的判定步骤、串口命令、记录表（待执行）|
 | [`docs/architecture.md`](docs/architecture.md) | 系统架构、模块划分、共享代码层 |
 | [`docs/ble.md`](docs/ble.md) | BLE 协议细节（GATT、JSON 字段）|
 | [`docs/decisions.md`](docs/decisions.md) | 设计决策（含已被取代的决策，保留历史）|
@@ -139,6 +140,10 @@ ESP32-S3 (dashboard.ino)
 | 初始（含无效化风暴）| 243 ms |
 | 修复无效化风暴 + QSPI 调优 | 228 ms |
 | 烘焙表盘 + 字体去抗锯齿 | **90–113 ms** |
+| 图片改 8bpp 索引色（**未充气**）| 168 ms ⚠️ 退化 |
+| **图片索引色 + 启动充气到 PSRAM** | **110 ms** ✅ |
+
+> 测量口径：连续切页 36s，取 6~8 个心跳窗口的渲染峰值（各窗口几乎一致，非噪声）。
 
 **优化手段**：
 1. **无效化风暴修复**：LVGL setter 无变更检测 → 空闲也每秒 55 次重绘。
@@ -147,6 +152,10 @@ ESP32-S3 (dashboard.ino)
 3. **静态表盘烘焙成图片**：刻度/数字离线渲染（4× 超采样），运行时只留指针。
 4. **大号字体去抗锯齿**：138px 字体 bpp 4→1，字模 194→51KB。
 5. **PSRAM 全帧绘制缓冲**：脏区由 10 块降为 1 块。
+6. **烘焙图改 8bpp 索引色 + 启动充气**：图片以索引色存 Flash（省 683 KB），
+   启动时解码一次到 PSRAM 变 RGB565 直通图。若不充气，索引图每帧都要逐像素
+   查调色板 → 滑页退化到 168 ms；充气后反而比原 RGB565 **快 13 ms**（110 ms），
+   因为绘制源从 Flash 变成了 PSRAM。
 
 **硬件下限**：QSPI 传一屏 434KB 需 **43ms**，即使零渲染成本上限也只有 ~23fps。
 
@@ -191,11 +200,12 @@ ESP32-S3 (dashboard.ino)
 | `test_ui_face` | 67 | 表盘注册表（含分组/启用掩码）|
 | `test_nav` | 63 | 导航卡片纯逻辑（动作/状态/距离格式化）|
 | `test_nav_parse` | 72 | 导航消息解析（分流/容错/向前兼容）|
+| `test_img_indexed` | 28 | 索引图解码（调色板字节序/16位截断/边界/越界）|
 | `test_ios_logic` | 32 | iOS 侧纯逻辑（Swift）|
-| **单测小计** | **390** | `cd tests && make run` |
+| **单测小计** | **418** | `cd tests && make run` |
 | `ui_regression.py` | 33 | UI 像素级回归 |
 | XCUITest | 5 | 会话/遥测计数/设备控制/链路诊断/BLE 状态 |
-| **自动化总计** | **428** | |
+| **自动化总计** | **456** | |
 
 **真机验证**（iPhone 12 / iOS 27）：§9 矩阵 **12/12 通过**，DoD **8/8 达成**。
 
@@ -212,7 +222,9 @@ ESP32-S3 (dashboard.ino)
 | ~~高~~ | ~~竖屏 UI（重排布局）~~ | ✅ **已由「屏幕旋转」解决，无需重排界面**：LVGL 软件旋转官方支持，实测 90°/270° 仅 **+20ms/整屏帧**；圆屏旋转无布局副作用。App/串口/BLE 均可切换并持久化（NVS）| 已完成 |
 | 中 | 功能②：图片背景 + 时钟 | ✅ 存储已验证：**有 TF/microSD 卡槽**（SDMMC 1-bit）+ **9.9MB 未用 ffat 分区**（`0x610000`）| 中 |
 | 中 | 偶发单帧 1000ms+ 尖刺 | 32 分钟长稳**未复现**；需更长监测或加长耗时打点 | 小（调研为主）|
-| 低 | 面板 MADCTL 硬件旋转（尝试零开销）| 未探索：库从不使用 MV(0x20) 位，其语义从未实测。已加实验命令 `madctl <hex>`，需人眼观察验证 | 小（实验）|
+| **高** | **旋转后撕裂 / 果冻效应**：现场判定 + 修复路线 | 源码核对 + 模拟器实测已完成：撕裂根因是 **QSPI 写 GRAM 与面板扫描无同步**（整屏 434KB/43ms ≈ 2.6 个场周期），软件旋转再把一次刷新拆成多次 flush（数字时钟实测 0°=1 次 → 90°≈11 次）。**执行清单见 [`docs/rotation-tearing-fieldtest.md`](docs/rotation-tearing-fieldtest.md)**（含 40MHz A/B、`madctl` 硬件旋转验证、TE 调查）| 中 |
+| 中 | flick 手势的旋转坐标补偿（90°/270° 下滑动失效、翻页退化成慢拖拽）| 补丁已备好且映射已逐点验证（与 `lv_indev.c` 公式 **9676 点全部一致**）；**仓库内尚未应用**（整体编译待并行改动落地后补跑）。见清单 §3 | 小 |
+| **高** | 面板 MADCTL 硬件旋转（`madctl 60/C0/A0`）| **仍未实测**：库从不使用 MV(0x20) 位。⚠️ 取值与微雪 IDF BSP `bsp_display_rotation_set()` 完全一致，但该函数在厂商仓库内**无任何调用者** → 厂商同样未验证。若有效可去掉软件旋转的每帧开销与拆块（**必须同步改触摸映射**）| 小（实验）|
 | 低 | UI 设计定稿：状态标签与指针重叠 | 5 个候选方案见 [`ui-guidelines.md`](docs/ui-guidelines.md) | 小 |
 | 中 | 导航**阶段 3**：iPhone 真实导航数据（阶段 2 协议已完成）| ⏳ 待数据源决策 | 大 |
 | 低 | 行程统计上屏 | 数据已有（`trip` 串口命令可查），仅需 UI 呈现 | 小 |
@@ -277,5 +289,8 @@ xcodebuild -project CarDashboardPhone.xcodeproj -scheme CarDashboardPhone \
 | `mem` | 内存情况 |
 | `touch` | 触摸采样诊断 |
 | `dump` | 打印元素树 |
+| `lvrot [0\|1\|2\|3]` | 【运行时】LVGL 软件旋转 0/90/180/270°（不带参数=查询）|
+| `madctl <hex>` | 【实验】直写面板 MADCTL(0x36)：`60`=90° `C0`=180° `A0`=270°，恢复 `madctl 0` |
+| `flickrot [0\|1]` | flick 方向判定的旋转补偿 A/B（**补丁应用后**可用；0=旧行为 1=修正）|
 | `scan` | I2C 扫描 |
 | `help` | 全部命令 |
