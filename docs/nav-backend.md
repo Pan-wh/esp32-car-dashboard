@@ -1,9 +1,10 @@
 # 导航数据源与网关（阶段 3）
 
 > **状态**：阶段 1（UI）与阶段 2（BLE 协议）已完成；
-> 阶段 3 的**网关**（见 [`gateway/README.md`](../gateway/README.md)）与
-> **iOS 导航核心**（`ios/CarDashboardPhone/CarDashboardPhone/Nav/`）**已实现**；
-> ⬜ **真实 Key 联调**与 App 接入尚未开始。
+> 阶段 3 的**网关**（[`gateway/`](../gateway/README.md)）、
+> **iOS 导航核心**（含**偏航重算流程**）与
+> **Mac 侧模拟器**（[`tools/nav_sim/`](../tools/nav_sim/README.md)）**均已实现并在真机验证**；
+> ⬜ 仅剩 **App 接入**（需 iPhone）。
 > **先读**：[§0 项目定位与合规](#零项目定位与合规先读) —— 含**基准定位声明**（后续文档以此为前提）
 > 与高德协议中需注意的条款。
 
@@ -221,6 +222,21 @@ ESP32：nav_parse → ui_nav（只做显示）
 > **本文不写死配额数字**，避免过期误导。
 
 ### 3.3 第三步：部署网关
+
+**核心与副作用的边界（重要设计约定）**：
+
+导航核心（`NavCore.swift`）**只做纯计算，不自己发网络请求**。
+偏航时它返回一条**命令**（`NavCommand.requestRoute`），由平台适配层执行：
+
+```
+handle(fix:nowMs:) -> NavOutcome { snapshot, commands }
+                                    │         └─ 需要调用方执行的副作用
+                                    └─ 给 UI / BLE 的显示状态
+```
+
+这样做的好处：核心保持纯逻辑（可单测、不依赖网络、不绑定数据源），
+网关故障也不会让核心进入未定义状态。这与参考项目 `nav_core.hpp`
+（命令由平台适配器分发）的思路一致，代码为独立实现（见 decisions.md D-009）。
 
 **网关职责**：接收 App 请求 → 附加 Key → 调高德 → 转换坐标 → 返回精简 RouteBundle。
 

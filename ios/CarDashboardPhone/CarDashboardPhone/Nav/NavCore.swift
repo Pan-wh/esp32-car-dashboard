@@ -310,8 +310,50 @@ public struct NavConfig: Sendable {
     public var staleAfterMs: Int64 = 5000
     /// 允许进度回退的最大距离（米）：GPS 抖动导致的轻微倒退不视为"掉头"
     public var backtrackAllowanceM: Double = 30
+    /// 偏航后**请求新路线**的重试间隔（毫秒）。避免每秒定位都去请求网关。
+    public var routeRetryAfterMs: Int64 = 5000
+    /// 连续请求新路线的最大次数（超过后停止请求，仍停在"重新规划"状态）。
+    /// 目的是避免网关故障时无限刷请求；重新上路线或换了路线会重置计数。
+    public var maxRouteAttempts: Int = 5
 
     public init() {}
+}
+
+// MARK: - 命令（核心只"请求"，不自己执行）
+
+/// 重新规划路线的原因
+public enum RouteRequestReason: String, Equatable, Sendable {
+    /// 偏航（开出了路线）
+    case offRoute
+}
+
+/// 一次重新规划请求。核心**不自己发网络请求** —— 由平台适配层（App / 模拟器）
+/// 拿到命令后去调网关，再把新路线通过 `setRoute` 交回来。
+///
+/// 这样核心保持纯逻辑：可单测、不依赖网络、不绑定具体数据源。
+public struct RouteRequest: Equatable, Sendable {
+    /// 起点（当前位置，**GCJ-02**）
+    public var origin: GeoPoint
+    /// 终点（原路线终点，**GCJ-02**）
+    public var destination: GeoPoint
+    public var reason: RouteRequestReason
+    /// 第几次尝试（从 1 开始），便于调用方记录/退避
+    public var attempt: Int
+}
+
+public enum NavCommand: Equatable, Sendable {
+    case requestRoute(RouteRequest)
+}
+
+/// `handle` 的返回：显示快照 + 需要调用方执行的命令
+public struct NavOutcome: Equatable, Sendable {
+    public var snapshot: NavSnapshot
+    public var commands: [NavCommand]
+
+    public init(snapshot: NavSnapshot = NavSnapshot(), commands: [NavCommand] = []) {
+        self.snapshot = snapshot
+        self.commands = commands
+    }
 }
 
 /// 交给 UI / BLE 的显示快照
@@ -330,6 +372,10 @@ public struct NavSnapshot: Equatable, Sendable {
     public var fixUsable: Bool = false
     /// 所在 step 下标（-1 表示无）
     public var stepIndex: Int = -1
+    /// 是否已发出重新规划请求、正在等待新路线
+    public var routeRequestInFlight: Bool = false
+    /// 已尝试请求新路线的次数
+    public var routeAttempts: Int = 0
 
     public init() {}
 }
@@ -349,18 +395,35 @@ public final class NavCore {
     private var arrivalStreak = 0
     private var arrivedLatched = false
 
+    /// 最近一次被采纳的定位位置（偏航重算时作为新路线起点）
+    private var lastFixPosition: GeoPoint?
+    /// 已发出几次重新规划请求
+    private var routeAttempts = 0
+    /// 是否已发出请求、正在等新路线（收到新路线或超时后清除）
+    private var routeRequestInFlight = false
+    private var lastRouteRequestMs: Int64 = 0
+
     public init(config: NavConfig = NavConfig()) {
         self.config = config
     }
 
     /// 设置（或替换）路线。会重置进度与确认计数。
+    ///
+    /// 偏航重算时调用本方法交回新路线：起点是新路线首点（通常即当前位置），
+    /// 因此进度从 0 重新开始，且**重算计数/等待标志一并清除**。
     public func setRoute(_ route: NavRoute?) {
         self.route = route
         resetProgress()
         snapshot = NavSnapshot()
-        if route != nil {
+        if let r = route {
             snapshot.state = .active
             updateDerived(atProgressM: 0, crossTrackM: 0)
+            // 立即给出**首个转向**。否则要等到下一次定位才有动作，
+            // 中间会有一帧 "active / unknown / --"（设备上表现为短暂空白）。
+            if let fm = followManeuverHint(route: r, progress: 0) {
+                snapshot.maneuver = fm.maneuver
+                snapshot.distanceToManeuverM = fm.distanceM
+            }
         } else {
             snapshot.state = .idle
         }
@@ -378,19 +441,25 @@ public final class NavCore {
         offRouteStreak = 0
         arrivalStreak = 0
         arrivedLatched = false
+        routeAttempts = 0
+        routeRequestInFlight = false
+        lastRouteRequestMs = 0
     }
 
-    /// 处理一次定位，返回最新快照。
+    /// 处理一次定位，返回**显示快照 + 待执行命令**。
+    ///
+    /// 偏航时会返回 `.requestRoute` 命令（带重试节流）——
+    /// 核心**不自己发网络请求**，由调用方去取新路线后 `setRoute` 交回。
     ///
     /// - Parameters:
     ///   - fix: 已转换为 **GCJ-02** 的定位
     ///   - nowMs: 当前时间（毫秒）。传入便于测试注入
     @discardableResult
-    public func handle(fix: NavFix, nowMs: Int64) -> NavSnapshot {
+    public func handle(fix: NavFix, nowMs: Int64) -> NavOutcome {
         guard let route = route, route.polyline.count >= 2 else {
             snapshot.state = .noData
             snapshot.fixUsable = false
-            return snapshot
+            return NavOutcome(snapshot: snapshot)
         }
 
         lastFixMs = fix.timestampMs
@@ -404,13 +473,15 @@ public final class NavCore {
         if !usable {
             // 保持上次进度，状态仍可为 active（只是本次不用）
             refreshState(nowMs: nowMs)
-            return snapshot
+            return outcome(nowMs: nowMs)
         }
+
+        lastFixPosition = fix.position
 
         // ---- 投影到路线 ----
         guard let proj = project(point: fix.position, route: route) else {
             refreshState(nowMs: nowMs)
-            return snapshot
+            return outcome(nowMs: nowMs)
         }
 
         // ---- 单调性：投影结果不应大幅回退 ----
@@ -444,7 +515,7 @@ public final class NavCore {
             arrivedLatched = true
         }
 
-        let followManeuver = followManeuverHint(fix: fix, route: route)
+        let followManeuver = followManeuverHint(route: route, progress: lastProgressM)
 
         updateDerived(atProgressM: lastProgressM, crossTrackM: cross)
         snapshot.offRoute = offRoute
@@ -458,24 +529,79 @@ public final class NavCore {
             snapshot.distanceToManeuverM = 0
         } else if offRoute {
             snapshot.state = .rerouting
-            // 偏航时**不给出转向指引**（可能已不适用），由调用方决定是否重算
+            // 偏航时**不给出转向指引**（旧指引可能已不适用）
             snapshot.maneuver = .unknown
             snapshot.distanceToManeuverM = nil
         } else {
             snapshot.state = .active
+            // 回到路线上：重算相关计数归零，下次再偏航可重新请求
+            routeAttempts = 0
+            routeRequestInFlight = false
             if let fm = followManeuver {
                 snapshot.maneuver = fm.maneuver
                 snapshot.distanceToManeuverM = fm.distanceM
             }
         }
-        return snapshot
+        return outcome(nowMs: nowMs)
     }
 
     /// 周期性调用（即使用户没动），用于把"数据过期"反映出来。
+    ///
+    /// 也会产出重算命令：偏航后即使没有新定位，到点仍应重试请求新路线。
     @discardableResult
-    public func tick(nowMs: Int64) -> NavSnapshot {
+    public func tick(nowMs: Int64) -> NavOutcome {
         refreshState(nowMs: nowMs)
-        return snapshot
+        return outcome(nowMs: nowMs)
+    }
+
+    // MARK: 重算（偏航后请求新路线）
+
+    /// 组装返回值，并在需要时附上"请求新路线"命令。
+    ///
+    /// 节流规则：
+    ///   - 已发出请求且未超过 `routeRetryAfterMs` → 不重复发（视为请求进行中）
+    ///   - 超过重试间隔仍无新路线 → 视为上次失败，允许重试
+    ///   - 累计尝试达到 `maxRouteAttempts` → **停止请求**（避免网关故障时无限刷），
+    ///     但状态仍停在 `rerouting`；回到路线或换新路线会重置计数
+    private func outcome(nowMs: Int64) -> NavOutcome {
+        snapshot.routeRequestInFlight = routeRequestInFlight
+        snapshot.routeAttempts = routeAttempts
+
+        guard let route = route, snapshot.offRoute, !arrivedLatched else {
+            return NavOutcome(snapshot: snapshot)
+        }
+        guard let destination = route.polyline.last else {
+            return NavOutcome(snapshot: snapshot)
+        }
+
+        let elapsed = nowMs - lastRouteRequestMs
+        if routeRequestInFlight && elapsed < config.routeRetryAfterMs {
+            return NavOutcome(snapshot: snapshot)  // 请求进行中，等结果
+        }
+        // 超时未收到新路线 → 认定为失败
+        routeRequestInFlight = false
+
+        if routeAttempts >= config.maxRouteAttempts {
+            snapshot.routeRequestInFlight = false
+            return NavOutcome(snapshot: snapshot)  // 已达上限，不再请求
+        }
+
+        routeAttempts += 1
+        lastRouteRequestMs = nowMs
+        routeRequestInFlight = true
+        snapshot.routeRequestInFlight = true
+        snapshot.routeAttempts = routeAttempts
+
+        // 起点用**当前位置**（偏航了就从偏航处重新规划），拿不到则退回上次进度点
+        let origin = lastFixPosition
+            ?? route.pointAt(distanceM: lastProgressM)
+            ?? destination
+
+        let req = RouteRequest(origin: origin,
+                               destination: destination,
+                               reason: .offRoute,
+                               attempt: routeAttempts)
+        return NavOutcome(snapshot: snapshot, commands: [.requestRoute(req)])
     }
 
     // MARK: 私有
@@ -514,15 +640,17 @@ public final class NavCore {
 
     /// 计算"当前应指引的动作 + 距该动作的距离"。
     ///
-    /// 语义：我们引导用户**前往当前 step 的终点**（即下一个转向点），
+    /// 语义：引导用户**前往当前 step 的终点**（即下一个转向点），
     /// 动作取当前 step 的 maneuver。
-    private func followManeuverHint(fix: NavFix, route: NavRoute)
+    ///
+    /// 按进度而非 fix 计算，便于 `setRoute` 在还没有定位时就先给出首个转向。
+    private func followManeuverHint(route: NavRoute, progress: Double)
         -> (maneuver: Maneuver, distanceM: Int)? {
-        let idx = route.stepIndex(atProgressM: lastProgressM)
+        let idx = route.stepIndex(atProgressM: progress)
         guard idx >= 0 && idx < route.steps.count else { return nil }
         let step = route.steps[idx]
         let end = route.stepRanges[idx].end
-        let d = max(0, end - lastProgressM)
+        let d = max(0, end - progress)
         return (step.maneuver, Int(d.rounded()))
     }
 

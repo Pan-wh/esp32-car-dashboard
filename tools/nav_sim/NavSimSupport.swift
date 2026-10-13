@@ -196,3 +196,81 @@ public struct DriveSimulator {
         return deg < 0 ? deg + 360 : deg
     }
 }
+
+
+// MARK: - 路线来源与重算调度
+
+/// 路线来源抽象。**坐标一律 WGS84**（与网关约定一致）。
+///
+/// 抽出来是为了让"重算调度"可单测：测试用假实现即可，
+/// 不需要真网关、不需要网络。
+public protocol RouteProvider {
+    func route(originWGS84: GeoPoint, destinationWGS84: GeoPoint) throws -> RouteBundle
+}
+
+/// 走网关的实现
+public struct GatewayRouteProvider: RouteProvider {
+    public let gateway: String
+    public let token: String
+    public let timeoutSec: Double
+
+    public init(gateway: String, token: String, timeoutSec: Double = 15) {
+        self.gateway = gateway
+        self.token = token
+        self.timeoutSec = timeoutSec
+    }
+
+    public func route(originWGS84: GeoPoint, destinationWGS84: GeoPoint) throws -> RouteBundle {
+        try GatewayClient.fetchRoute(gateway: gateway, token: token,
+                                     origin: originWGS84, destination: destinationWGS84,
+                                     timeoutSec: timeoutSec)
+    }
+}
+
+/// 重算调度：把核心产出的命令变成"取新路线并交回核心"这一副作用。
+///
+/// 放在这里（而不是塞在命令行主循环里）是为了**可测试** ——
+/// 主循环是 `@main`，测试无法直接调用。
+public enum RerouteDispatcher {
+    public struct Outcome {
+        /// 是否成功替换了路线
+        public var applied = false
+        /// 新路线（若成功）
+        public var newRoute: NavRoute?
+        /// 失败原因（若失败）
+        public var errorText: String?
+        /// 本次处理了几个重算请求
+        public var handled = 0
+    }
+
+    /// 处理命令。成功取得新路线时会调用 `core.setRoute`。
+    ///
+    /// 注意坐标转换：核心内部是 **GCJ-02**，而 `RouteProvider` 约定收 **WGS84**
+    /// （网关会转回 GCJ-02）。这一步不能省，否则整条新路线会偏移数百米。
+    @discardableResult
+    public static func dispatch(commands: [NavCommand],
+                                provider: RouteProvider,
+                                core: NavCore) -> Outcome {
+        var out = Outcome()
+        for cmd in commands {
+            guard case .requestRoute(let req) = cmd else { continue }
+            out.handled += 1
+            do {
+                let bundle = try provider.route(
+                    originWGS84: Coords.gcj02ToWgs84(req.origin),
+                    destinationWGS84: Coords.gcj02ToWgs84(req.destination))
+                let newRoute = bundle.toNavRoute()
+                guard newRoute.polyline.count >= 2 else {
+                    out.errorText = "新路线折线点不足（\(newRoute.polyline.count)）"
+                    continue
+                }
+                core.setRoute(newRoute)
+                out.applied = true
+                out.newRoute = newRoute
+            } catch {
+                out.errorText = "\(error)"
+            }
+        }
+        return out
+    }
+}

@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="466" height="466" viewBox="0 0 466 466">
+  <defs>
+    <clipPath id="screen">
+      <circle cx="233" cy="233" r="233"/>
+    </clipPath>
+    <clipPath id="driverCrop">
+      <circle cx="233" cy="207" r="151"/>
+    </clipPath>
+    <linearGradient id="hud" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#202127"/>
+      <stop offset="1" stop-color="#07080B"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFB020"/>
+      <stop offset="0.62" stop-color="#FF7A00"/>
+      <stop offset="1" stop-color="#FF3B30"/>
+    </linearGradient>
+    <filter id="hudShadow" x="-20%" y="-30%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="-4" stdDeviation="8" flood-color="#000000" flood-opacity="0.24"/>
+    </filter>
+  </defs>
+
+  <rect width="466" height="466" fill="#000000"/>
+  <g clip-path="url(#screen)">
+    <circle cx="233" cy="233" r="233" fill="#FFFFFF"/>
+
+    <!-- Reuse the production dial so the preview stays faithful to the device. -->
+    <image x="0" y="0" width="466" height="466"
+           xlink:href="../assets/images/dial_speed_466.png"/>
+
+    <!-- Quiet connection state, moved away from the needle sweep. -->
+    <g transform="translate(101 50)">
+      <circle cx="5" cy="5" r="5" fill="#34C759"/>
+      <text x="18" y="11" fill="#4A4A50" font-family="Arial, sans-serif"
+            font-size="15" font-weight="700" letter-spacing="1">LIVE</text>
+    </g>
+
+    <!-- Driver enlarged from 230px to 302px and pulled slightly upward. -->
+    <g clip-path="url(#driverCrop)">
+      <image x="82" y="55" width="302" height="302"
+             xlink:href="../assets/images/driver_frown.png"/>
+    </g>
+
+    <!-- Needle remains outside the illustration and picks up the HUD accent. -->
+    <line x1="265" y1="66" x2="274" y2="20" stroke="#24252B" stroke-width="11"
+          stroke-linecap="round"/>
+    <line x1="265" y1="66" x2="274" y2="20" stroke="#FF9500" stroke-width="7"
+          stroke-linecap="round"/>
+
+    <!-- Integrated lower instrument pod. -->
+    <path d="M39 369 L65 344 Q233 325 401 344 L427 369 L466 466 L0 466 Z"
+          fill="url(#hud)" stroke="#4D4F58" stroke-width="2" filter="url(#hudShadow)"/>
+    <path d="M68 347 Q233 330 398 347" fill="none" stroke="url(#accent)"
+          stroke-width="5" stroke-linecap="round"/>
+
+    <!-- Speed block. -->
+    <g transform="translate(96 349)">
+      <text x="0" y="59" fill="#F8F8FA" font-family="Arial Rounded MT Bold, Arial, sans-serif"
+            font-size="62" font-weight="800">108</text>
+      <text x="29" y="82" fill="#9A9BA3" font-family="Arial, sans-serif"
+            font-size="17" font-weight="700" letter-spacing="1">KM/H</text>
+    </g>
+
+    <rect x="232" y="359" width="2" height="68" rx="1" fill="#3C3D44"/>
+
+    <!-- Heading block. -->
+    <g transform="translate(266 354)">
+      <path d="M13 47 L25 8 L37 47 L25 40 Z" fill="#FF9500"/>
+      <path d="M25 8 L25 40 L13 47 Z" fill="#F6F6F8"/>
+      <text x="51" y="42" fill="#F8F8FA" font-family="Arial Rounded MT Bold, Arial, sans-serif"
+            font-size="38" font-weight="800">NE</text>
+      <text x="51" y="68" fill="#9A9BA3" font-family="Arial, sans-serif"
+            font-size="17" font-weight="700" letter-spacing="1">045°</text>
+    </g>
+  </g>
+</svg>
