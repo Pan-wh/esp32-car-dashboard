@@ -21,6 +21,7 @@
 
 LV_FONT_DECLARE(speed_num_150); /* Inter Bold 150px，速度大数字 */
 LV_FONT_DECLARE(label_26);      /* Inter Medium 26px，单位/标签/状态 */
+LV_IMG_DECLARE(dial_speed);     /* 烘焙的静态速度表盘（刻度+渐变+数字），见 tools/make_dial_faces.py */
 
 /* 驾驶员插画（由 tools/make_images.py 生成） */
 LV_IMG_DECLARE(driver_normal);
@@ -364,6 +365,17 @@ static void build_v5(lv_obj_t *p)
     lv_obj_set_style_bg_color(p, lv_color_hex(C_BG_LIGHT), 0);
     lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
 
+    /*
+     * 静态表盘（刻度 + 渐变弧 + 刻度数字）烘焙成图片：**必须最先创建（最底层）**，
+     * 否则整屏白底图片会盖住驾驶员插画。
+     * 原先由 lv_meter 逐刻度绘制 + 2 条渐变 scale_lines + 6 个 lv_label；
+     * 实测刻度在整屏重绘（滑页）时约值 50ms，改为图片后只剩一次图片拷贝。
+     */
+    lv_obj_t *face = lv_img_create(p);
+    lv_img_set_src(face, &dial_speed);
+    lv_obj_center(face);
+    lv_obj_clear_flag(face, LV_OBJ_FLAG_CLICKABLE);
+
     /* ---- 中央插画（**最先创建 = 最底层**，其白色方角不会盖住刻度与数字）----
      * 素材裁切圆与表盘同心，故底部弧线自然贴合量表内圈。 */
     s_driver_img = lv_img_create(p);
@@ -371,7 +383,7 @@ static void build_v5(lv_obj_t *p)
     lv_obj_center(s_driver_img);
     lv_obj_clear_flag(s_driver_img, LV_OBJ_FLAG_CLICKABLE);
 
-    /* ---- 量表：小刻度（渐变着色）+ 大刻度 ---- */
+    /* ---- 量表：只保留指针（刻度已烘焙进图片）---- */
     s_meter = lv_meter_create(p);
     lv_obj_remove_style_all(s_meter);
     lv_obj_set_size(s_meter, 440, 440);
@@ -380,41 +392,13 @@ static void build_v5(lv_obj_t *p)
     lv_obj_add_event_cb(s_meter, speed5_draw_cb, LV_EVENT_DRAW_PART_BEGIN, NULL);
 
     lv_meter_scale_t *sc_min = lv_meter_add_scale(s_meter);
-    lv_meter_set_scale_ticks(s_meter, sc_min, 41, 2, 10, lv_color_hex(C_TICK_MIN_L));
+    lv_meter_set_scale_ticks(s_meter, sc_min, 0, 0, 0, lv_color_hex(C_TICK_MIN_L));
     lv_meter_set_scale_range(s_meter, sc_min, 0, (int32_t)SPEED_MAX, 270, 135);
-
-    /* 渐变段一：0 → 120（深灰 → 橙） */
-    lv_meter_indicator_t *gr1 = lv_meter_add_scale_lines(
-        s_meter, sc_min, lv_color_hex(speed_color(0.0f)),
-        lv_color_hex(speed_color(DRIVER_SPEEDING_V)), true, 0);
-    lv_meter_set_indicator_start_value(s_meter, gr1, 0);
-    lv_meter_set_indicator_end_value(s_meter, gr1, (int32_t)DRIVER_SPEEDING_V);
-
-    /* 渐变段二：120 → 200（橙 → 红，并加粗） */
-    lv_meter_indicator_t *gr2 = lv_meter_add_scale_lines(
-        s_meter, sc_min, lv_color_hex(speed_color(DRIVER_SPEEDING_V)),
-        lv_color_hex(speed_color(SPEED_MAX)), true, 2);
-    lv_meter_set_indicator_start_value(s_meter, gr2, (int32_t)DRIVER_SPEEDING_V);
-    lv_meter_set_indicator_end_value(s_meter, gr2, (int32_t)SPEED_MAX);
-
-    lv_meter_scale_t *sc_maj = lv_meter_add_scale(s_meter);
-    lv_meter_set_scale_ticks(s_meter, sc_maj, 7, 3, 18, lv_color_hex(C_TICK_MAJ_L));
-    lv_meter_set_scale_range(s_meter, sc_maj, 0, (int32_t)SPEED_MAX, 270, 135);
 
     /* ---- 指针：橙色圆头 ---- */
     s_needle5 = lv_meter_add_needle_line(s_meter, sc_min, 7, lv_color_hex(C_WARN), -(220 - 214));
 
-    /* ---- 刻度数字：按速度渐变色 ---- */
-    const int vals[] = { 0, 40, 80, 120, 160, 200 };
-    for (int i = 0; i < 6; i++) {
-        char buf[8];
-        snprintf(buf, sizeof(buf), "%d", vals[i]);
-        lv_obj_t *n = make_label(p, &label_26, speed_color((float)vals[i]), buf);
-        float a = (float)(135 + i * 54) * 3.14159265f / 180.0f;
-        lv_obj_align(n, LV_ALIGN_CENTER,
-                     (lv_coord_t)lroundf(178.0f * cosf(a)),
-                     (lv_coord_t)lroundf(178.0f * sinf(a)));
-    }
+    /* 刻度数字已烘焙进 dial_speed 图片，无需运行时创建 lv_label */
 
     /* ---- 顶部链路状态标签（五态，白底可见）----
      * ⚠️ 已知问题（待定稿决策，见 docs/ui-guidelines.md）：
@@ -515,9 +499,9 @@ static void build(lv_obj_t *parent)
     for (int i = 0; i < SEG_CNT; i++) s_segs[i] = NULL;
 
     lv_obj_set_style_bg_color(parent, lv_color_hex(C_BG), 0);
-    /* 页面背景透明：整屏黑色底色由 scr 提供，避免滑页时每页各做一次
-       整屏不透明填充（434K 像素 × 页数），可显著降低整屏重绘成本 */
-    lv_obj_set_style_bg_opa(parent, LV_OPA_TRANSP, 0);
+    /* ⚠️ V5 是**白底表盘**设计：这里必须保持不透明白色，
+       不能像黑底页面那样改透明（否则会露出 scr 的黑底，表盘变黑）。 */
+    lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
 
     switch (s_variant) {
     case 1: build_v2(parent); break;
