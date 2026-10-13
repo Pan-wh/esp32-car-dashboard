@@ -3,8 +3,11 @@
 // 目的：在不依赖真实 GPS 的情况下验证 iOS 侧数据生产链路：
 //   simctl Freeway Drive → CoreLocation → 质量门槛 → 界面数值
 //
-// 运行前提（场景需在外部启动）：
+// 运行前提：**必须先在外部启动定位场景**（测试进程无法调用 simctl）：
 //   xcrun simctl location <udid> run "Freeway Drive"
+// 若未启动，本测试会失败并提示——这是**环境问题而非代码缺陷**（已踩坑：
+// 单独跑 `xcodebuild test` 全量时曾因场景未启动而报 3 项失败，误判为回归）。
+// 建议用 tools/run_ios_tests.sh（自动起场景）而不是直接调 xcodebuild。
 //
 // 重要：App 内容是长表单，「实时数据」区默认在屏幕外，
 //       XCUITest 默认只返回可见元素，因此必须先 swipeUp 再查询。

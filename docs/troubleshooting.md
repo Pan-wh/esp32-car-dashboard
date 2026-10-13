@@ -469,3 +469,37 @@ if (s_time_synced && diff_ms >= -2000 && diff_ms <= 2000) return false;
 原文案 `NE 45° · 12.3 km · MAX 87` 过长导致超框。
 按用户要求改为 **`68 km/h  NE 45°`**，里程/最高速移到串口 `trip` 命令查询。
 无有效速度时显示 `-- km/h`，避免把 0 误读成"真的静止"。
+
+## 强退 App 重开后「BLE 状态一直初始化中」（2026-10-13，已修复）
+
+**现象**（用户真机实测）：强退 App 再打开，BLE 状态卡在"初始化中"，
+但点一下「开始驾驶」就恢复正常。
+
+**根因**：`DriveSessionManager` 没有把子对象的 `@Published` 变化转发出去。
+
+```swift
+// ContentView 观察的是 session（DriveSessionManager）
+// 而 BLE 状态在 session.ble 里：
+var bleConnected: Bool { ble.isConnected }   // ← 普通计算属性，不触发本类重绘
+```
+
+链路：`BLEClient.state` 变化 → 只触发 `ble.objectWillChange` →
+**`session` 的 objectWillChange 从未触发** → SwiftUI 不重绘 →
+界面停在首次渲染时的快照（那时 `state` 还是 `.unknown` = "初始化中"）。
+点「开始驾驶」会改 `session.isDriving`（`@Published`）→ 顺带触发重绘 → 界面才正确。
+
+**修复**：
+1. `DriveSessionManager` 订阅 `ble` 与 `location` 的 `objectWillChange`
+   并向上转发（`forwardChanges()`，用 Combine 的 `sink` + `Set<AnyCancellable>` 持有）；
+2. `ContentView` 增加 `.onAppear` **启动即自动连接**（`didAutoConnect` 防重复），
+   用户不必先点「开始驾驶」。
+
+**验证**：模拟器 XCUITest `BLEStateUITests`——启动后**不点任何按钮**，
+界面即显示真实 BLE 状态（模拟器无 BLE 硬件 → 正确显示"不支持 BLE"），
+断言"不应停留在初始化中"通过。
+
+**顺带修的测试基建问题**：`LinkDiagnosticsUITests` 依赖模拟器 Freeway Drive
+定位场景，而测试进程无法调用 simctl。直接跑 `xcodebuild test` 全量时会因场景
+未启动而报 3 项失败，**极易误判为代码回归**（本次就踩了）。
+已新增 `tools/run_ios_tests.sh` 自动起场景 + 设置 `DEVELOPER_DIR`，
+并在测试文件顶部标注该环境依赖。

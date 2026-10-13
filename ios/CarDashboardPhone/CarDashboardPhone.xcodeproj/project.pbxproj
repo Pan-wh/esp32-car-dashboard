@@ -11,6 +11,7 @@
 		2CAD85C2A35EDE6F108759D5 /* LinkDiagnosticsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE45E92AB18790F5DEEC4D67 /* LinkDiagnosticsUITests.swift */; };
 		3325EE76B686D6EB495C914E /* BLEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DE0D4C728A95FAA998B576A /* BLEClient.swift */; };
 		7E4EACB073A1F46147DC479B /* TelemetryQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32314E9EB764F0A3F2BBE843 /* TelemetryQuality.swift */; };
+		8A92648D6950FAAFF357B954 /* BLEStateUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568C2317847C250D5E170B6D /* BLEStateUITests.swift */; };
 		8CD13893D8207814F5D90067 /* CarDashboardPhoneUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0D22E82D27FEF70D93C0BC2 /* CarDashboardPhoneUITests.swift */; };
 		ADB735B3B0B903C576498A3E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FB8403418EFFC9FF3B4E519 /* ContentView.swift */; };
 		B235513F0C1CCE3B55EC7E93 /* DriveSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F24318EB88B2A85793A51CDA /* DriveSessionManager.swift */; };
@@ -34,6 +35,7 @@
 		3B5F263755A2A9A3BD832304 /* CarDashboardPhoneUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CarDashboardPhoneUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		41E0AF98E7F8E07D4F845669 /* TelemetryPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryPacket.swift; sourceTree = "<group>"; };
 		44C43BB0CCB313C4FB88F21C /* CarDashboardPhone.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CarDashboardPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		568C2317847C250D5E170B6D /* BLEStateUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEStateUITests.swift; sourceTree = "<group>"; };
 		5FB8403418EFFC9FF3B4E519 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		6DE0D4C728A95FAA998B576A /* BLEClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEClient.swift; sourceTree = "<group>"; };
 		83A4705DB30A4F47EAD99B1A /* DeviceControlUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceControlUITests.swift; sourceTree = "<group>"; };
@@ -49,6 +51,7 @@
 		1D4C155F90026C2A2A64A479 /* CarDashboardPhoneUITests */ = {
 			isa = PBXGroup;
 			children = (
+				568C2317847C250D5E170B6D /* BLEStateUITests.swift */,
 				B0D22E82D27FEF70D93C0BC2 /* CarDashboardPhoneUITests.swift */,
 				83A4705DB30A4F47EAD99B1A /* DeviceControlUITests.swift */,
 				BE45E92AB18790F5DEEC4D67 /* LinkDiagnosticsUITests.swift */,
@@ -184,6 +187,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8A92648D6950FAAFF357B954 /* BLEStateUITests.swift in Sources */,
 				8CD13893D8207814F5D90067 /* CarDashboardPhoneUITests.swift in Sources */,
 				0CA6F67E51915967DA974C10 /* DeviceControlUITests.swift in Sources */,
 				2CAD85C2A35EDE6F108759D5 /* LinkDiagnosticsUITests.swift in Sources */,
