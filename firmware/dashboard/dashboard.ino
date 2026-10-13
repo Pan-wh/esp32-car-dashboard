@@ -21,6 +21,7 @@
  *   未连接 / 无定位 / 数据过期时，速度页显示无效状态（不伪造旧值）。
  */
 #include <Arduino.h>
+#include <Preferences.h>   /* NVS：持久化屏幕方向等用户设置 */
 #include <esp_heap_caps.h> /* PSRAM 分配 */
 #include <Wire.h>
 #include <SPI.h>
@@ -55,16 +56,19 @@ extern "C" {
  * 屏幕内容旋转（整机安装方向固定，故用固定值）：
  *   0 = 不旋转   1 = 90°   2 = 180°   3 = 270°
  *
- * ⚠️ 90°/270° 实测**不可用**，保持 0（本机安装方向已按此调整）：
- *   - CO5300 驱动无法用寄存器做 90° 旋转（Arduino_CO5300::setRotation 只做 X/Y 翻转，
- *     源码注释 "CO5300 does not support rotation"；上游 master 同样如此）
- *   - 退而用 LVGL 软件旋转（sw_rotate）时，466×466 下每帧都要经 10KB 临时缓冲旋转，
- *     实测明显卡顿；分页滚动时旋转条带次序错乱，出现撕裂/果冻效应
- *     （LVGL 源码 lv_refr.c 亦明确禁止 full_refresh + sw_rotate）
- *   - 结论：本屏在 466×466 分辨率下不做整屏旋转；若日后确需竖屏，
- *     应**按目标方向重新排版界面**，而非旋转像素
+ * 实现方式（两条独立路线，可用串口命令实测对比）：
+ *   A) LVGL 软件旋转 —— 官方支持，`06_LVGL_Widgets` 即用此法做四向切换。
+ *      · 180°：原地首尾反转，**无需临时缓冲**，成本低（draw_buf_rotate_180）
+ *      · 90°/270°：转置。本屏是**正方形**，全屏脏区正好走
+ *        `draw_buf_rotate_90_sqr()` 的**原地 4 向旋转**（不分配临时缓冲）；
+ *        非正方形的小脏区才用 LV_DISP_ROT_MAX_BUF(10KB) 分块转置。
+ *      · 运行时可切换：`lvrot 0|1|2|3`
+ *   B) 面板 MADCTL 硬件旋转 —— 若 CO5300 的 MV 位有效，则**零每帧开销**，
+ *      且文字会跟着一起正确旋转（无需改界面）。库未使用该位，需实测：
+ *      `madctl 60`(90°) / `C0`(180°) / `A0`(270°)，恢复 `madctl 0`
  *
- * 仅供调试保留：串口命令 `rot 0/1/2/3` 可运行时切换（会带来上述性能代价）。
+ * ⚠️ 软件旋转与 full_refresh / direct_mode 不兼容（LVGL 明确禁止）。
+ *    本工程为 partial 刷新模式，故可用；若日后改用全帧刷新需重新评估。
  */
 #define DISPLAY_ROT 0
 
@@ -389,6 +393,67 @@ static void apply_screen(bool off)
 }
 
 /* 消费一条 BLE 下行控制命令（主循环调用，BLE 回调只暂存） */
+/*
+ * ---------------- 屏幕方向（LVGL 软件旋转）----------------
+ *
+ * 说明：本屏为 1.75" **圆形** 466×466，旋转后仍是同一个圆，
+ *       无长宽比/布局副作用；触摸坐标由 LVGL 自动逆变换（indev_pointer_proc）。
+ *
+ * 持久化：方向存入 NVS，重启后自动恢复（用户设置不应每次掉电丢失）。
+ */
+#define ROT_PREF_NS  "dash"
+#define ROT_PREF_KEY "rot"
+
+static int s_display_rot = -1; /* 当前方向（度）；-1 = 尚未设置 */
+
+/** 角度 → lv_disp_rot_t（非 90 倍数按 0 处理；正常输入由 control.c 保证合法） */
+static lv_disp_rot_t rot_deg_to_enum(int deg)
+{
+  switch (((deg % 360) + 360) % 360) {
+    case 90:  return LV_DISP_ROT_90;
+    case 180: return LV_DISP_ROT_180;
+    case 270: return LV_DISP_ROT_270;
+    default:  return LV_DISP_ROT_NONE;
+  }
+}
+
+/**
+ * 应用屏幕方向。
+ * @param deg     0 / 90 / 180 / 270
+ * @param persist 是否写入 NVS（串口调试可传 false 以免污染用户设置）
+ */
+static void set_display_rotation(int deg, bool persist)
+{
+  deg = ((deg % 360) + 360) % 360;
+  lv_disp_set_rotation(NULL, rot_deg_to_enum(deg));
+  s_display_rot = deg;
+
+  if (persist) {
+    Preferences prefs;
+    if (prefs.begin(ROT_PREF_NS, false)) {
+      prefs.putInt(ROT_PREF_KEY, deg);
+      prefs.end();
+    }
+  }
+  Serial.printf("[旋转] 屏幕方向 -> %d°%s\n", deg, persist ? "（已存 NVS）" : "（未持久化）");
+}
+
+/** 启动时恢复上次保存的方向；无记录则用编译期默认 DISPLAY_ROT */
+static void restore_display_rotation(void)
+{
+  Preferences prefs;
+  int saved = DISPLAY_ROT * 90;   /* 编译期默认 */
+  bool from_nvs = false;
+  if (prefs.begin(ROT_PREF_NS, true)) {
+    from_nvs = prefs.isKey(ROT_PREF_KEY);   /* 先判断是否存在，才能区分来源 */
+    saved = prefs.getInt(ROT_PREF_KEY, saved);
+    prefs.end();
+  }
+  set_display_rotation(saved, false);
+  Serial.printf("[旋转] 启动恢复方向 = %d°（来源：%s）\n", s_display_rot,
+                from_nvs ? "NVS（上次用户设置）" : "编译期默认 DISPLAY_ROT");
+}
+
 static void control_poll(void)
 {
   control_cmd_t cmd;
@@ -423,6 +488,10 @@ static void control_poll(void)
       }
       break;
     }
+    case CONTROL_ROTATE:
+      /* 屏幕方向（角度由 control.c 校验为 90 的整数倍）*/
+      set_display_rotation((int)cmd.value, true);
+      break;
     default:
       break;
   }
@@ -527,14 +596,25 @@ static void lvgl_init(void)
   disp_drv.draw_buf = &draw_buf;
 
   /*
-   * 软件旋转（sw_rotate）默认为关：实测在 466×466 全屏刷新下明显卡顿，
-   * 且滚动分页会出现撕裂/果冻效应（LVGL 官方也禁止 full_refresh + sw_rotate）。
-   * CO5300 无法用寄存器做 90° 旋转，故 90°/270° 不作为常规方案；
-   * 如确需 90°，应改用「界面按旋转后重新布局」而不是整屏软件旋转。
+   * 软件旋转（sw_rotate）**常开**，以支持运行时切换方向（App/串口）。
+   *
+   * 依据：官方示例 `06_LVGL_Widgets.ino` 正是这么做的——
+   *     disp_drv.sw_rotate = 1;  // add for rotation
+   *   然后用 lv_disp_set_rotation() 按 IMU 姿态切换 0/90/180/270。
+   * 且旋转为 NONE 时**不产生任何开销**（lv_refr.c 仅在
+   * `rotated != NONE && sw_rotate` 时才走旋转路径）。
+   *
+   * ⚠️ 与 full_refresh / direct_mode 不兼容（LVGL 明确禁止）——
+   *    本工程用 partial 刷新模式，故可用。
+   *
+   * ℹ️ 先前本文件曾记录「软件旋转实测不可行」，那是**配置错误**下的结论
+   *    （当时开着 full_refresh，LVGL 会直接报 "cannot rotate a full refreshed
+   *    display!" 并放弃旋转）。已更正；按角度分档的实际开销见
+   *    docs/troubleshooting.md（180° 是原地反转，90°/270° 走原地 4 向转置）。
    */
-#if DISPLAY_ROT != 0
   disp_drv.sw_rotate = 1;
-#endif
+
+  /* 初始方向（编译期默认；运行时可用 madctl / lvrot 命令或 BLE 命令修改）*/
 #if DISPLAY_ROT == 1
   disp_drv.rotated = LV_DISP_ROT_90;
 #elif DISPLAY_ROT == 2
@@ -641,7 +721,10 @@ static void print_help(void)
   Serial.println("       screen on|off             亮屏 / 息屏");
   Serial.println("       trip [reset]              行程统计：里程/最高速/均速");
   Serial.println("       face [id|next|prev]       查看/切换表盘（不带参数=列出全部）");
-  Serial.println("       rot 0|1|2|3              屏幕内容旋转（0=0° 1=90° 2=180° 3=270°）");
+  Serial.println("       spd [kmh|reset]           诊断：查询/强制设置速度指针");
+  Serial.println("       lvrot [0|1|2|3]          【运行时】LVGL 软件旋转 0/90/180/270°（不带参数=查询）");
+  Serial.println("       madctl <hex>              【实验】直写面板 MADCTL(0x36) 验证硬件旋转");
+  Serial.println("                                 参考: 00=0° 60=90° C0=180° A0=270°；恢复 madctl 0");
   Serial.println("       mem                      显示 LVGL/ESP 内存情况");
   Serial.println("       dump                     打印当前屏幕的元素树（排查元素缺失）");
   Serial.println("       touch                    打印最近触摸采样（排查坐标镜像/旋转）");
@@ -828,6 +911,82 @@ static void process_command(char *cmd)
       ui_speed_set_fix(true, 12);
       ui_speed_set_speed(v);
       Serial.printf("[速度] 强制设为 %.1f km/h\n", (double)v);
+    }
+  }
+  else if (strncmp(cmd, "madctl", 6) == 0) {
+    /*
+     * 【实验命令】直接写面板 MADCTL(0x36)，验证 CO5300 是否支持**硬件旋转**。
+     *
+     * 为什么需要实验：
+     *   - 库的 Arduino_CO5300::setRotation() 只做 X/Y 翻转，**从不使用 MV(0x20) 位**
+     *     （90°/270° 旋转的关键位），源码注释也写 "CO5300 does not support rotation"；
+     *   - 且 setRotation() 在本工程**从未被调用** → MADCTL 一直是面板上电默认值，
+     *     其语义（含 MV 位是否有效）在本板**从未被实测**。
+     *   - 若硬件支持 MV，则 90° 旋转**零性能开销**，且面板会把**文字一起正确旋转**
+     *     → 无需重新设计界面（这是与"LVGL 软件旋转/重排布局"的本质区别）。
+     *
+     * 标准 ST7789 系取值参考（不同面板可能有差异，需实测）：
+     *   0x00 = 0°    0x60 = 90°    0xC0 = 180°    0xA0 = 270°
+     *   BGR 位可加 0x08 对比颜色顺序（RGB 系加 0x00）
+     *
+     * 恢复方式：`madctl 0`（回 0°），或按 RESET 复位（复位后回面板默认）。
+     */
+    const char *arg = cmd + 6;
+    if (*arg == '\0') {
+      Serial.println("[旋转] 用法: madctl <hex>   例: madctl 60");
+      Serial.println("       参考: 00=0°  60=90°  C0=180°  A0=270°");
+      Serial.println("       加 0x08 试 BGR 顺序，例: madctl 68");
+      Serial.println("       恢复: madctl 0  或按 RESET");
+    }
+    else {
+      unsigned int v = 0;
+      if (sscanf(arg, "%x", &v) == 1 && v <= 0xFF) {
+        bus->beginWrite();
+        bus->writeC8D8(0x36, (uint8_t)v);   /* MADCTL */
+        bus->endWrite();
+        lv_obj_invalidate(lv_scr_act());    /* 触发整屏重绘，便于观察 */
+        Serial.printf("[旋转] MADCTL <- 0x%02X；若画面异常请 `madctl 0` 或按 RESET\n", v);
+      }
+      else {
+        Serial.println("[旋转] 参数无效，应为 1-2 位十六进制（例: 60）");
+      }
+    }
+  }
+  else if (strncmp(cmd, "lvrot", 5) == 0) {
+    /*
+     * 【运行时软件旋转】用 LVGL 官方的 lv_disp_set_rotation() 切换方向。
+     *
+     * 依据：官方示例 `06_LVGL_Widgets.ino` 正是此法（disp_drv.sw_rotate = 1 +
+     * 按 IMU 姿态调 lv_disp_set_rotation），四种角度均受支持。
+     *
+     * 本屏为圆形，旋转后仍是同一个圆 → **无长宽比/布局副作用**。
+     * 触摸坐标由 LVGL 自动做逆变换（indev_pointer_proc），无需自行处理。
+     *
+     * 开销按角度分档（见 lv_refr.c）：
+     *   0°   —— 无开销（不进入旋转路径）
+     *   180° —— 原地首尾反转，无需临时缓冲，成本低
+     *   90/270° —— 转置；本屏全屏脏区为**正方形**，走原地 4 向旋转
+     *              （draw_buf_rotate_90_sqr），同样不分配临时缓冲
+     */
+    const char *arg = cmd + 5;
+    lv_disp_t *d = lv_disp_get_default();
+    if (*arg == '\0') {
+      Serial.printf("[旋转] 当前 LVGL 旋转=%d（%d°），sw_rotate=%d\n",
+                    d ? (int)d->driver->rotated : -1,
+                    d ? (int)d->driver->rotated * 90 : 0,
+                    d ? (int)d->driver->sw_rotate : 0);
+      Serial.println("       用法: lvrot 0|1|2|3  →  0°/90°/180°/270°");
+    }
+    else {
+      int r = atoi(arg);
+      if (r >= 0 && r <= 3) {
+        /* 调试命令：**不持久化**，避免调试残留污染用户设置。
+           正式用户设置走 BLE {"cmd":"rotate","value":90}，那条会写 NVS。 */
+        set_display_rotation(r * 90, false);
+      }
+      else {
+        Serial.println("[旋转] 参数应为 0-3（0°/90°/180°/270°）");
+      }
     }
   }
   else if (strncmp(cmd, "face", 4) == 0) {
@@ -1078,6 +1237,9 @@ void setup()
 
   /* 业务 UI：全部页面（模拟时钟 / 数字时钟 / 速度表盘） */
   ui_pages_init();
+
+  /* 恢复上次保存的屏幕方向（NVS）；无记录则用编译期默认 DISPLAY_ROT */
+  restore_display_rotation();
   ui_pages_show(DEFAULT_PAGE);
 
   /*

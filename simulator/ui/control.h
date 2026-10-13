@@ -6,6 +6,14 @@
  *   {"cmd":"screen","value":"off"}      息屏（仅关显示，触摸仍可唤醒由固件决定）
  *   {"cmd":"screen","value":"on"}       亮屏
  *   {"cmd":"face","value":2}            切换表盘（功能③预留）
+ *   {"cmd":"rotate","value":90}         屏幕方向 0/90/180/270（度）
+ *
+ * 屏幕方向说明（rotate）：
+ *   用**角度**而非"索引"表达，避免与其余命令的 0 基索引混淆。
+ *   仅接受 90 的整数倍（其余值判为非法，避免误配方向）；
+ *   超出 0-359 的值按 mod 360 归一（如 -90 → 270）。
+ *   实现走 LVGL 软件旋转（官方支持，见 06_LVGL_Widgets 示例）；
+ *   本屏为**圆形**，旋转后仍是同一个圆，无长宽比/布局副作用。
  *
  * 设计原则：解析层不含任何硬件调用，纯函数 + 结构体输出，便于单测；
  * 硬件副作用（setBrightness / displayOff）由固件侧应用。
@@ -26,6 +34,7 @@ typedef enum {
     CONTROL_BRIGHTNESS, /* value = 0..255 */
     CONTROL_SCREEN,     /* value = 0 关屏 / 1 亮屏 */
     CONTROL_FACE,       /* value = 表盘 id（>=0）*/
+    CONTROL_ROTATE,     /* value = 屏幕方向角度：0 / 90 / 180 / 270 */
 } control_kind_t;
 
 typedef struct {
