@@ -614,6 +614,11 @@ static void control_poll(void)
 
       if (ui_pages_set_face(target)) {
         ui_face_sweep_if_speed(target); /* #2b 切到速度表盘 → 自检扫表 */
+        /*
+         * 切完**重新上报**：上报里带当前表盘(cur)，App 据此显示"当前是哪个"。
+         * 若不上报，App 只能靠本地猜测，设备因隐藏而自动切换时就会指错。
+         */
+        s_faces_dirty = true;
         Serial.printf("[控制] 表盘 %d(%s) → %d(%s)\n", cur, ui_pages_current_face_name(), target,
                       ui_pages_current_face_name());
       }

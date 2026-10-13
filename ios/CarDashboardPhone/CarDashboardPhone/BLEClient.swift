@@ -133,7 +133,20 @@ final class BLEClient: NSObject, ObservableObject {
     /// 便捷方法：切换到指定表盘（功能③）
     @discardableResult
     func setFace(_ id: Int) -> Bool {
-        sendCommand("{\"cmd\":\"face\",\"value\":\(id)}")
+        #if DEBUG
+        if BLEClient.demoModeEnabled {
+            // 演示模式：无设备可写，就地更新"当前表盘"，让界面有反馈
+            let ok = faces.faces.contains { $0.id == id && $0.enabled }
+            if ok {
+                faces.currentId = id
+                lastNotice = "演示模式：当前表盘 → \(id)"
+            } else {
+                lastNotice = "演示模式：表盘 \(id) 不可用或已隐藏"
+            }
+            return ok
+        }
+        #endif
+        return sendCommand("{\"cmd\":\"face\",\"value\":\(id)}")
     }
 
     /// 启用 / 隐藏某个表盘。设备侧会拒绝"隐藏最后一个"，
@@ -164,7 +177,7 @@ final class BLEClient: NSObject, ObservableObject {
         // 与真机实际上报**完全一致**（3 个分组、5 个表盘），
         // 这样截图能代表用户实际会看到的样子。
         let json = """
-        {"t":"faces","v":1,"count":5,"mask":31,"cur":2,"faces":[\
+        {"t":"faces","v":1,"count":5,"mask":31,"cur":0,"faces":[\
         {"id":0,"name":"analog","label":"Analog","group":"clock","on":1},\
         {"id":1,"name":"digital","label":"Digital","group":"clock","on":1},\
         {"id":2,"name":"speed","label":"Speed","group":"speed","on":1},\

@@ -54,12 +54,12 @@
 | iOS 纯逻辑（Swift）| 32 | 同上（`make run` 内含）|
 | `test_nav_core` (Swift) | 156 | **iOS 导航核心**：投影/进度/偏航/**重算**/到达/过期（编译 App 真实源文件）|
 | `test_nav_sim` (Swift) | 43 | **Mac 模拟器**：路线解码/行车推进/法向偏航/**重算调度**/消息序列（不需设备）|
-| `test_device_faces` (Swift) | 43 | **App 表盘解析**：分组/本地化/未知兜底/截断拒绝 |
+| `test_device_faces` (Swift) | 47 | **App 表盘解析**：分组/本地化/未知兜底/截断拒绝 |
 | `gateway` (Node) | 58 | 导航网关：坐标转换/动作映射/归一化/HTTP + **真实响应结构回归**（全离线）|
-| **单测小计** | **782** | |
+| **单测小计** | **786** | |
 | UI 像素级回归 | 33 | `tools/ui_regression.py` |
 | XCUITest | 5 | `tools/run_ios_tests.sh` |
-| **自动化总计** | **820** | |
+| **自动化总计** | **824** | |
 
 ---
 

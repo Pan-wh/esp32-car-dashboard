@@ -208,13 +208,13 @@ ESP32-S3 (dashboard.ino)
 | `test_face_report` (C) | 53 | 表盘列表上报（JSON 结构/分组/截断）|
 | `test_nav_core` (Swift) | 156 | iOS 导航核心（含**偏航重算**）+ 坐标跨语言一致性 |
 | `test_nav_sim` (Swift) | 43 | Mac 模拟器（行车推进/法向偏航/**重算调度**/消息序列）|
-| `test_device_faces` (Swift) | 43 | App 表盘解析（分组/本地化/未知兜底）|
+| `test_device_faces` (Swift) | 47 | App 表盘解析（分组/本地化/未知兜底）|
 | `gateway` (Node) | 58 | 导航网关（含真实响应结构回归，全离线）|
 | `test_ios_logic` | 32 | iOS 侧纯逻辑（Swift）|
-| **单测小计** | **782** | `cd tests && make run` |
+| **单测小计** | **786** | `cd tests && make run` |
 | `ui_regression.py` | 33 | UI 像素级回归 |
 | XCUITest | 5 | 会话/遥测计数/设备控制/链路诊断/BLE 状态 |
-| **自动化总计** | **820** | |
+| **自动化总计** | **824** | |
 
 **真机验证**（iPhone 12 / iOS 27）：§9 矩阵 **12/12 通过**，DoD **8/8 达成**。
 
