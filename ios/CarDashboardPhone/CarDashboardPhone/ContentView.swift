@@ -10,11 +10,19 @@ import CoreBluetooth
 struct ContentView: View {
     @StateObject private var session = DriveSessionManager()
 
-    /// 表盘列表（**必须与固件 ui_face 注册顺序严格一致**：
-    /// 0 analog / 1 digital / 2 speed / 3 color）。
-    /// 新增表盘时此处必须同步，否则 App 选不到它（BLE 侧其实已支持）。
+    /// 表盘列表（**必须与固件 ui_face 注册顺序严格一致**）。
+    ///
+    /// 与 `simulator/ui/ui_pages.c` 的注册顺序一一对应：
+    ///   0 analog / 1 digital / 2 speed / 3 color / 4 nav
+    ///
+    /// ⚠️ 新增表盘时**此处必须手动同步**（见 docs/tasks/new-face.md §5），
+    /// 否则 App 选不到它 —— BLE 侧其实已支持，只是选择器里没有这一项。
+    ///
+    /// 注：`ui_face.h` 曾称"设备上报表盘列表、App 无需改代码"，
+    /// 但**该上报尚未实现**（docs/ble.md 亦无此协议），故当前必须手工维护。
     private let faces: [(id: Int, name: String)] = [
         (0, "模拟时钟"), (1, "数字时钟"), (2, "速度表"), (3, "多彩时钟"),
+        (4, "导航卡片"),
     ]
     /// 屏幕方向选项（度）—— 只列 90 的整数倍，与固件 control.c 的严格校验一致。
     /// 仪表侧走 LVGL 软件旋转（本屏为圆形，旋转无长宽比副作用），
