@@ -67,7 +67,9 @@ void ui_clock_create(lv_obj_t *parent)
 {
     /* 背景：纯黑 */
     lv_obj_set_style_bg_color(parent, lv_color_hex(UI_BG_COLOR), 0);
-    lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
+    /* 页面背景透明：整屏黑色底色由 scr 提供，避免滑页时每页各做一次
+       整屏不透明填充（434K 像素 × 页数），可显著降低整屏重绘成本 */
+    lv_obj_set_style_bg_opa(parent, LV_OPA_TRANSP, 0);
 
     /* 日期（次要信息，弱化，置于时间上方） */
     s_label_date = lv_label_create(parent);

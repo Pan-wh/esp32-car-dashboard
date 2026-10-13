@@ -134,6 +134,20 @@ static struct {
 } s_last_gest = { "-", "-", -1, -1 };
 static int s_page_seen = -1; /* loop 中持续记录，便于取 before */
 
+/*
+ * ---- 触摸锁存（修复「滑页无反应」）----
+ * 问题：一帧渲染要 200ms 左右，LVGL 的 indev 读取被拖慢到 ~4 次/秒。
+ * 若用户快速滑动（按下→移动→抬起）整个发生在一次渲染阻塞期间，LVGL 下次读
+ * 到的已经是「松开」状态 → 完全感知不到这次触摸 → 表现为「操作无反应」。
+ * 解决：用 esp_timer 以 100Hz 独立采样触摸（不受渲染阻塞影响），并**锁存按下**：
+ * LVGL 每次读取时，若期间发生过按下，就补报一次 PRESSED，保证它一定看得见
+ * 一个完整的 按下→（移动）→松开 序列。
+ */
+static volatile bool s_tp_pressed = false;  /* 最新采样：是否按下 */
+static volatile int16_t s_tp_x = 0, s_tp_y = 0;
+static volatile bool s_tp_press_latch = false; /* 自上次 LVGL 读取后发生过按下 */
+static portMUX_TYPE s_tp_mux = portMUX_INITIALIZER_UNLOCKED;
+
 static void tlog_add(int16_t x, int16_t y, bool pressed)
 {
   s_tlog[s_tlog_head].ms = millis();
@@ -230,19 +244,50 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
  * 触摸读取：每帧轮询（比官方示例的「仅靠中断置位」更简单可靠，
  * 且能持续上报位置 —— LVGL 的手势（滑页）需要按住期间的连续坐标）。
  */
-static void touchpad_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
+/* 100Hz 触摸采样（esp_timer 回调，独立于主循环/渲染） */
+static void touch_sample_cb(void *)
 {
   uint8_t n = touch.getPoint(touch_x, touch_y, touch.getSupportTouchPoint());
-
+  portENTER_CRITICAL(&s_tp_mux);
   if (n > 0) {
-    last_x = touch_x[0];
-    last_y = touch_y[0];
+    s_tp_pressed = true;
+    s_tp_x = touch_x[0];
+    s_tp_y = touch_y[0];
+    s_tp_press_latch = true; /* 记录「期间按下过」 */
+  }
+  else {
+    s_tp_pressed = false;
+  }
+  portEXIT_CRITICAL(&s_tp_mux);
+}
+
+static void touchpad_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
+{
+  bool pressed, latch;
+  int16_t x, y;
+
+  portENTER_CRITICAL(&s_tp_mux);
+  pressed = s_tp_pressed;
+  latch = s_tp_press_latch;
+  x = s_tp_x;
+  y = s_tp_y;
+  if (latch) s_tp_press_latch = false; /* 消费掉锁存 */
+  portEXIT_CRITICAL(&s_tp_mux);
+
+  /*
+   * 只要最新采样是按下，或期间按下过（锁存），就报 PRESSED。
+   * 锁存保证「快速滑动恰好落在一次渲染阻塞内」时 LVGL 仍能收到按下事件，
+   * 下一次读取才报 RELEASED，从而形成完整的按下→移动→松开序列。
+   */
+  if (pressed || latch) {
+    last_x = x;
+    last_y = y;
     data->state = LV_INDEV_STATE_PRESSED;
   }
   else {
     data->state = LV_INDEV_STATE_RELEASED;
   }
-  tlog_add(last_x, last_y, n > 0);
+  tlog_add(last_x, last_y, pressed || latch);
 
   data->point.x = last_x;
   data->point.y = last_y;
@@ -403,6 +448,16 @@ static void lvgl_init(void)
   indev_drv.type = LV_INDEV_TYPE_POINTER;
   indev_drv.read_cb = touchpad_read_cb;
   lv_indev_drv_register(&indev_drv);
+
+  /* 触摸 100Hz 独立采样（见 touch_sample_cb 注释：防渲染阻塞导致丢触摸） */
+  {
+    const esp_timer_create_args_t tp_args = { .callback = &touch_sample_cb,
+                                             .name = "tp_sample" };
+    esp_timer_handle_t tp_timer = NULL;
+    if (esp_timer_create(&tp_args, &tp_timer) == ESP_OK) {
+      esp_timer_start_periodic(tp_timer, 10000); /* 10ms = 100Hz（1MHz 时基 → 微秒） */
+    }
+  }
 
   /* LVGL 心跳：务必存在，否则所有 lv_timer 不触发（时钟不走/秒针不动） */
   const esp_timer_create_args_t tick_args = { .callback = &lvgl_tick_cb, .name = "lvgl_tick" };

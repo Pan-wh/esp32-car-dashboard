@@ -515,7 +515,9 @@ static void build(lv_obj_t *parent)
     for (int i = 0; i < SEG_CNT; i++) s_segs[i] = NULL;
 
     lv_obj_set_style_bg_color(parent, lv_color_hex(C_BG), 0);
-    lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
+    /* 页面背景透明：整屏黑色底色由 scr 提供，避免滑页时每页各做一次
+       整屏不透明填充（434K 像素 × 页数），可显著降低整屏重绘成本 */
+    lv_obj_set_style_bg_opa(parent, LV_OPA_TRANSP, 0);
 
     switch (s_variant) {
     case 1: build_v2(parent); break;
