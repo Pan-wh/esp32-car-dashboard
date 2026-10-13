@@ -99,6 +99,19 @@ struct ContentView: View {
                         row("速度", speedKmh.map { String(format: "%.1f km/h", $0) } ?? "--")
                         row("航向", loc.course >= 0 ? String(format: "%.0f°", loc.course) : "--")
                         row("定位精度", String(format: "±%.0f m", loc.horizontalAccuracy))
+
+                        // ---- 诊断：速度为何被判无效（AI_TASK §5 质量门槛）----
+                        // speed_valid 由 TelemetryQuality.isSpeedUsable() 决定，
+                        // 关键门槛：speed >= 0 且 speedAccuracy <= 2.0 m/s
+                        let speedOK = TelemetryQuality.isSpeedUsable(loc)
+                        let locOK = TelemetryQuality.isLocationUsable(loc)
+                        row("速度质量", speedOK ? "通过" : "被拦（不发送）")
+                        if #available(iOS 17.0, *) {
+                            let sa = loc.speedAccuracy
+                            row("测速精度", sa >= 0 ? String(format: "±%.2f m/s", sa) : "未知（负值）")
+                        }
+                        row("定位质量", locOK ? "通过" : "被拦（不发送）")
+                        row("speed 原始值", String(format: "%.2f m/s", loc.speed))
                         row("纬度", String(format: "%.4f", loc.coordinate.latitude))
                         row("经度", String(format: "%.4f", loc.coordinate.longitude))
                         row("高度", String(format: "%.0f m", loc.altitude))

@@ -163,7 +163,7 @@ int main(int argc, char **argv)
     int fh = -1, fm = 0, fs = 0;
     int speed_variant = 0;
     int status_state = -1; /* --status N：设置五态链路状态（用于安全区/文案验证） */
-    float speed_kmh = 88.0f;
+    float speed_kmh = 0.0f;
     int nofix = 0;
     int driver_state = UI_DRIVER_AUTO;
     const char *nmea_path = NULL;
