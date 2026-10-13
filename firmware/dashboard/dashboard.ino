@@ -79,6 +79,10 @@ static Arduino_CO5300 *gfx = new Arduino_CO5300(
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t buf[LCD_WIDTH * LCD_HEIGHT / 10]; /* 与官方示例相同的缓冲大小 */
 
+/* 性能诊断：重绘/循环速率（卡顿回归的客观指标，见 docs/troubleshooting.md）*/
+static volatile uint32_t s_flush_cnt = 0;
+static uint32_t s_loop_cnt = 0;
+
 /* ---------------- 触摸 ---------------- */
 
 static TouchDrvCST92xx touch;
@@ -180,6 +184,7 @@ static void rounder_cb(struct _lv_disp_drv_t *disp_drv, lv_area_t *area)
 
 static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
 {
+  s_flush_cnt++;
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
 
@@ -848,6 +853,7 @@ static void ble_update(void)
 
 void loop()
 {
+  s_loop_cnt++;                /* 性能：循环速率 */
   handle_serial();            /* 串口命令：校时 / 切页 */
   ble_poll();                 /* 取 BLE 遥测 + 校时（无新数据直接返回） */
   ble_update();               /* 五态状态机，每循环驱动速度页 */
@@ -855,11 +861,19 @@ void loop()
   lv_timer_handler();
   delay(5);
 
-  /* 心跳日志：每 5 秒打印一次运行状态，便于串口排查 */
+  /* 心跳日志：每 5 秒打印运行状态 + 重绘/循环速率（性能回归监测）*/
   static uint32_t last = 0;
+  static uint32_t last_flush = 0, last_loop = 0;
   if (millis() - last > 5000) {
-    last = millis();
-    Serial.printf("[运行] %lu s  空闲堆 %u B\n", (unsigned long)(millis() / 1000),
-                  (unsigned)ESP.getFreeHeap());
+    uint32_t now = millis();
+    uint32_t dt = now - last;
+    last = now;
+    uint32_t f = s_flush_cnt, l = s_loop_cnt;
+    Serial.printf("[运行] %lu s  空闲堆 %u B  循环 %u/s  重绘 %u/s\n",
+                  (unsigned long)(now / 1000), (unsigned)ESP.getFreeHeap(),
+                  (unsigned)((l - last_loop) * 1000UL / dt),
+                  (unsigned)((f - last_flush) * 1000UL / dt));
+    last_flush = f;
+    last_loop = l;
   }
 }
