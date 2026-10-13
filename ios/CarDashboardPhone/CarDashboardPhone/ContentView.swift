@@ -19,6 +19,12 @@ struct ContentView: View {
     /// 设备实际存在的分组（通常 3 个：时钟 / 速度表 / 导航）
     private var groups: [String] { session.ble.faces.grouped.map { $0.group } }
 
+    /// 当前正在显示的表盘 id（**以设备上报的 `cur` 为准**）。
+    ///
+    /// 为什么不存本地状态：设备可能因"隐藏了当前表盘"而自动切到别的表盘，
+    /// 本地状态不会知道；只信本地就会出现"勾选指向一个已经不是当前的表盘"。
+    private var currentFaceId: Int { session.ble.faces.currentId }
+
     /// **有效分组**：派生值，不靠 onChange 去"同步"。
     ///
     /// 之前把 selectedGroup 当独立状态、在 onChange 里跟上报对齐，结果
@@ -29,7 +35,7 @@ struct ContentView: View {
         if !selectedGroup.isEmpty && groups.contains(selectedGroup) { return selectedGroup }
         // 首次打开时优先显示**当前表盘所在的分组** —— 否则默认停在第一个分组，
         // 而当前表盘在别的分组里，用户会看不到 ✓ 标记、以为"没有当前表盘"。
-        if let cur = deviceFaces.first(where: { $0.id == session.ble.faces.currentId }) {
+        if let cur = deviceFaces.first(where: { $0.id == currentFaceId }) {
             return cur.group
         }
         return groups.first ?? ""
@@ -48,8 +54,12 @@ struct ContentView: View {
     private let rotations = [0, 90, 180, 270]
     @State private var selectedRotation = 0
 
-    @State private var selectedFace = 2
     /// 当前选中的**分组**（不是表盘）。分组来自设备上报。
+    ///
+    /// 注：「当前表盘」**不设本地状态** —— 它同样以设备上报的 `cur` 为准
+    /// （见 `currentFaceId`）。之前用 @State + onChange 同步，结果 onChange
+    /// 在上报到达时没触发，勾选标记指不到当前表盘。
+    /// 教训一致：**能从数据派生的，就不要另存一份状态去同步**。
     @State private var selectedGroup = ""
     @State private var brightness: Double = 200
     @State private var screenOn = true
@@ -161,33 +171,10 @@ struct ContentView: View {
                         .pickerStyle(.segmented)
 
                         // 二级：**只列出当前分组**的表盘
+                        // 行布局：左=表盘图标（区分是哪种表盘）｜中=名称
+                        //         右=「切到这个表盘」按钮 + 「是否在滑动序列中」开关
                         ForEach(facesInSelectedGroup) { f in
-                            HStack {
-                                Button {
-                                    selectedFace = f.id
-                                    _ = session.ble.setFace(f.id)
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: f.id == selectedFace
-                                              ? "checkmark.circle.fill" : "circle")
-                                            .foregroundColor(f.id == selectedFace
-                                                             ? .accentColor : .secondary)
-                                        Text(FaceDisplay.faceTitle(name: f.name,
-                                                                   fallbackLabel: f.label))
-                                            .foregroundColor(.primary)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-
-                                Spacer()
-
-                                Toggle("", isOn: Binding(
-                                    get: { f.enabled },
-                                    set: { on in _ = session.ble.setFaceEnabled(f.id, on) }
-                                ))
-                                .labelsHidden()
-                                .accessibilityLabel("显示\(FaceDisplay.faceTitle(name: f.name, fallbackLabel: f.label))")
-                            }
+                            faceRow(f)
                         }
 
                         if let notice = session.ble.lastNotice {
@@ -199,7 +186,7 @@ struct ContentView: View {
                 } footer: {
                     if !deviceFaces.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("点名称切换到该表盘（✓ 为当前）；开关控制是否出现在滑动序列中。")
+                            Text("→ 切到该表盘（✓ 为当前显示的）；开关控制是否出现在滑动序列中。")
                             if session.ble.faces.enabledCount <= 1 {
                                 Text("至少保留一个表盘，最后一个无法隐藏。")
                             }
@@ -259,12 +246,7 @@ struct ContentView: View {
             // 设备上报变化时校正本地选择：
             //   - 选中的分组没了（设备改版）→ 退回第一个分组
             //   - 当前表盘以**设备上报的 cur 为准**（设备可能因隐藏而自动切换过）
-            // 当前表盘以**设备上报的 cur 为准**：设备可能因隐藏而自动切换过，
-            // 若只信本地状态，勾选标记就会指向一个已经不是当前的表盘。
-            // （分组选中态是派生值，不需要在这里同步。）
-            .onChange(of: session.ble.faces.currentId) { _, cur in
-                if cur >= 0 { selectedFace = cur }
-            }
+            // 分组选中态与"当前表盘"都是**派生值**，无需在这里做任何同步。
             }
         }
         /*
@@ -282,6 +264,60 @@ struct ContentView: View {
             guard !didAutoConnect else { return }
             didAutoConnect = true
             session.ble.scanAndConnect()
+        }
+    }
+
+    /// 单个表盘行。
+    ///
+    /// 布局取舍（按用户反馈调整）：
+    ///   - **左侧放表盘图标**，不是勾选标记 —— 勾选放在名称前既占位又不表意，
+    ///     图标才能一眼区分"这是哪种表盘"。
+    ///   - **切换**与**显隐**是两个动作，各自有明确控件：
+    ///       右侧「→ / ✓」按钮 = 切到这个表盘（✓ 表示已经是当前，置灰不可点）
+    ///       最右开关        = 是否出现在滑动序列中
+    ///     之前把"切换"藏在"点名称"里，不显眼也不易发现。
+    @ViewBuilder
+    private func faceRow(_ f: DeviceFace) -> some View {
+        let title = FaceDisplay.faceTitle(name: f.name, fallbackLabel: f.label)
+        let isCurrent = (f.id == currentFaceId)
+
+        HStack(spacing: 12) {
+            // 左：表盘图标（隐藏时同时变淡，一眼看出不在序列里）
+            Image(systemName: FaceDisplay.faceSymbol(name: f.name))
+                .font(.system(size: 17, weight: .medium))
+                .foregroundColor(f.enabled ? .accentColor : .secondary)
+                .frame(width: 34, height: 34)
+                .background(
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(Color.accentColor.opacity(f.enabled ? 0.14 : 0.05))
+                )
+                .accessibilityHidden(true)
+
+            Text(title)
+                .foregroundColor(f.enabled ? .primary : .secondary)
+
+            Spacer(minLength: 8)
+
+            // 右一：切到这个表盘。已在当前 / 已隐藏时禁用（点它没有意义）
+            Button {
+                // 不设本地状态：切完由设备重新上报 cur，界面自然收敛到真值
+                _ = session.ble.setFace(f.id)
+            } label: {
+                Image(systemName: isCurrent ? "checkmark.circle.fill" : "arrow.right.circle")
+                    .font(.system(size: 21))
+                    .foregroundColor(isCurrent ? .accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(!f.enabled || isCurrent)
+            .accessibilityLabel(isCurrent ? "\(title)（当前显示的）" : "切换到\(title)")
+
+            // 右二：是否出现在滑动序列中
+            Toggle("", isOn: Binding(
+                get: { f.enabled },
+                set: { on in _ = session.ble.setFaceEnabled(f.id, on) }
+            ))
+            .labelsHidden()
+            .accessibilityLabel("在滑动序列中显示\(title)")
         }
     }
 

@@ -113,6 +113,25 @@ enum FaceDisplay {
         }
     }
 
+    /// 表盘图标（SF Symbol 名）。
+    ///
+    /// 同样按**稳定 `name`** 查表 —— 与 `faceTitle` 一致：
+    /// 设备新增表盘时用通用图标兜底，不需要改 App。
+    ///
+    /// 为什么不用真实缩略图：那需要设备侧额外做"渲染 → 编码 → 分片传输"，
+    /// 是另一个量级的功能；这里的目的是让人**一眼区分是哪种表盘**。
+    static func faceSymbol(name: String) -> String {
+        switch name {
+        case "analog": return "clock"
+        case "digital": return "number.square"
+        case "color": return "paintpalette"
+        case "speed": return "speedometer"
+        case "nav": return "location.north.line"
+        case "photo": return "photo"
+        default: return "square.grid.2x2"
+        }
+    }
+
     /// 表盘：优先按稳定 `name` 本地化，**未收录则用设备给的 label**
     /// —— 这是设备新增表盘时 App 无需改动的关键。
     static func faceTitle(name: String, fallbackLabel: String) -> String {

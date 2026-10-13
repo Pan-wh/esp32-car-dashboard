@@ -188,6 +188,19 @@ func testCurrentFace() {
     }
 }
 
+func testFaceSymbols() {
+    print("--- 表盘图标映射 ---")
+    // 已知表盘应有各自的图标（不能都一样，否则区分不了）
+    let known = ["analog", "digital", "color", "speed", "nav"]
+    let symbols = known.map { FaceDisplay.faceSymbol(name: $0) }
+    check(symbols.allSatisfy { !$0.isEmpty }, "图标名不应为空")
+    check(Set(symbols).count == known.count, "★ 每个表盘的图标应互不相同，实际 \(symbols)")
+    // 未知表盘要有兜底图标（不能为空，否则界面上留白）
+    check(FaceDisplay.faceSymbol(name: "weather") == "square.grid.2x2",
+          "未收录表盘应回退到通用图标，实际 \(FaceDisplay.faceSymbol(name: "weather"))")
+    check(!FaceDisplay.faceSymbol(name: "").isEmpty, "空 name 也要有图标")
+}
+
 @main
 struct TestDeviceFaces {
     static func main() {
@@ -201,6 +214,7 @@ struct TestDeviceFaces {
         testRejectsBadInput()
         testPartialFieldTolerance()
         testCurrentFace()
+        testFaceSymbols()
         print("结果: \(gPass) 通过, \(gFail) 失败")
         exit(gFail == 0 ? 0 : 1)
     }
