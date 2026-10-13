@@ -1,0 +1,63 @@
+{
+  "_comment": [
+    "⚠️ 这是**人工构造的样例**，用于验证归一化逻辑，不是真实抓包。",
+    "字段名依据高德 Web 服务文档的常见形状（v3 驾车路径规划）编写；",
+    "首次接入真实 Key 后，请用 `npm run probe` 拉一次真实响应，",
+    "把原始 JSON 覆盖到本文件（去掉 _comment），使测试基于**真实字段**。",
+    "高德把数字返回为字符串，这里刻意保留字符串形式以覆盖该情形。"
+  ],
+  "status": "1",
+  "info": "OK",
+  "infocode": "10000",
+  "count": "1",
+  "route": {
+    "origin": "116.397428,39.909230",
+    "destination": "116.481028,39.989643",
+    "taxi_cost": "25",
+    "paths": [
+      {
+        "distance": "10234",
+        "duration": "1200",
+        "strategy": "速度最快",
+        "tolls": "0",
+        "steps": [
+          {
+            "instruction": "向东行驶120米右转",
+            "orientation": "东",
+            "road_name": "",
+            "step_distance": "120",
+            "polyline": "116.397428,39.909230;116.398500,39.909230"
+          },
+          {
+            "instruction": "左转进入建国门内大街",
+            "orientation": "北",
+            "road_name": "建国门内大街",
+            "step_distance": "2400",
+            "polyline": "116.398500,39.909230;116.398500,39.930000"
+          },
+          {
+            "instruction": "靠右行驶进入东二环",
+            "orientation": "北",
+            "road_name": "东二环",
+            "step_distance": "5000",
+            "polyline": "116.398500,39.930000;116.410000,39.960000"
+          },
+          {
+            "instruction": "左转掉头",
+            "orientation": "南",
+            "road_name": "",
+            "step_distance": "1500",
+            "polyline": "116.410000,39.960000;116.420000,39.970000"
+          },
+          {
+            "instruction": "到达目的地",
+            "orientation": "东",
+            "road_name": "",
+            "step_distance": "1214",
+            "polyline": "116.420000,39.970000;116.481028,39.989643"
+          }
+        ]
+      }
+    ]
+  }
+}

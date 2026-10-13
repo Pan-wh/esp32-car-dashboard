@@ -1,0 +1,15 @@
+{
+  "name": "car-dashboard-nav-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "导航网关：为 iPhone 侧代理高德 Web 服务（Key 只在服务端）",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test \"test/**/*.test.js\"",
+    "probe": "node bin/probe.js"
+  }
+}
