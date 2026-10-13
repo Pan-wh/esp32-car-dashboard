@@ -20,6 +20,7 @@
 | [`docs/architecture.md`](docs/architecture.md) | 系统架构、模块划分、共享代码层 |
 | [`docs/ble.md`](docs/ble.md) | BLE 协议细节（GATT、JSON 字段）|
 | [`docs/decisions.md`](docs/decisions.md) | 设计决策（含已被取代的决策，保留历史）|
+| [`docs/nav-backend.md`](docs/nav-backend.md) | 导航数据源/网关：**引用归属、部署、维护、合规风险**（阶段 3）|
 | [`docs/hardware.md`](docs/hardware.md) | 硬件规格与引脚 |
 | [`docs/setup-macos.md`](docs/setup-macos.md) | 开发环境搭建 |
 | [`docs/ui-guidelines.md`](docs/ui-guidelines.md) | UI 规范与遗留设计选项 |
@@ -226,7 +227,7 @@ ESP32-S3 (dashboard.ino)
 | 中 | flick 手势的旋转坐标补偿（90°/270° 下滑动失效、翻页退化成慢拖拽）| 补丁已备好且映射已逐点验证（与 `lv_indev.c` 公式 **9676 点全部一致**）；**仓库内尚未应用**（整体编译待并行改动落地后补跑）。见清单 §3 | 小 |
 | **高** | 面板 MADCTL 硬件旋转（`madctl 60/C0/A0`）| **仍未实测**：库从不使用 MV(0x20) 位。⚠️ 取值与微雪 IDF BSP `bsp_display_rotation_set()` 完全一致，但该函数在厂商仓库内**无任何调用者** → 厂商同样未验证。若有效可去掉软件旋转的每帧开销与拆块（**必须同步改触摸映射**）| 小（实验）|
 | 低 | UI 设计定稿：状态标签与指针重叠 | 5 个候选方案见 [`ui-guidelines.md`](docs/ui-guidelines.md) | 小 |
-| 中 | 导航**阶段 3**：iPhone 真实导航数据（阶段 2 协议已完成）| ⏳ 待数据源决策 | 大 |
+| 中 | 导航**阶段 3**：iPhone 真实导航数据 | ✅ 数据源已定（**高德 + 自建网关**，见 [nav-backend.md](docs/nav-backend.md)）；导航状态机放手机端，ESP32 只做显示。⚠️ **含合规风险**：高德 §3.4 禁止未获许可用于车载场景，本项目先做技术验证、不公开分发/不商业化 | 大 |
 | 低 | 行程统计上屏 | 数据已有（`trip` 串口命令可查），仅需 UI 呈现 | 小 |
 
 ---
