@@ -25,6 +25,13 @@ import { MANEUVER } from '../src/maneuver.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SAMPLE = JSON.parse(readFileSync(join(HERE, 'fixtures/amap-driving-sample.json'), 'utf8'));
+/**
+ * 结构夹具：**字段名与层级来自真实响应**（2026-10-13 用真实 Key 核对），
+ * 但数值/坐标/路名/折线为**合成数据** —— 高德协议 §3.5 禁止直接存储其服务数据，
+ * 而回归保护针对的是"字段名与结构"，用合成值同样有效。
+ * 由 gateway/test/make-structural-fixture.js 生成。
+ */
+const REAL = JSON.parse(readFileSync(join(HERE, 'fixtures/amap-driving-v3.json'), 'utf8'));
 
 const META = {
   origin: { lon: 116.397428, lat: 39.90923 },
@@ -183,4 +190,68 @@ test('stepAt：空步骤安全降级', () => {
   assert.equal(r.maneuver, MANEUVER.UNKNOWN);
   assert.equal(r.distanceToManeuverM, null);
   assert.equal(stepAt(null, 0).maneuver, MANEUVER.UNKNOWN);
+});
+
+
+// ─────────────────────────────────────────────────────────────
+// 真实响应回归（用真实 Key 抓取，见 fixtures/amap-driving-real.json）
+//
+// 这组测试是**字段名的真实保护**：最初的实现按文档猜测使用了
+// `step_distance` / `road_name`，而实测是 `distance` / `road`。
+// 若上游改字段名，这组测试会失败并直接指出问题。
+// ─────────────────────────────────────────────────────────────
+
+test('★ 真实结构：字段名正确解析（distance / road / action）', () => {
+  const b = normalizeRoute(REAL, META);
+  assert.equal(b.distanceM, 1260, '路径级总距离（合成值：100+110+…+180）');
+  assert.equal(b.durationS, 600, '总时长');
+  assert.equal(b.steps.length, 9, '步骤数');
+
+  // 每一步都必须有距离。**这是字段名保护的核心**：
+  // 最初的实现读的是 step_distance（实际是 distance），会导致这里全是 null。
+  const missing = b.steps.filter((s) => s.distanceM === null);
+  assert.equal(missing.length, 0, `不应有缺距离的步骤，实际缺 ${missing.length} 个`);
+
+  // 路名来自 steps[].road（不是 road_name）
+  assert.equal(b.steps[0].roadName, '示例一路', '路名应从 steps[].road 解析');
+  assert.equal(b.steps[0].distanceM, 100);
+
+  // 折线应非空
+  assert.ok(b.polyline.length > 100, `折线点应较多，实际 ${b.polyline.length}`);
+});
+
+test('★ 真实结构：全部 9 段动作都被识别（无 unknown）', () => {
+  const b = normalizeRoute(REAL, META);
+  const unknown = b.steps.filter((s) => s.maneuver === MANEUVER.UNKNOWN);
+  assert.equal(unknown.length, 0,
+    `不应有未识别动作，实际: ${unknown.map((s) => s.instruction).join(' | ')}`);
+
+  // 逐段核对（action 值来自真实响应，未做合成替换）
+  assert.deepEqual(b.steps.map((s) => s.maneuver), [
+    MANEUVER.LEFT,       // 左转
+    MANEUVER.LEFT,       // 左转
+    MANEUVER.KEEP_LEFT,  // 靠左
+    MANEUVER.RIGHT,      // 向右前方行驶
+    MANEUVER.U_TURN,     // 左转调头
+    MANEUVER.LEFT,       // 左转
+    MANEUVER.KEEP_RIGHT, // 靠右
+    MANEUVER.RIGHT,      // 右转
+    MANEUVER.ARRIVE,     // action 为空，靠 instruction「到达目的地」
+  ]);
+});
+
+test('★ 真实结构：step 距离之和与路径总距离量级一致', () => {
+  const b = normalizeRoute(REAL, META);
+  const sum = b.steps.reduce((a, s) => a + (s.distanceM ?? 0), 0);
+  // 高德的路径总距离与各段之和可能有小差异（四舍五入），但量级必须一致
+  assert.ok(Math.abs(sum - b.distanceM) / b.distanceM < 0.05,
+    `各段之和 ${sum} 与总距离 ${b.distanceM} 差异过大`);
+});
+
+test('stepAt 在真实路线上可用', () => {
+  const b = normalizeRoute(REAL, META);
+  assert.equal(stepAt(b, 0).stepIndex, 0);
+  assert.equal(stepAt(b, 0).maneuver, MANEUVER.LEFT);
+  // 走完全程 → 到达
+  assert.equal(stepAt(b, b.distanceM + 1000).maneuver, MANEUVER.ARRIVE);
 });

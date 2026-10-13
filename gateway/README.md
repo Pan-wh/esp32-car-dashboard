@@ -129,9 +129,41 @@ HTTP 层（认证/限流/参数校验/请求体限制/上游错误透传/**Key �
 
 ---
 
-## ⚠️ 接入真实 Key 后必做的两件事
+## ✅ 真实响应已核实（2026-10-13）
 
-本项目**没有实测过高德的真实响应**，因此有两处按"实测优先"设计：
+**已用真实 Key 完成核实**，以下是核实结果 —— 保留本节是因为它记录了
+"为什么字段名是这样"，将来上游改动时便于比对。
+
+| 项 | 结果 |
+|----|------|
+| `steps[].distance` | ✅ 实际字段名就是 `distance`（**不是** `step_distance`）|
+| `steps[].road` | ✅ 实际是 `road`（**不是** `road_name`）|
+| `steps[].action` | ✅ **中文文本**（"左转"/"靠左"/"左转调头"…），**不是数字码** |
+| 类型一致性 | ⚠️ `action` 可为字符串**或空数组**；`assistant_action` 可为数组**或字符串**；路名为空时**省略 `road` 键** |
+
+**回归保护**：`test/fixtures/amap-driving-v3.json` 保留了真实响应的
+**字段名与结构**（数值为合成数据，见下方合规说明），字段名再变会立刻测试失败。
+
+### 若上游再次改动，如何重新核实
+
+```bash
+npm run probe -- --from <lon,lat> --to <lon,lat> --save test/fixtures/amap-driving-real.json
+# 对照输出里的「字段清单」与 src/normalize.js 用到的字段名
+# 核实后重新生成结构夹具（真实响应不入库）：
+node test/make-structural-fixture.js test/fixtures/amap-driving-real.json \
+                                     test/fixtures/amap-driving-v3.json
+```
+
+### 合规说明（协议 §3.5 不得直接存储服务数据）
+
+`probe --save` 落盘的真实响应**不入库**（`*-real.json` 已 gitignore）。
+入库的是**结构夹具**：字段名/层级/`action` 词表来自真实响应，
+坐标、路名、距离、折线均为**合成数据**。
+回归保护针对字段名与结构，用合成值同样有效。
+
+---
+
+## 附：设计上"不猜"的两处（保留作为背景）
 
 ### 1. 核对字段名
 
@@ -146,22 +178,9 @@ npm run probe -- --from 116.397428,39.90923 --to 116.481028,39.989643
 
 若实际字段名不同，改 `normalize.js` 并同步更新 `test/fixtures/`。
 
-### 2. 填动作码表（若高德返回了数字码）
-
-`src/maneuver.js` 的 `ACTION_CODE_MAP` **默认为空**，是刻意为之：
-未实测就填数字码，可能把"左转"映射成"右转"——比显示"未知"危险得多。
-
-`probe` 会列出每个 step 的 `action` 与 `instruction` 对应关系，照着实测填入即可：
-
-```js
-export const ACTION_CODE_MAP = Object.freeze({
-  1: MANEUVER.LEFT,     // ← 以 probe 实测为准
-  2: MANEUVER.RIGHT,
-});
-```
-
-填完**记得同步更新** `test/maneuver.test.js`（其中有一条测试断言该表为空，
-用于防止未实测就填写）。
+**动作映射已经是实测过的**（`ACTION_TEXT_MAP` 收录了真实响应中出现过的
+全部 action 取值，每项标注了 [实测] / [推断]）。`test/maneuver.test.js` 里有一条
+测试**逐项断言实测词表命中**；若高德改词，该测试会失败并直接指出是哪一项。
 
 ---
 
