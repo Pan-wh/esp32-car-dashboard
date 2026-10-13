@@ -18,7 +18,6 @@ extern "C" {
 /* 设计变体数量（选型用；定稿后保留选定的一种）
  * 0=V1 数字+外环弧, 1=V2 指针表, 2=V3 超大数字+底部弧带, 3=V4 分段条,
  * 4=V5 驾驶员表盘（外圈刻度 + 指针 + 中央插画 + 底部辅助信息） */
-#define UI_SPEED_VARIANT_COUNT 5
 
 /* 驾驶员插画状态 */
 #define UI_DRIVER_AUTO     (-1) /* 按速度自动 */
@@ -29,11 +28,7 @@ extern "C" {
 /* 创建速度表盘到 parent（页面容器） */
 lv_obj_t *ui_speed_create(lv_obj_t *parent);
 
-/* 切换设计变体（0..UI_SPEED_VARIANT_COUNT-1）；已创建时会重建内容 */
-void ui_speed_set_variant(int variant);
 
-/* 当前变体序号 */
-int ui_speed_get_variant(void);
 
 /* 设置速度（km/h）；valid=false 时显示无效状态（"--"） */
 void ui_speed_set_speed(float kmh);
@@ -56,7 +51,7 @@ void ui_speed_set_trip(float distance_km, float max_kmh);
 /* ---- 诊断接口（排查"速度 0 但指针不归零"）---- */
 float ui_speed_get_speed(void);   /* 当前速度（km/h）*/
 int ui_speed_get_valid(void);     /* 速度是否有效 */
-void *ui_speed_get_needle(void);  /* V5 指针对象（NULL = 未创建/variant 不符）*/
+void *ui_speed_get_needle(void);  /* V5 指针对象（NULL = 未创建）*/
 
 /*
  * 数据链路状态（AI_TASK §6.4 五态）：驱动速度页顶部状态标签。

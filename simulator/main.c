@@ -160,7 +160,6 @@ int main(int argc, char **argv)
     Uint32 run_ms = 0;
     int start_page = 0;
     int fh = -1, fm = 0, fs = 0;
-    int speed_variant = 0;
     int status_state = -1; /* --status N：设置五态链路状态（用于安全区/文案验证） */
     float speed_kmh = 0.0f;
     int nofix = 0;
@@ -174,7 +173,6 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc) shot = argv[++i];
         else if (!strcmp(argv[i], "--ms") && i + 1 < argc) run_ms = (Uint32)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--page") && i + 1 < argc) start_page = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--variant") && i + 1 < argc) speed_variant = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--speed") && i + 1 < argc) speed_kmh = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--nofix")) nofix = 1;
         else if (!strcmp(argv[i], "--status") && i + 1 < argc) status_state = atoi(argv[++i]);
@@ -190,7 +188,6 @@ int main(int argc, char **argv)
     if (fh >= 0) ui_timesrc_freeze(fh, fm, fs);
 
     /* 速度表盘预置状态（GNSS 未接入前由命令行模拟数据） */
-    ui_speed_set_variant(speed_variant);
     ui_speed_set_speed(speed_kmh);
     ui_speed_set_fix(nofix ? false : true, 12);
     if (status_state >= 0) ui_speed_set_status((ui_speed_status_t)status_state);
@@ -280,11 +277,6 @@ int main(int argc, char **argv)
                     ui_pages_show((ui_page_t)((ui_pages_current() + 1) % UI_PAGE_COUNT));
                 if (e.key.keysym.sym == SDLK_LEFT || e.key.keysym.sym == SDLK_a)
                     ui_pages_show((ui_page_t)((ui_pages_current() + UI_PAGE_COUNT - 1) % UI_PAGE_COUNT));
-                /* V 键：循环切换速度表盘设计变体（并跳到该页） */
-                if (e.key.keysym.sym == SDLK_v) {
-                    ui_speed_set_variant((ui_speed_get_variant() + 1) % UI_SPEED_VARIANT_COUNT);
-                    ui_pages_show(UI_PAGE_SPEED);
-                }
             }
             if (e.type == SDL_MOUSEMOTION) {
                 g_mouse_x = e.motion.x / scale;

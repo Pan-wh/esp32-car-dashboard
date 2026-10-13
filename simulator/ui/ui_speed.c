@@ -56,11 +56,9 @@ LV_IMG_DECLARE(driver_speeding);
 #define DRIVER_SPIRITED_V 90.0f  /* 激烈驾驶阈值 km/h（用户确认：0-90 平静） */
 #define DRIVER_SPEEDING_V 120.0f /* 超速阈值 km/h（用户确认：>120 咬牙） */
 
-#define SEG_CNT 24 /* V4 分段数 */
 
 /* ---- 状态 ---- */
 static lv_obj_t *s_root;
-static int s_variant = 4; /* 默认 V5 驾驶员表盘（定稿设计）；其它变体可用 --variant / V 键切换 */
 /*
  * 默认「速度 0 且无效」：这两个值是 GNSS 时代的模拟残留（88 / true），
  * 真机实测踩坑——速度明明无效，指针却停在 88（用户看到"0 速度但指针指 90"）。
@@ -73,12 +71,7 @@ static int s_sats = 12;
 static ui_speed_status_t s_status_state = UI_STATUS_CONNECTING;
 
 /* ---- 各变体的动态部件 ---- */
-static lv_obj_t *s_big;              /* 大数字（所有变体） */
-static lv_obj_t *s_status;           /* GNSS 状态（所有变体） */
-static lv_obj_t *s_arc;              /* V1 主弧 / V3 底部弧 */
 static lv_obj_t *s_meter;            /* V2 指针表 */
-static lv_meter_indicator_t *s_needle;
-static lv_obj_t *s_segs[SEG_CNT];    /* V4 分段 */
 
 /* V5 部件 */
 static lv_obj_t *s_driver_img;
@@ -106,20 +99,7 @@ static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font,
     return l;
 }
 
-static void make_big_and_unit(lv_obj_t *parent, int big_y, int unit_y)
-{
-    s_big = make_label(parent, &speed_num_150, C_MAIN, "88");
-    lv_obj_align(s_big, LV_ALIGN_CENTER, 0, big_y);
 
-    lv_obj_t *unit = make_label(parent, &label_26, C_DIM, "km/h");
-    lv_obj_align(unit, LV_ALIGN_CENTER, 0, unit_y);
-}
-
-static void make_status(lv_obj_t *parent, int y)
-{
-    s_status = make_label(parent, &label_26, C_DIM, "GPS 12 SAT");
-    lv_obj_align(s_status, LV_ALIGN_CENTER, 0, y);
-}
 
 /* 圆头线帽（与模拟时钟一致的观感），用于指针表 */
 static void meter_draw_cb(lv_event_t *e)
@@ -132,152 +112,6 @@ static void meter_draw_cb(lv_event_t *e)
 }
 
 /* ------------------------------------------------------------------ */
-/* V1：数字 + 外环进度弧（270°，底部开口）                              */
-/* ------------------------------------------------------------------ */
-static void build_v1(lv_obj_t *p)
-{
-    s_arc = lv_arc_create(p);
-    lv_obj_set_size(s_arc, 430, 430);
-    lv_obj_center(s_arc);
-    lv_obj_clear_flag(s_arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_remove_style(s_arc, NULL, LV_PART_KNOB); /* 去掉拖拽旋钮 */
-
-    lv_arc_set_rotation(s_arc, 135);          /* 起点：左下 45° 处 */
-    lv_arc_set_bg_angles(s_arc, 0, 270);      /* 扫过 270°，底部留缺口 */
-    lv_arc_set_range(s_arc, 0, (int32_t)SPEED_MAX);
-    lv_arc_set_value(s_arc, 0);
-
-    /* 轨道 + 进度样式 */
-    lv_obj_set_style_bg_opa(s_arc, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_arc, 12, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_arc, lv_color_hex(C_TRACK), LV_PART_MAIN);
-    lv_obj_set_style_arc_rounded(s_arc, true, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_arc, 12, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_arc, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(s_arc, true, LV_PART_INDICATOR);
-
-    make_big_and_unit(p, -14, 68);
-    make_status(p, 150);
-}
-
-/* ------------------------------------------------------------------ */
-/* V2：指针速度表（0-200，270°），底部加数字读数                        */
-/* ------------------------------------------------------------------ */
-static void build_v2(lv_obj_t *p)
-{
-    s_meter = lv_meter_create(p);
-    lv_obj_remove_style_all(s_meter);
-    lv_obj_set_size(s_meter, 400, 400);
-    lv_obj_center(s_meter);
-    lv_obj_clear_flag(s_meter, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_meter, meter_draw_cb, LV_EVENT_DRAW_PART_BEGIN, NULL);
-
-    /* 小刻度：41 个（40 段 × 6.75°） */
-    lv_meter_scale_t *sc_min = lv_meter_add_scale(s_meter);
-    lv_meter_set_scale_ticks(s_meter, sc_min, 41, 2, 10, lv_color_hex(0x5A5A5F));
-    lv_meter_set_scale_range(s_meter, sc_min, 0, (int32_t)SPEED_MAX, 270, 135);
-
-    /* 大刻度：7 个 → 每 40 km/h 一根（0/40/80/120/160/200） */
-    lv_meter_scale_t *sc_maj = lv_meter_add_scale(s_meter);
-    lv_meter_set_scale_ticks(s_meter, sc_maj, 7, 3, 18, lv_color_hex(C_LABEL));
-    lv_meter_set_scale_range(s_meter, sc_maj, 0, (int32_t)SPEED_MAX, 270, 135);
-
-    /* 指针：白色圆头，长约 0.60R（r_edge=200） */
-    s_needle = lv_meter_add_needle_line(s_meter, sc_min, 6, lv_color_hex(C_MAIN), -(200 - 120));
-
-    /* 刻度数字：沿 135°→405° 均布（LVGL 角度：0°=3 点方向，顺时针） */
-    const int vals[] = { 0, 40, 80, 120, 160, 200 };
-    for (int i = 0; i < 6; i++) {
-        char buf[8];
-        snprintf(buf, sizeof(buf), "%d", vals[i]);
-        lv_obj_t *n = make_label(p, &label_26, C_LABEL, buf);
-        float a = (float)(135 + i * 54) * 3.14159265f / 180.0f; /* 270/5 = 54° 间隔 */
-        int32_t x = (int32_t)lroundf(148.0f * cosf(a));
-        int32_t y = (int32_t)lroundf(148.0f * sinf(a));
-        lv_obj_align(n, LV_ALIGN_CENTER, x, y);
-    }
-
-    /* 底部数字读数 + 状态 */
-    s_big = make_label(p, &label_26, C_MAIN, "88");
-    lv_obj_set_style_text_font(s_big, &speed_num_150, 0);
-    lv_obj_align(s_big, LV_ALIGN_CENTER, 0, 118);
-    lv_obj_t *unit = make_label(p, &label_26, C_DIM, "km/h");
-    lv_obj_align(unit, LV_ALIGN_CENTER, 0, 168);
-    make_status(p, -168);
-}
-
-/* ------------------------------------------------------------------ */
-/* V3：超大数字 + 底部弧形刻度带                                        */
-/* ------------------------------------------------------------------ */
-static void build_v3(lv_obj_t *p)
-{
-    /* 底部 80° 弧带（LVGL 角度：90° = 正下方 → 50°..130°） */
-    s_arc = lv_arc_create(p);
-    lv_obj_set_size(s_arc, 400, 400);
-    lv_obj_center(s_arc);
-    lv_obj_clear_flag(s_arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_remove_style(s_arc, NULL, LV_PART_KNOB);
-
-    lv_arc_set_rotation(s_arc, 50);
-    lv_arc_set_bg_angles(s_arc, 0, 80);
-    lv_arc_set_range(s_arc, 0, (int32_t)SPEED_MAX);
-    lv_arc_set_value(s_arc, 0);
-
-    lv_obj_set_style_bg_opa(s_arc, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_arc, 8, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_arc, lv_color_hex(C_TRACK), LV_PART_MAIN);
-    lv_obj_set_style_arc_rounded(s_arc, true, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_arc, 8, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_arc, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(s_arc, true, LV_PART_INDICATOR);
-
-    /* 弧带两端标注 */
-    lv_obj_t *l0 = make_label(p, &label_26, C_DIM, "0");
-    lv_obj_align(l0, LV_ALIGN_CENTER, -160, 128);
-    lv_obj_t *l1 = make_label(p, &label_26, C_DIM, "200");
-    lv_obj_align(l1, LV_ALIGN_CENTER, 160, 128);
-
-    make_big_and_unit(p, -30, 52);
-    make_status(p, -168);
-}
-
-/* ------------------------------------------------------------------ */
-/* V4：数字 + 分段进度条（运动风格）                                    */
-/* ------------------------------------------------------------------ */
-static void build_v4(lv_obj_t *p)
-{
-    make_big_and_unit(p, -40, 32);
-    make_status(p, -168);
-
-    /* 分段条容器（底部居中） */
-    lv_obj_t *bar = lv_obj_create(p);
-    lv_obj_remove_style_all(bar);
-    lv_obj_set_size(bar, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_align(bar, LV_ALIGN_CENTER, 0, 140);
-    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(bar, 5, 0);
-    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-
-    for (int i = 0; i < SEG_CNT; i++) {
-        lv_obj_t *seg = lv_obj_create(bar);
-        lv_obj_remove_style_all(seg);
-        lv_obj_set_size(seg, 12, 10);
-        lv_obj_set_style_radius(seg, 3, 0);
-        lv_obj_set_style_bg_color(seg, lv_color_hex(C_TRACK), 0);
-        lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
-        lv_obj_clear_flag(seg, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-        s_segs[i] = seg;
-    }
-}
-
-/* ------------------------------------------------------------------ */
-/* V5：驾驶员表盘（白底，2026-10-10 定稿中）                            */
-/*   外圈 = 速度刻度（0-200，270°，渐变：深灰 → 橙 → 红）               */
-/*   指针 = 当前 GPS 速度（橙色，只画外段，不遮中央插画）               */
-/*   中央 = 驾驶员插画（与表盘内圈同心，三态表情）                      */
-/*   无定位时顶部显示 NO FIX（不伪造速度）                              */
-/* ------------------------------------------------------------------ */
-
 /* V5 链路状态 → 文案（ASCII，label_26 无 CJK） */
 static const char *status5_text(void)
 {
@@ -290,7 +124,6 @@ static const char *status5_text(void)
         default:                   return "";
     }
 }
-
 static uint32_t status5_color(void)
 {
     switch (s_status_state) {
@@ -302,7 +135,6 @@ static uint32_t status5_color(void)
         default:                   return C_TEXT_DIM_L;
     }
 }
-
 static int driver_state_from_speed(void)
 {
     if (!s_valid) return UI_DRIVER_NORMAL;
@@ -310,13 +142,11 @@ static int driver_state_from_speed(void)
     if (s_speed > DRIVER_SPIRITED_V) return UI_DRIVER_SPIRITED;
     return UI_DRIVER_NORMAL;
 }
-
 /* 当前驾驶员状态：显式设定优先，否则按速度自动 */
 static int current_driver_state(void)
 {
     return (s_driver_state >= 0) ? s_driver_state : driver_state_from_speed();
 }
-
 /*
  * 速度 → 颜色（三段渐变）：0 深灰 → 120 橙 → 200 红。
  * 用于刻度着色与刻度数字，速度越高越"战斗"。
@@ -344,11 +174,7 @@ static uint32_t speed_color(float v)
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
 }
 
-/*
- * V5 指针绘制回调：
- *  1. 圆头线帽；
- *  2. 把内端从圆心沿同方向外移到 MARKER_INNER_R，避免压住中央插画。
- */
+/* V1：数字 + 外环进度弧（270°，底部开口）                              */
 static void speed5_draw_cb(lv_event_t *e)
 {
     lv_obj_draw_part_dsc_t *dsc = lv_event_get_draw_part_dsc(e);
@@ -435,8 +261,8 @@ static void apply_state(void)
 
     int32_t v = s_valid ? (int32_t)lroundf(s_speed) : 0;
 
-    /* V5：无中央大数字，走独立分支（指针 + 驾驶员表情 + 底部辅助信息） */
-    if (s_variant == 4) {
+    /* V5 定稿：指针 + 驾驶员表情 + 底部辅助信息（无中央大数字） */
+    {
         if (s_meter && s_needle5) lv_meter_set_indicator_value(s_meter, s_needle5, v);
         /* 插画：状态三态只在跨过 90/120 阈值时变化，用已显示状态防止重复 set_src */
         static int driver_shown = -2; /* -2 保证首帧必设 */
@@ -460,44 +286,6 @@ static void apply_state(void)
         }
         return;
     }
-
-    if (!s_big) return;
-
-    /* 大数字：无效时显示 -- */
-    if (s_valid) snprintf(buf, sizeof(buf), "%.0f", s_speed);
-    else snprintf(buf, sizeof(buf), "--");
-    lv_label_set_text(s_big, buf);
-
-    /* GNSS 状态文字 */
-    if (s_status) {
-        if (s_valid) snprintf(buf, sizeof(buf), "GPS %d SAT", s_sats);
-        else snprintf(buf, sizeof(buf), "NO FIX");
-        lv_label_set_text(s_status, buf);
-        lv_obj_set_style_text_color(s_status, lv_color_hex(s_valid ? C_DIM : C_TRACK), 0);
-    }
-
-    switch (s_variant) {
-    case 0:
-    case 2:
-        if (s_arc) lv_arc_set_value(s_arc, v);
-        break;
-    case 1:
-        if (s_meter && s_needle) lv_meter_set_indicator_value(s_meter, s_needle, v);
-        break;
-    case 3: {
-        int lit = (int)lroundf((float)SEG_CNT * (s_valid ? s_speed : 0.0f) / SPEED_MAX);
-        if (lit < 0) lit = 0;
-        if (lit > SEG_CNT) lit = SEG_CNT;
-        for (int i = 0; i < SEG_CNT; i++) {
-            if (!s_segs[i]) continue;
-            lv_obj_set_style_bg_color(s_segs[i],
-                lv_color_hex(i < lit ? C_ACCENT : C_TRACK), 0);
-        }
-        break;
-    }
-    default:
-        break;
-    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -507,29 +295,18 @@ static void apply_state(void)
 static void build(lv_obj_t *parent)
 {
     /* 状态复位（重建时清空旧指针） */
-    s_big = NULL;
-    s_status = NULL;
-    s_arc = NULL;
     s_meter = NULL;
-    s_needle = NULL;
     s_needle5 = NULL;
     s_driver_img = NULL;
     s_status5 = NULL;
-    for (int i = 0; i < SEG_CNT; i++) s_segs[i] = NULL;
 
     lv_obj_set_style_bg_color(parent, lv_color_hex(C_BG), 0);
     /* ⚠️ V5 是**白底表盘**设计：这里必须保持不透明白色，
        不能像黑底页面那样改透明（否则会露出 scr 的黑底，表盘变黑）。 */
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
 
-    switch (s_variant) {
-    case 1: build_v2(parent); break;
-    case 2: build_v3(parent); break;
-    case 3: build_v4(parent); break;
-    case 4: build_v5(parent); break;
-    case 0:
-    default: build_v1(parent); break;
-    }
+    /* 定稿设计：V5 驾驶员表盘（旧变体 V1-V4 已删除，见 docs/decisions.md） */
+    build_v5(parent);
 
     apply_state();
 }
@@ -541,21 +318,7 @@ lv_obj_t *ui_speed_create(lv_obj_t *parent)
     return parent;
 }
 
-void ui_speed_set_variant(int variant)
-{
-    if (variant < 0 || variant >= UI_SPEED_VARIANT_COUNT) variant = 0;
-    if (variant == s_variant) return;
-    s_variant = variant;
-    if (s_root) {
-        lv_obj_clean(s_root); /* 删除旧变体内容后重建 */
-        build(s_root);
-    }
-}
 
-int ui_speed_get_variant(void)
-{
-    return s_variant;
-}
 
 void ui_speed_set_speed(float kmh)
 {

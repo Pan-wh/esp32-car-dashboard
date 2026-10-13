@@ -799,9 +799,9 @@ static void process_command(char *cmd)
     /* 诊断命令：直接设置/查询速度指针（排查"速度 0 但指针不在 0"）*/
     const char *arg = cmd + 3;
     if (*arg == '\0') {
-      Serial.printf("[速度] 当前=%.1f km/h 有效=%d 变体=%d 指针对象=%p\n",
+      Serial.printf("[速度] 当前=%.1f km/h 有效=%d 指针对象=%p\n",
                     (double)ui_speed_get_speed(), (int)ui_speed_get_valid(),
-                    ui_speed_get_variant(), (void *)ui_speed_get_needle());
+                    (void *)ui_speed_get_needle());
     }
     else if (strncmp(arg, " reset", 6) == 0) {
       ui_speed_set_fix(false, 0);
