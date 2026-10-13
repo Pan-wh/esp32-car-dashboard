@@ -430,3 +430,27 @@ float telemetry_ramp_value(const telemetry_ramp_t *r)
 {
     return (r == NULL) ? 0.0f : r->value_kmh;
 }
+
+/* ---------------- 链路状态防抖（消除瞬态 STALE）---------------- */
+
+void telemetry_debounce_reset(telemetry_debounce_t *d)
+{
+    if (d == NULL) return;
+    d->stale_streak = 0;
+}
+
+telemetry_link_t telemetry_debounce_apply(telemetry_debounce_t *d, telemetry_link_t raw)
+{
+    if (d == NULL) return raw;
+
+    /* 非 STALE：立即生效（恢复 LIVE / 断开等都要及时反映），并清零计数 */
+    if (raw != LINK_STALE) {
+        d->stale_streak = 0;
+        return raw;
+    }
+
+    /* STALE：累计到阈值才真正切换；未达阈值时按"尚未过期"处理 */
+    d->stale_streak++;
+    if (d->stale_streak >= TELEMETRY_STALE_DEBOUNCE_N) return LINK_STALE;
+    return LINK_OK;
+}

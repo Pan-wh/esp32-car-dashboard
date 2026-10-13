@@ -384,6 +384,50 @@ int main(void)
         CHECK_NEAR(telemetry_ramp_value(&r), 0.0, 1e-3, "负速度归一为 0");
     }
 
+    /* ---------------- 链路状态防抖 ---------------- */
+    printf("=== 链路状态防抖 ===\n");
+    {
+        telemetry_debounce_t d;
+        telemetry_debounce_reset(&d);
+
+        /* 连续 STALE：前 N-1 次不上报 STALE，第 N 次才切换 */
+        CHECK(telemetry_debounce_apply(&d, LINK_STALE) == LINK_OK, "第 1 次 STALE 被抑制");
+        CHECK(telemetry_debounce_apply(&d, LINK_STALE) == LINK_OK, "第 2 次 STALE 被抑制");
+        CHECK(telemetry_debounce_apply(&d, LINK_STALE) == LINK_STALE,
+              "第 3 次 STALE 生效（连续超时确认）");
+
+        /* 真实断流场景：持续 STALE 应稳定上报（不会永远压着） */
+        CHECK(telemetry_debounce_apply(&d, LINK_STALE) == LINK_STALE, "持续 STALE 保持上报");
+
+        /* 恢复 LIVE：立即生效并清零计数 */
+        telemetry_debounce_reset(&d);
+        (void)telemetry_debounce_apply(&d, LINK_STALE); /* 1 次抖动 */
+        CHECK(telemetry_debounce_apply(&d, LINK_OK) == LINK_OK, "恢复 LIVE 立即生效");
+        /* 计数已清零：再抖动仍需连续 N 次 */
+        CHECK(telemetry_debounce_apply(&d, LINK_STALE) == LINK_OK, "恢复后计数已清零（第 1 次抑制）");
+
+        /* 抖动序列 LIVE/STALE 交替：不应切到 STALE（正是用户看到的闪烁） */
+        telemetry_debounce_reset(&d);
+        int flickered = 0;
+        for (int i = 0; i < 10; i++) {
+            telemetry_link_t r = telemetry_debounce_apply(&d, LINK_STALE);
+            if (r == LINK_STALE) flickered++;
+            (void)telemetry_debounce_apply(&d, LINK_OK); /* 交替恢复 */
+        }
+        CHECK(flickered == 0, "交替抖动 10 轮不产生 STALE（实测 %d 次）", flickered);
+
+        /* 非 STALE 状态不参与防抖：立即透传 */
+        telemetry_debounce_reset(&d);
+        CHECK(telemetry_debounce_apply(&d, LINK_CONNECTING) == LINK_CONNECTING, "CONNECTING 立即透传");
+        CHECK(telemetry_debounce_apply(&d, LINK_WAIT_LOC) == LINK_WAIT_LOC, "WAIT_LOC 立即透传");
+        CHECK(telemetry_debounce_apply(&d, LINK_INVALID) == LINK_INVALID, "INVALID 立即透传");
+        CHECK(telemetry_debounce_apply(&d, LINK_HOLD) == LINK_HOLD, "HOLD 立即透传");
+
+        /* NULL 安全 */
+        CHECK(telemetry_debounce_apply(NULL, LINK_STALE) == LINK_STALE, "NULL 防抖器直接透传");
+        telemetry_debounce_reset(NULL); /* 不应崩溃 */
+    }
+
     printf("结果: %d 通过, %d 失败\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
