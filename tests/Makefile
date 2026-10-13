@@ -13,6 +13,11 @@ NAV_SRC      := ../ios/CarDashboardPhone/CarDashboardPhone/Nav/NavCore.swift \
 COORD_VECTORS := ../gateway/test/fixtures/coord-vectors.json
 NAV_BIN      := test_nav_core
 
+# Mac 模拟器（纯逻辑部分；BLE 只能在真机上验证）
+SIM_SRC      := $(NAV_SRC) ../tools/nav_sim/NavSimSupport.swift
+SIM_BIN      := test_nav_sim
+SIM_FIXTURE  := $(abspath ../tools/nav_sim/testdata/route-bundle.json)
+
 all: $(TESTS)
 
 test_telemetry: test_telemetry.c ../simulator/ui/telemetry.c
@@ -42,6 +47,8 @@ run: test_telemetry test_control test_ui_face test_nav test_nav_parse test_img_i
 	./test_img_indexed
 	@echo "--- iOS 导航核心（Swift，编译 App 真实源文件）---"
 	@$(MAKE) --no-print-directory test-nav-core
+	@echo "--- Mac 模拟器（Swift，纯逻辑，不需设备）---"
+	@$(MAKE) --no-print-directory test-nav-sim
 	@echo "--- 导航网关（Node，零依赖，全部离线）---"
 	@if command -v node >/dev/null 2>&1; then \
 		(cd ../gateway && node --test "test/**/*.test.js") ; \
@@ -73,7 +80,17 @@ $(NAV_BIN): $(NAV_SRC) ../tools/test_nav_core.swift
 test-nav-core: $(NAV_BIN)
 	@COORD_VECTORS=$(COORD_VECTORS) ./$(NAV_BIN)
 
-clean:
-	rm -f $(TESTS) $(NAV_BIN)
+$(SIM_BIN): $(SIM_SRC) ../tools/test_nav_sim.swift
+	@if ! command -v swiftc >/dev/null 2>&1; then \
+		echo "  跳过：未找到 swiftc"; \
+		exit 0; \
+	fi
+	swiftc -O -o $(SIM_BIN) $(SIM_SRC) ../tools/test_nav_sim.swift
 
-.PHONY: all run clean test-nav-core
+test-nav-sim: $(SIM_BIN)
+	@NAV_SIM_FIXTURE=$(SIM_FIXTURE) ./$(SIM_BIN)
+
+clean:
+	rm -f $(TESTS) $(NAV_BIN) $(SIM_BIN)
+
+.PHONY: all run clean test-nav-core test-nav-sim

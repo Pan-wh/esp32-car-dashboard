@@ -318,6 +318,50 @@ func testStepRangeScaling() {
           "容差内也应与几何总长对齐（浮点兜底）")
 }
 
+func testPointAt() {
+    print("--- 按距离取点（模拟行车用） ---")
+    let r = straightRoute()               // A(39.00) → B(39.01) → C(39.02)
+    let segM = NavMath.distanceM(pt(39.00), pt(39.01))
+
+    // 起点 / 中点 / 终点
+    if let p0 = r.pointAt(distanceM: 0) {
+        check(approx(p0.lat, 39.00, 1e-6), "起点纬度应为 39.00，实际 \(p0.lat)")
+    } else { check(false, "起点不应为 nil") }
+
+    if let pm = r.pointAt(distanceM: segM / 2) {
+        check(approx(pm.lat, 39.005, 1e-4), "半段处纬度应约 39.005，实际 \(pm.lat)")
+    } else { check(false, "中点不应为 nil") }
+
+    if let pe = r.pointAt(distanceM: r.totalDistanceM) {
+        check(approx(pe.lat, 39.02, 1e-6), "终点纬度应为 39.02，实际 \(pe.lat)")
+    } else { check(false, "终点不应为 nil") }
+
+    // 越界钳制
+    if let pn = r.pointAt(distanceM: -100) {
+        check(approx(pn.lat, 39.00, 1e-6), "负距离应钳制到起点")
+    }
+    if let pf = r.pointAt(distanceM: r.totalDistanceM + 5000) {
+        check(approx(pf.lat, 39.02, 1e-6), "超界应钳制到终点")
+    }
+
+    // 取出的点再投影回去，进度应基本一致（往返自洽）
+    let core = NavCore()
+    core.setRoute(r)
+    let d: Double = segM * 0.75
+    if let p = r.pointAt(distanceM: d) {
+        _ = core.handle(fix: mkFix(p, t: 1000), nowMs: 1000)
+        check(approx(core.snapshot.routeProgressM, d, 3),
+              "取点再投影应回到同一进度（期望 \(d)，实际 \(core.snapshot.routeProgressM)）")
+        check(core.snapshot.crossTrackM < 1, "取出的点应在路线上（垂距≈0）")
+    }
+
+    // 退化情形
+    let empty = NavRoute(steps: [])
+    check(empty.pointAt(distanceM: 0) == nil, "空路线返回 nil")
+    let single = NavRoute(steps: [NavStep(maneuver: .straight, distanceM: 0, polyline: [pt(39.0)])])
+    check(single.pointAt(distanceM: 0)?.lat == 39.0, "单点路线返回该点")
+}
+
 func testCrossLanguageCoords() {
     print("--- 坐标转换：与 JS 实现交叉验证 ---")
 
@@ -395,6 +439,7 @@ struct TestNavCore {
         testNoRouteAndClear()
         testManeuverEnumMatchesProtocol()
         testStepRangeScaling()
+        testPointAt()
         testCrossLanguageCoords()
 
         print("结果: \(gPass) 通过, \(gFail) 失败")
