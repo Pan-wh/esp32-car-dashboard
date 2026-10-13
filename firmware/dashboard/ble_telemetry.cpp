@@ -22,6 +22,16 @@
 #define TELEMETRY_CHAR_UUID "7D2A0002-8F4A-4B7C-9D21-5E6A3B8C1000"
 #define STATUS_CHAR_UUID    "7D2A0003-8F4A-4B7C-9D21-5E6A3B8C1000"
 #define COMMAND_CHAR_UUID   "7D2A0004-8F4A-4B7C-9D21-5E6A3B8C1000" /* 下行控制（亮度/息屏/表盘）*/
+/*
+ * 表盘列表上报（上行，Read + Notify）。
+ *
+ * ⚠️ **为什么"通知"不能直接承载列表**：BLE 单次通知受 MTU 限制
+ *    （iOS 实到约 185 字节），而 5 个表盘的 JSON 约 350 字节，会被截断。
+ *    因此约定：**Read 才是取数据的正途**（系统会自动用 Read Blob 取回完整值），
+ *    Notify 只当"发生变化"的**提示**用 —— App 收到通知后应重新 Read。
+ *    这样与 MTU 大小无关，表盘增多也不会失效。
+ */
+#define FACES_CHAR_UUID     "7D2A0005-8F4A-4B7C-9D21-5E6A3B8C1000"
 
 #define PROTOCOL_VERSION 1
 #define ASM_BUF_MAX 512 /* 重组缓冲上限：JSON 包不得超过，超限丢弃 */
@@ -42,6 +52,7 @@ static uint32_t s_ok = 0;
 static uint32_t s_parse_err = 0;
 
 static BLECharacteristic *s_status = NULL;
+static BLECharacteristic *s_faces = NULL;
 static portMUX_TYPE s_cmd_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint32_t s_cmd_ok = 0, s_cmd_err = 0;
 
@@ -217,6 +228,15 @@ bool ble_telemetry_begin(void)
     if (cmdc == NULL) return false;
     cmdc->setCallbacks(new CommandCallbacks());
 
+    s_faces = svc->createCharacteristic(FACES_CHAR_UUID,
+                                        BLECharacteristic::PROPERTY_READ |
+                                            BLECharacteristic::PROPERTY_NOTIFY);
+    if (s_faces != NULL) {
+        s_faces->addDescriptor(new BLE2902()); /* 通知需 CCCD */
+        /* 初值留空；表盘注册完成后由 ui 侧调用 ble_telemetry_set_faces 填真实列表 */
+        s_faces->setValue("");
+    }
+
     svc->start();
 
     BLEAdvertising *adv = BLEDevice::getAdvertising();
@@ -313,4 +333,22 @@ void ble_telemetry_set_status(const char *status)
         s_status->setValue(status);
         s_status->notify();
     }
+}
+
+void ble_telemetry_set_faces(const char *json)
+{
+    if (s_faces == NULL || json == NULL) return;
+
+    /*
+     * 用 (data, len) 形式设置，避免依赖 std::string 的隐式转换；
+     * 长度以 strlen 计（JSON 里不会出现裸 NUL）。
+     */
+    s_faces->setValue((uint8_t *)json, strlen(json));
+
+    /*
+     * Notify 只作"变了"的提示（载荷可能因 MTU 被截断，App 不应依赖其内容，
+     * 而应重新 Read 完整值 —— 见 FACES_CHAR_UUID 处的说明）。
+     * 设备未连接 / 未订阅时 notify 无效，属正常情况。
+     */
+    s_faces->notify();
 }

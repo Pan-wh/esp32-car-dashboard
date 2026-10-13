@@ -5,7 +5,7 @@ PYTHON  ?= python3
 CFLAGS  := -O1 -std=gnu99 -Wall -Wextra -I../simulator/ui
 SRC     := ../simulator/ui/telemetry.c
 
-TESTS   := test_telemetry test_control test_ui_face test_nav test_nav_parse test_img_indexed
+TESTS   := test_telemetry test_control test_ui_face test_nav test_nav_parse test_img_indexed test_face_report
 
 # iOS 侧导航核心：直接编译 App 的真实源文件（不复制逻辑，避免与实现漂移）
 NAV_SRC      := ../ios/CarDashboardPhone/CarDashboardPhone/Nav/NavCore.swift \
@@ -16,6 +16,10 @@ NAV_BIN      := test_nav_core
 # Mac 模拟器（纯逻辑部分；BLE 只能在真机上验证）
 SIM_SRC      := $(NAV_SRC) ../tools/nav_sim/NavSimSupport.swift
 SIM_BIN      := test_nav_sim
+
+# App 侧表盘列表解析（设备上报消费端）
+FACE_SRC     := ../ios/CarDashboardPhone/CarDashboardPhone/DeviceFaces.swift
+FACE_BIN     := test_device_faces
 SIM_FIXTURE  := $(abspath ../tools/nav_sim/testdata/route-bundle.json)
 
 all: $(TESTS)
@@ -32,23 +36,30 @@ test_ui_face: test_ui_face.c ../simulator/ui/ui_face.c
 test_nav: test_nav.c ../simulator/ui/nav.c
 	$(CC) $(CFLAGS) -o $@ $^
 
+# face_report 依赖 ui_face（读取注册表）
+test_face_report: test_face_report.c ../simulator/ui/face_report.c ../simulator/ui/ui_face.c
+	$(CC) $(CFLAGS) -o $@ $^
+
 test_nav_parse: test_nav_parse.c ../simulator/ui/nav_parse.c ../simulator/ui/nav.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 test_img_indexed: test_img_indexed.c ../simulator/ui/img_indexed.c
 	$(CC) $(CFLAGS) -o $@ $^
 
-run: test_telemetry test_control test_ui_face test_nav test_nav_parse test_img_indexed
-	./test_telemetry
-	./test_control
-	./test_ui_face
-	./test_nav
-	./test_nav_parse
-	./test_img_indexed
+# ⚠️ 必须遍历 $(TESTS)，不要在这里逐个硬编码测试名。
+#    曾经硬编码过：新测试加进 $(TESTS) 却**永远不会被执行**，
+#    而输出看起来一切正常（face_report 的 51 项就这样漏跑过一轮）。
+run: $(TESTS)
+	@for t in $(TESTS); do \
+		echo "--- $$t ---"; \
+		./$$t || exit 1; \
+	done
 	@echo "--- iOS 导航核心（Swift，编译 App 真实源文件）---"
 	@$(MAKE) --no-print-directory test-nav-core
 	@echo "--- Mac 模拟器（Swift，纯逻辑，不需设备）---"
 	@$(MAKE) --no-print-directory test-nav-sim
+	@echo "--- App 表盘列表解析（Swift）---"
+	@$(MAKE) --no-print-directory test-device-faces
 	@echo "--- 导航网关（Node，零依赖，全部离线）---"
 	@if command -v node >/dev/null 2>&1; then \
 		(cd ../gateway && node --test "test/**/*.test.js") ; \
@@ -90,7 +101,17 @@ $(SIM_BIN): $(SIM_SRC) ../tools/test_nav_sim.swift
 test-nav-sim: $(SIM_BIN)
 	@NAV_SIM_FIXTURE=$(SIM_FIXTURE) ./$(SIM_BIN)
 
-clean:
-	rm -f $(TESTS) $(NAV_BIN) $(SIM_BIN)
+$(FACE_BIN): $(FACE_SRC) ../tools/test_device_faces.swift
+	@if ! command -v swiftc >/dev/null 2>&1; then \
+		echo "  跳过：未找到 swiftc"; \
+		exit 0; \
+	fi
+	swiftc -O -o $(FACE_BIN) $(FACE_SRC) ../tools/test_device_faces.swift
 
-.PHONY: all run clean test-nav-core test-nav-sim
+test-device-faces: $(FACE_BIN)
+	@./$(FACE_BIN)
+
+clean:
+	rm -f $(TESTS) $(NAV_BIN) $(SIM_BIN) $(FACE_BIN)
+
+.PHONY: all run clean test-nav-core test-nav-sim test-device-faces

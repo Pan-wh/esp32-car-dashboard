@@ -79,6 +79,41 @@ int main(void)
     CHECK(!control_parse("{\"cmd\":\"face\",\"value\":1}", 5, &c), "截断输入（长度不足）");
 
     /* ---- 屏幕方向（rotate）---- */
+    printf("=== 表盘启用/隐藏命令（face_enabled）===\n");
+
+    /* 数字型 on */
+    CHECK(PARSE("{\"cmd\":\"face_enabled\",\"value\":3,\"on\":0}", c) &&
+              c.kind == CONTROL_FACE_ENABLED && c.value == 3 && c.value2 == 0,
+          "隐藏表盘 3");
+    CHECK(PARSE("{\"cmd\":\"face_enabled\",\"value\":3,\"on\":1}", c) &&
+              c.kind == CONTROL_FACE_ENABLED && c.value == 3 && c.value2 == 1,
+          "启用表盘 3");
+    /* on 接受字符串，与 screen 命令写法一致 */
+    CHECK(PARSE("{\"cmd\":\"face_enabled\",\"value\":0,\"on\":\"off\"}", c) &&
+              c.kind == CONTROL_FACE_ENABLED && c.value == 0 && c.value2 == 0,
+          "on 接受字符串 \"off\"");
+    CHECK(PARSE("{\"cmd\":\"face_enabled\",\"value\":0,\"on\":\"on\"}", c) &&
+              c.kind == CONTROL_FACE_ENABLED && c.value2 == 1,
+          "on 接受字符串 \"on\"");
+    /* 键顺序无关 */
+    CHECK(PARSE("{\"cmd\":\"face_enabled\",\"on\":1,\"value\":2}", c) &&
+              c.kind == CONTROL_FACE_ENABLED && c.value == 2 && c.value2 == 1,
+          "键顺序无关");
+    /* 非零视为启用（宽容） */
+    CHECK(PARSE("{\"cmd\":\"face_enabled\",\"value\":1,\"on\":7}", c) && c.value2 == 1,
+          "非零 on 归一为 1");
+    /* 缺 on / 缺 value / 负数 id → 拒绝 */
+    CHECK(!PARSE("{\"cmd\":\"face_enabled\",\"value\":3}", c), "缺 on 应拒绝");
+    CHECK(!PARSE("{\"cmd\":\"face_enabled\",\"on\":1}", c), "缺 value 应拒绝");
+    CHECK(!PARSE("{\"cmd\":\"face_enabled\",\"value\":-1,\"on\":1}", c), "负 id 应拒绝");
+    /* 与 face 命令区分：face 只有 value */
+    CHECK(PARSE("{\"cmd\":\"face\",\"value\":2}", c) && c.kind == CONTROL_FACE &&
+              c.value == 2,
+          "face 命令仍按原语义解析");
+    /* 失败时**返回 false 且 kind 为 NONE**（契约见 control.h） */
+    CHECK(!PARSE("{\"cmd\":\"face_enabled\"}", c) && c.kind == CONTROL_NONE,
+          "缺参数：返回 false 且 kind 保持 NONE");
+
     printf("=== 屏幕方向命令 ===\n");
     CHECK(PARSE("{\"cmd\":\"rotate\",\"value\":0}", c) && c.kind == CONTROL_ROTATE && c.value == 0,
           "rotate 0°（正常）");

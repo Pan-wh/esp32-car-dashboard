@@ -1,0 +1,182 @@
+/**
+ * face_report.c —— 表盘列表上报（纯 C，模拟器/固件共用）
+ *
+ * 只依赖 ui_face 注册表，不做任何硬件调用，因此可在 PC 上单测。
+ * 详见 face_report.h 的格式说明。
+ */
+#include "face_report.h"
+
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+
+#include "ui_face.h"
+
+/* ---- 极简带边界检查的字符串拼接 ---- */
+
+typedef struct {
+    char *buf;
+    size_t cap; /* 含结尾 NUL */
+    size_t len; /* 已写入（不含 NUL）*/
+    bool overflow;
+} sb_t;
+
+static void sb_init(sb_t *sb, char *buf, size_t cap)
+{
+    sb->buf = buf;
+    sb->cap = cap;
+    sb->len = 0;
+    sb->overflow = false;
+    if (cap > 0) buf[0] = '\0';
+}
+
+/** 追加一个字符；空间不足则置 overflow 并丢弃（不写坏缓冲）*/
+static void sb_putc(sb_t *sb, char c)
+{
+    if (sb->len + 1 >= sb->cap) {
+        sb->overflow = true;
+        return;
+    }
+    sb->buf[sb->len++] = c;
+    sb->buf[sb->len] = '\0';
+}
+
+static void sb_puts(sb_t *sb, const char *s)
+{
+    if (s == NULL) return;
+    for (; *s != '\0'; s++) sb_putc(sb, *s);
+}
+
+/** 追加 JSON 字符串（转义 " 与 \，其余按原样；表盘名是 ASCII 标识符）*/
+static void sb_puts_json(sb_t *sb, const char *s)
+{
+    if (s == NULL) {
+        sb_puts(sb, "\"\"");
+        return;
+    }
+    sb_putc(sb, '"');
+    for (; *s != '\0'; s++) {
+        if (*s == '"' || *s == '\\') {
+            sb_putc(sb, '\\');
+            sb_putc(sb, *s);
+        }
+        else if ((unsigned char)*s < 0x20) {
+            /* 控制字符：JSON 里不合法，统一转义 */
+            sb_putc(sb, '?');
+        }
+        else {
+            sb_putc(sb, *s);
+        }
+    }
+    sb_putc(sb, '"');
+}
+
+static void sb_printf(sb_t *sb, const char *fmt, ...)
+{
+    /*
+     * ⚠️ 这个缓冲必须容得下**最长的单段格式串**（含展开后的数字）。
+     * 曾经取 64，而截断分支的表头展开后约 70 字符 → 被误判为"溢出"，
+     * 导致表盘多时整份报告返回 -1（而不是按设计截断）。已由
+     * tests/test_face_report.c 的截断用例抓出。
+     */
+    char tmp[192];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(tmp, sizeof(tmp), fmt, ap);
+    va_end(ap);
+    if (n < 0) {
+        sb->overflow = true;
+        return;
+    }
+    if ((size_t)n >= sizeof(tmp)) {
+        /* 单段超长说明有 bug；保守地标记溢出 */
+        sb->overflow = true;
+        return;
+    }
+    sb_puts(sb, tmp);
+}
+
+/** 分组枚举 → ASCII 名（App 据此本地化分组标题）*/
+static const char *group_key(int group)
+{
+    switch (group) {
+    case UI_FACE_GROUP_CLOCK: return "clock";
+    case UI_FACE_GROUP_SPEED: return "speed";
+    case UI_FACE_GROUP_NAV: return "nav";
+    case UI_FACE_GROUP_PHOTO: return "photo";
+    default: return "other";
+    }
+}
+
+int face_report_build(char *buf, size_t cap)
+{
+    if (buf == NULL || cap == 0) return -1;
+
+    const int n = ui_face_count();
+    const uint32_t mask = ui_face_mask();
+
+    /* ---- 先算"完整"报告需要多少，决定是否需要截断 ---- */
+    char probe[FACE_REPORT_BUF_SIZE];
+    sb_t full;
+    sb_init(&full, probe, sizeof(probe));
+    sb_printf(&full, "{\"t\":\"faces\",\"v\":1,\"count\":%d,\"mask\":%u,\"faces\":[", n,
+              (unsigned)mask);
+    for (int i = 0; i < n; i++) {
+        const ui_face_desc_t *d = ui_face_get(i);
+        if (d == NULL) continue;
+        if (full.len > 0 && full.buf[full.len - 1] == '}') sb_putc(&full, ',');
+        sb_printf(&full, "{\"id\":%d,\"name\":", i);
+        sb_puts_json(&full, d->name);
+        sb_puts(&full, ",\"label\":");
+        sb_puts_json(&full, d->label);
+        sb_puts(&full, ",\"group\":");
+        sb_puts_json(&full, group_key((int)d->group));
+        sb_printf(&full, ",\"on\":%d}", ui_face_is_enabled(i) ? 1 : 0);
+    }
+    sb_puts(&full, "]}");
+    const size_t full_len = full.len;
+    const bool need_truncate = (full_len > FACE_REPORT_MAX_PAYLOAD) || full.overflow;
+
+    /* ---- 实际输出：完整放得下就直接用 ---- */
+    if (!need_truncate) {
+        if (full_len + 1 > cap) return -1; /* 连完整报告都放不进调用方缓冲 */
+        memcpy(buf, probe, full_len + 1);
+        return (int)full_len;
+    }
+
+    /* ---- 需要截断：逐条加，直到超过载荷上限 ---- */
+    sb_t sb;
+    sb_init(&sb, buf, cap);
+    sb_printf(&sb, "{\"t\":\"faces\",\"v\":1,\"count\":%d,\"mask\":%u,\"truncated\":1,\"faces\":[",
+              n, (unsigned)mask);
+
+    bool first = true;
+    for (int i = 0; i < n; i++) {
+        const ui_face_desc_t *d = ui_face_get(i);
+        if (d == NULL) continue;
+
+        /* 先拼到临时串，判断加进去会不会超上限 */
+        char item[192];
+        sb_t it;
+        sb_init(&it, item, sizeof(item));
+        sb_printf(&it, "{\"id\":%d,\"name\":", i);
+        sb_puts_json(&it, d->name);
+        sb_puts(&it, ",\"label\":");
+        sb_puts_json(&it, d->label);
+        sb_puts(&it, ",\"group\":");
+        sb_puts_json(&it, group_key((int)d->group));
+        sb_printf(&it, ",\"on\":%d}", ui_face_is_enabled(i) ? 1 : 0);
+        if (it.overflow) continue;
+
+        const size_t extra = it.len + (first ? 0 : 1) + 2 /* ]} */;
+        if (sb.len + extra > FACE_REPORT_MAX_PAYLOAD) break;
+
+        if (!first) sb_putc(&sb, ',');
+        sb_puts(&sb, item);
+        first = false;
+    }
+    sb_puts(&sb, "]}");
+
+    if (sb.overflow) return -1;
+    return (int)sb.len;
+}

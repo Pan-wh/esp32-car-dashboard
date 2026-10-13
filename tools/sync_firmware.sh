@@ -33,7 +33,7 @@ done
 #    （它被 .gitignore 忽略，git status 看不到），成为无人引用的死文件。
 #    此处按"固件目录里的共享层文件必须能在源目录找到同名文件"来判定孤儿。
 for f in "$DST"/ui_*.c "$DST"/ui_*.h "$DST"/font_*.c "$DST"/control.c "$DST"/control.h \
-         "$DST"/telemetry.c "$DST"/telemetry.h; do
+         "$DST"/telemetry.c "$DST"/telemetry.h "$DST"/face_report.c "$DST"/face_report.h; do
   [ -e "$f" ] || continue
   base=$(basename "$f")
   if [ ! -e "$SRC/$base" ]; then

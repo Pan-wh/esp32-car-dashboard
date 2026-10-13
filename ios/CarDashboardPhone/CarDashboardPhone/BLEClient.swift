@@ -15,16 +15,42 @@ final class BLEClient: NSObject, ObservableObject {
     /// 最近一次失败/等待原因（供 UI 显示，避免"点了没反应"）
     @Published var lastNotice: String?
 
+    /// 设备上报表盘列表（连接后自动读取；设备侧变更时会通知并触发重读）
+    @Published var faces = DeviceFaceReport()
+
+    #if DEBUG
+    /*
+     * 演示模式（仅 Debug 构建，且需启动参数 -demoFaces）。
+     *
+     * 为什么需要：**iOS 模拟器不支持 CoreBluetooth**（状态恒为 .unsupported），
+     * 因此"表盘分组 + 启用/隐藏开关"这套界面在模拟器上**无法连真机验证**。
+     * 这个模式注入一份与设备真实上报同形状的数据，让 UI 能脱离硬件开发与验收。
+     *
+     * Release 构建里这段代码不存在（#if DEBUG），不会误发布。
+     */
+    static var demoModeEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("-demoFaces")
+    }
+    #endif
+    /// 上报是否已就绪（界面据此区分"还没读到"与"设备确实没有表盘"）
+    @Published var facesReady = false
+
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var telemetryChar: CBCharacteristic?
     private var statusChar: CBCharacteristic?
+    private var facesChar: CBCharacteristic?
     private var commandChar: CBCharacteristic?
 
     private let serviceUUID = CBUUID(string: "7D2A0001-8F4A-4B7C-9D21-5E6A3B8C1000")
     private let telemetryUUID = CBUUID(string: "7D2A0002-8F4A-4B7C-9D21-5E6A3B8C1000")
     private let statusUUID = CBUUID(string: "7D2A0003-8F4A-4B7C-9D21-5E6A3B8C1000")
     private let commandUUID = CBUUID(string: "7D2A0004-8F4A-4B7C-9D21-5E6A3B8C1000")
+    /// 表盘列表（Read + Notify）。**Read 才是取数据的正途**：
+    /// 列表 JSON 约 360 字节，超过 BLE 单次通知的 MTU（iOS 约 185），
+    /// 通知会截断；而 Read 由系统自动用 Read Blob 取回完整值。
+    /// 因此收到通知后应**重新 Read**，不要直接用通知里的字节。
+    private let facesUUID = CBUUID(string: "7D2A0005-8F4A-4B7C-9D21-5E6A3B8C1000")
     private let deviceName = "CarDashboard"
 
     // 待发队列：BLE 尚未就绪时缓存最新一条，连接/发现特征后立即补发
@@ -110,6 +136,54 @@ final class BLEClient: NSObject, ObservableObject {
         sendCommand("{\"cmd\":\"face\",\"value\":\(id)}")
     }
 
+    /// 启用 / 隐藏某个表盘。设备侧会拒绝"隐藏最后一个"，
+    /// 并会在隐藏当前表盘时自动切到另一个启用的表盘。
+    @discardableResult
+    func setFaceEnabled(_ id: Int, _ on: Bool) -> Bool {
+        #if DEBUG
+        if BLEClient.demoModeEnabled {
+            // 演示模式：无设备可写，就地更新本地状态，保证开关"看起来是活的"
+            if let i = faces.faces.firstIndex(where: { $0.id == id }) {
+                // 与设备侧同一条安全规则：不允许隐藏最后一个
+                if !on && faces.enabledCount <= 1 {
+                    lastNotice = "至少保留一个表盘（设备侧也会拒绝）"
+                    return false
+                }
+                faces.faces[i].enabled = on
+                lastNotice = "演示模式：表盘 \(id) → \(on ? "启用" : "隐藏")"
+            }
+            return true
+        }
+        #endif
+        return sendCommand("{\"cmd\":\"face_enabled\",\"value\":\(id),\"on\":\(on ? 1 : 0)}")
+    }
+
+    #if DEBUG
+    /// 载入演示数据（与固件 face_report_build 的输出同形状）
+    func loadDemoFaces() {
+        let json = """
+        {"t":"faces","v":1,"count":5,"mask":31,"faces":[\
+        {"id":0,"name":"analog","label":"Analog","group":"clock","on":1},\
+        {"id":1,"name":"digital","label":"Digital","group":"clock","on":1},\
+        {"id":2,"name":"speed","label":"Speed","group":"speed","on":1},\
+        {"id":3,"name":"color","label":"Color","group":"clock","on":1},\
+        {"id":4,"name":"nav","label":"Nav","group":"nav","on":1},\
+        {"id":9,"name":"weather","label":"Weather (未收录)","group":"weather","on":1}]}
+        """
+        if let r = DeviceFaceParser.parse(Data(json.utf8)) {
+            faces = r
+            facesReady = true
+            lastNotice = "演示模式：已载入样本表盘列表（未连接真实设备）"
+        }
+    }
+    #endif
+
+    /// 主动读取表盘列表（连接后与收到通知后调用）
+    func refreshFaces() {
+        guard let per = peripheral, let ch = facesChar else { return }
+        per.readValue(for: ch)
+    }
+
     /// 设置屏幕方向（度）。仅接受 0/90/180/270 —— 固件侧会严格校验，
     /// 非 90 的整数倍一律拒绝（避免误配方向）。
     /// 方向会持久化到仪表 NVS，重启后保持。
@@ -183,7 +257,8 @@ extension BLEClient: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let services = peripheral.services else { return }
         for svc in services where svc.uuid == serviceUUID {
-            peripheral.discoverCharacteristics([telemetryUUID, statusUUID, commandUUID], for: svc)
+            peripheral.discoverCharacteristics([telemetryUUID, statusUUID, commandUUID, facesUUID],
+                                               for: svc)
         }
     }
 
@@ -198,6 +273,11 @@ extension BLEClient: CBPeripheralDelegate {
                 peripheral.setNotifyValue(true, for: ch)
             } else if ch.uuid == commandUUID {
                 commandChar = ch
+            } else if ch.uuid == facesUUID {
+                facesChar = ch
+                // 订阅变更提示；真正的数据靠 Read 取回（见 facesUUID 注释）
+                peripheral.setNotifyValue(true, for: ch)
+                peripheral.readValue(for: ch)
             }
         }
         // 若连接前有待发包，立即补发
@@ -215,6 +295,24 @@ extension BLEClient: CBPeripheralDelegate {
         // Status 特征（Notify）：可读固件版本/同步状态，前台展示用
         if characteristic.uuid == statusUUID, let data = characteristic.value {
             _ = String(data: data, encoding: .utf8)
+            return
+        }
+
+        // 表盘列表：通知的载荷可能被 MTU 截断，**解析失败就重新 Read**。
+        // 用"能否解析成完整 JSON"来区分"通知截断"与"Read 取回"，
+        // 无需额外状态机；完整值解析成功后即结束，不会反复重读。
+        if characteristic.uuid == facesUUID {
+            guard let data = characteristic.value else { return }
+            if let report = DeviceFaceParser.parse(data) {
+                faces = report
+                facesReady = true
+                if report.truncated {
+                    lastNotice = "表盘列表不完整（设备端已截断），部分开关可能显示不准"
+                }
+            } else {
+                // 截断或格式不对 → 走 Read 取完整值
+                peripheral.readValue(for: characteristic)
+            }
         }
     }
 }
