@@ -13,7 +13,7 @@
 改造任务书见 [`AI_TASK_IPHONE_BLE_DASHBOARD.md`](AI_TASK_IPHONE_BLE_DASHBOARD.md)，
 协议见 [`docs/ble.md`](docs/ble.md)，测试记录见 [`docs/test-results.md`](docs/test-results.md)。
 
-- [x] 目录结构与文档骨架
+- [x] 目录结构与文档体系（进度见 [`PROGRESS.md`](PROGRESS.md)，测试台账见 [`docs/test-results.md`](docs/test-results.md)）
 - [x] macOS 开发环境配置（Arduino IDE 2.3.10 + Arduino-ESP32 Core 3.3.10，见 `docs/setup-macos.md`）
 - [x] 官方仓库克隆与版本记录（commit `e4344e7`，见 `reference/` 与 `docs/decisions.md`）
 - [x] UI 模拟器（SDL2 + LVGL 8.4.0，`simulator/`，见其 README）
