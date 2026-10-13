@@ -23,7 +23,9 @@ targets:
     info:
       path: CarDashboardPhone/Info.plist
       properties:
-        CFBundleDisplayName: CarDashboard
+        # 主屏幕图标下的名称（中文）；CFBundleName 保持英文供系统标识使用
+        CFBundleDisplayName: 车载仪表
+        CFBundleName: CarDashboard
         UILaunchScreen: {}
         NSLocationWhenInUseUsageDescription: 驾驶会话中读取您的车速、航向与位置
         NSLocationAlwaysAndWhenInUseUsageDescription: 锁屏/后台驾驶时继续更新车速
@@ -36,6 +38,7 @@ targets:
           - UIInterfaceOrientationPortrait
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.cardashboard.CarDashboardPhone
         CODE_SIGN_STYLE: Automatic
         # 真机签名：个人开发者 Team（Xcode 登录 Apple ID 后自动生成的 Personal Team）
