@@ -76,6 +76,7 @@ bool control_parse(const char *json, size_t len, control_cmd_t *out)
 
     out->kind = CONTROL_NONE;
     out->value = 0;
+    out->value2 = 0;
 
     size_t i = 0;
     if (!expect_char(json, len, &i, '{')) return false;
@@ -84,7 +85,9 @@ bool control_parse(const char *json, size_t len, control_cmd_t *out)
     char cmd[24];
     char sval[16];
     bool have_cmd = false, have_num = false, have_str = false;
+    bool have_num2 = false;
     int32_t num = 0;
+    int32_t num2 = 0;
 
     for (;;) {
         skip_ws(json, len, &i);
@@ -116,6 +119,17 @@ bool control_parse(const char *json, size_t len, control_cmd_t *out)
                         have_num = true;
                     }
                 }
+                /* "on" 键同样接受字符串形式（与 screen 的写法保持一致） */
+                else if (strcmp(key, "on") == 0) {
+                    if (strcmp(sval, "on") == 0) {
+                        num2 = 1;
+                        have_num2 = true;
+                    }
+                    else if (strcmp(sval, "off") == 0) {
+                        num2 = 0;
+                        have_num2 = true;
+                    }
+                }
             }
         }
         else {
@@ -124,6 +138,10 @@ bool control_parse(const char *json, size_t len, control_cmd_t *out)
             if (strcmp(key, "value") == 0) {
                 num = v;
                 have_num = true;
+            }
+            else if (strcmp(key, "on") == 0) {
+                num2 = v;
+                have_num2 = true;
             }
         }
 
@@ -154,6 +172,23 @@ bool control_parse(const char *json, size_t len, control_cmd_t *out)
         if (!have_num || num < 0) return false;
         out->kind = CONTROL_FACE;
         out->value = num;
+        return true;
+    }
+    if (strcmp(cmd, "face_enabled") == 0) {
+        /*
+         * 启用/隐藏某个表盘（App 的分组开关）：
+         *   {"cmd":"face_enabled","value":<表盘 id>,"on":1|0}
+         * "on" 也接受字符串 "on"/"off"，与 screen 命令的写法一致。
+         *
+         * 这里只做**语法与取值域**校验（id >= 0、on 视为布尔）；
+         * "不能隐藏最后一个表盘"这类**业务规则**由 ui_face_set_enabled 决定，
+         * 它会返回 false，固件据此回执失败 —— 解析层不重复业务判断。
+         */
+        if (!have_num || num < 0) return false;
+        if (!have_num2) return false;
+        out->kind = CONTROL_FACE_ENABLED;
+        out->value = num;
+        out->value2 = (num2 != 0) ? 1 : 0;
         return true;
     }
     if (strcmp(cmd, "rotate") == 0) {

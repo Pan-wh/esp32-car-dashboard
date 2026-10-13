@@ -10,20 +10,15 @@ import CoreBluetooth
 struct ContentView: View {
     @StateObject private var session = DriveSessionManager()
 
-    /// 表盘列表（**必须与固件 ui_face 注册顺序严格一致**）。
+    /// 表盘列表**来自设备上报**（不再硬编码）。
     ///
-    /// 与 `simulator/ui/ui_pages.c` 的注册顺序一一对应：
-    ///   0 analog / 1 digital / 2 speed / 3 color / 4 nav
-    ///
-    /// ⚠️ 新增表盘时**此处必须手动同步**（见 docs/tasks/new-face.md §5），
-    /// 否则 App 选不到它 —— BLE 侧其实已支持，只是选择器里没有这一项。
-    ///
-    /// 注：`ui_face.h` 曾称"设备上报表盘列表、App 无需改代码"，
-    /// 但**该上报尚未实现**（docs/ble.md 亦无此协议），故当前必须手工维护。
-    private let faces: [(id: Int, name: String)] = [
-        (0, "模拟时钟"), (1, "数字时钟"), (2, "速度表"), (3, "多彩时钟"),
-        (4, "导航卡片"),
-    ]
+    /// 这样设备新增表盘时 App 无需改动；未收录的名字用设备给的 label 显示。
+    /// 协议见 docs/ble.md 的「表盘列表上报」。
+    private var deviceFaces: [DeviceFace] { session.ble.faces.faces }
+
+    /// 选择器里只列**已启用**的表盘 —— 隐藏的表盘在仪表上滑动时会被跳过，
+    /// 列进来会让用户以为能切过去。
+    private var selectableFaces: [DeviceFace] { deviceFaces.filter { $0.enabled } }
     /// 屏幕方向选项（度）—— 只列 90 的整数倍，与固件 control.c 的严格校验一致。
     /// 仪表侧走 LVGL 软件旋转（本屏为圆形，旋转无长宽比副作用），
     /// 并会持久化到 NVS，重启后保持。
@@ -38,6 +33,7 @@ struct ContentView: View {
 
     var body: some View {
         NavigationView {
+            ScrollViewReader { proxy in
             Form {
                 if session.needsPermissionExplanation {
                     Section("为什么需要权限") {
@@ -82,14 +78,52 @@ struct ContentView: View {
                 }
 
                 Section("仪表控制") {
-                    Picker("表盘", selection: $selectedFace) {
-                        ForEach(faces, id: \.id) { f in
-                            Text(f.name).tag(f.id)
+                    if selectableFaces.isEmpty {
+                        Text(session.ble.facesReady
+                             ? "设备未上报可用的表盘"
+                             : "表盘列表读取中…（连接仪表后自动获取）")
+                            .font(.footnote).foregroundColor(.secondary)
+                    } else {
+                        Picker("表盘", selection: $selectedFace) {
+                            ForEach(selectableFaces, id: \.id) { f in
+                                Text(FaceDisplay.faceTitle(name: f.name,
+                                                           fallbackLabel: f.label)).tag(f.id)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: selectedFace) { _, newValue in
+                            _ = session.ble.setFace(newValue)
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .onChange(of: selectedFace) { _, newValue in
-                        _ = session.ble.setFace(newValue)
+
+                    // 表盘分组与启用/隐藏（设备上报 → 按分组展示 → 开关写回设备）
+                    // .id 供演示模式自动滚动定位（仅 Debug，见 body 末尾）
+                    if !deviceFaces.isEmpty {
+                        Color.clear.frame(height: 0).id("faceGroupsAnchor")
+                        ForEach(session.ble.faces.grouped, id: \.group) { grp in
+                            Section {
+                                ForEach(grp.faces) { f in
+                                    Toggle(isOn: Binding(
+                                        get: { f.enabled },
+                                        set: { on in _ = session.ble.setFaceEnabled(f.id, on) }
+                                    )) {
+                                        Text(FaceDisplay.faceTitle(name: f.name,
+                                                                   fallbackLabel: f.label))
+                                    }
+                                }
+                            } header: {
+                                Text(FaceDisplay.groupTitle(grp.group))
+                            } footer: {
+                                if session.ble.faces.enabledCount <= 1 {
+                                    Text("至少保留一个表盘，最后一个无法隐藏。")
+                                }
+                            }
+                        }
+                    } else if session.ble.isConnected {
+                        Section("表盘分组") {
+                            Text("尚未读到设备的表盘列表").font(.footnote)
+                                .foregroundColor(.secondary)
+                        }
                     }
 
                     Picker("屏幕方向", selection: $selectedRotation) {
@@ -152,6 +186,21 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("CarDashboard")
+            #if DEBUG
+            /*
+             * 演示模式自动滚动到表盘分组。
+             * 目的：模拟器不支持蓝牙、连不上真机，若还要手动滚动才能看到
+             * 「分组 + 开关」，这个演示模式就失去了"验收 UI"的意义。
+             * 仅 Debug 构建 + -demoFaces 启动参数时生效。
+             */
+            .onAppear {
+                guard BLEClient.demoModeEnabled else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    withAnimation { proxy.scrollTo("faceGroupsAnchor", anchor: .top) }
+                }
+            }
+            #endif
+            }
         }
         /*
          * App 启动即尝试连接仪表（#bug 修复）：
@@ -160,6 +209,11 @@ struct ContentView: View {
          * 这里在界面出现时自动扫描一次，用户无需先开始驾驶。
          */
         .onAppear {
+                #if DEBUG
+                if BLEClient.demoModeEnabled && !session.ble.facesReady {
+                    session.ble.loadDemoFaces()
+                }
+                #endif
             guard !didAutoConnect else { return }
             didAutoConnect = true
             session.ble.scanAndConnect()

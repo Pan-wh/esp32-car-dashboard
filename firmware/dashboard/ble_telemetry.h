@@ -16,6 +16,8 @@
 #define BLE_TELEMETRY_H
 
 #include <stdint.h>
+#include <string.h>
+
 #include "control.h"
 #include "nav_parse.h"
 #include "telemetry.h"
@@ -45,6 +47,16 @@ void ble_telemetry_stats(uint32_t *rx_bytes, uint32_t *ok, uint32_t *parse_err);
 
 /* 更新 Status 特征值（可读 + Notify，供 iPhone 读固件状态） */
 void ble_telemetry_set_status(const char *status);
+
+/*
+ * 更新"表盘列表"特征（Read + Notify）。
+ *
+ * json 为 face_report_build() 生成的完整 JSON。设备侧保存整份内容供 Read；
+ * 同时发一次 Notify 作**变更提示**（载荷可能被 MTU 截断，App 应重新 Read）。
+ *
+ * 调用时机：启动时表盘注册完成后；以及启用/隐藏变化后。
+ */
+void ble_telemetry_set_faces(const char *json);
 
 /*
  * 取出待执行的下行控制命令（由主循环调用；BLE 回调只暂存不执行硬件动作）。

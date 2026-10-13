@@ -38,6 +38,7 @@
 /* 共享模块（C 代码，需 extern "C") */
 extern "C" {
 #include "ui_face.h"
+#include "face_report.h"   /* 表盘列表上报（App 据此渲染）*/
 #include "ui_pages.h"
 #include "ui_speed.h"
 #include "ui_nav.h"      /* 导航指引卡片（阶段 1：UI 原型） */
@@ -437,6 +438,12 @@ static void apply_screen(bool off)
  */
 #define ROT_PREF_NS  "dash"
 #define ROT_PREF_KEY "rot"
+/*
+ * 表盘记忆：断电后沿用上次的表盘与启用/隐藏状态。
+ * 沿用 rot 的同一个 NVS 命名空间，便于集中管理用户设置。
+ */
+#define FACE_PREF_KEY  "face"  /* 当前表盘 id */
+#define FMASK_PREF_KEY "fmask" /* 启用位掩码（bit i = face id i）*/
 
 static int s_display_rot = -1; /* 当前方向（度）；-1 = 尚未设置 */
 
@@ -449,6 +456,97 @@ static lv_disp_rot_t rot_deg_to_enum(int deg)
     case 270: return LV_DISP_ROT_270;
     default:  return LV_DISP_ROT_NONE;
   }
+}
+
+/* ---- 表盘记忆与列表上报 ---- */
+
+/** 上一次观察到的表盘 id（-1 = 尚未取过），用于检测变化并持久化 */
+static int s_last_face = -1;
+/** 表盘列表或启用状态有变化，需要重新上报 */
+static bool s_faces_dirty = false;
+
+static void save_face_prefs(int face_id, uint32_t mask)
+{
+  Preferences prefs;
+  if (prefs.begin(ROT_PREF_NS, false)) {
+    prefs.putInt(FACE_PREF_KEY, face_id);
+    prefs.putUInt(FMASK_PREF_KEY, mask);
+    prefs.end();
+  }
+}
+
+/**
+ * 启动时恢复表盘状态（断电记忆）。
+ *
+ * 两件事：先恢复"哪些表盘启用/隐藏"，再恢复"当前是哪个表盘"。
+ * 顺序不能反 —— 当前表盘必须是一个**已启用**的 id。
+ *
+ * 对 NVS 里的旧值做了防御：掩码若与当前注册表对不上（固件升级后表盘增减），
+ * 或会导致一个表盘都不显示，则**整份忽略**并退回默认，而不是让仪表黑着。
+ */
+static void restore_face_state(void)
+{
+  Preferences prefs;
+  int saved_face = -1;
+  uint32_t saved_mask = 0;
+  bool have_mask = false, have_face = false;
+
+  if (prefs.begin(ROT_PREF_NS, true)) {
+    have_mask = prefs.isKey(FMASK_PREF_KEY);
+    saved_mask = prefs.getUInt(FMASK_PREF_KEY, 0);
+    have_face = prefs.isKey(FACE_PREF_KEY);
+    saved_face = prefs.getInt(FACE_PREF_KEY, -1);
+    prefs.end();
+  }
+
+  const int n = ui_face_count();
+  bool mask_ok = false;
+
+  if (have_mask && n > 0) {
+    /* 只接受落在已注册表盘范围内、且至少启用一个的掩码 */
+    uint32_t valid = (n >= 32) ? 0xFFFFFFFFu : ((1u << n) - 1u);
+    uint32_t use = saved_mask & valid;
+    if (use != 0) {
+      for (int i = 0; i < n; i++) {
+        ui_face_set_enabled(i, (use & (1u << i)) != 0);
+      }
+      mask_ok = true;
+    }
+  }
+
+  int target = -1;
+  if (have_face && saved_face >= 0 && saved_face < n && ui_face_is_enabled(saved_face)) {
+    target = saved_face;
+  }
+  if (target < 0) {
+    /* 没有记录、或记录的表盘已被隐藏 → 用第一个启用的表盘 */
+    for (int i = 0; i < n; i++) {
+      if (ui_face_is_enabled(i)) {
+        target = i;
+        break;
+      }
+    }
+  }
+  if (target >= 0) ui_pages_set_face(target);
+
+  s_last_face = ui_pages_current_face();
+  Serial.printf("[表盘] 启动恢复：当前=%d(%s)，%d/%d 启用（掩码来源：%s）；表盘记忆来源：%s\n",
+                s_last_face, ui_pages_current_face_name(), ui_face_enabled_count(), n,
+                mask_ok ? "NVS" : "默认（无记录或与注册表不符）",
+                (have_face && target == saved_face) ? "NVS（上次的表盘）" : "默认");
+}
+
+/** 生成并上报表盘列表（供 App 读取） */
+static void publish_faces_report(void)
+{
+  static char buf[FACE_REPORT_BUF_SIZE];
+  int len = face_report_build(buf, sizeof(buf));
+  if (len <= 0) {
+    Serial.printf("[表盘] 上报生成失败（len=%d）\n", len);
+    return;
+  }
+  ble_telemetry_set_faces(buf);
+  Serial.printf("[表盘] 已上报列表（%d 字节，%d 个表盘）\n", len, ui_face_count());
 }
 
 /**
@@ -520,6 +618,41 @@ static void control_poll(void)
       else {
         Serial.printf("[控制] 表盘 id=%d 无效（共 %d 个）\n", target, ui_face_count());
       }
+      break;
+    }
+    case CONTROL_FACE_ENABLED: {
+      /*
+       * 启用/隐藏表盘（App 的分组开关）。
+       * "不能隐藏最后一个"的业务规则在 ui_face_set_enabled 里，这里只如实回执。
+       */
+      int id = (int)cmd.value;
+      bool on = (cmd.value2 != 0);
+      const char *nm = ui_pages_current_face_name(); /* 仅为日志占位，避免未使用告警 */
+      (void)nm;
+
+      if (!ui_face_set_enabled(id, on)) {
+        Serial.printf("[控制] 表盘 %d %s 被拒绝（id 无效或不允许隐藏最后一个）\n", id,
+                      on ? "启用" : "隐藏");
+        break;
+      }
+
+      const ui_face_desc_t *d = ui_face_get(id);
+      Serial.printf("[控制] 表盘 %d(%s) → %s；当前 %d/%d 启用\n", id,
+                    (d && d->name) ? d->name : "?", on ? "启用" : "隐藏",
+                    ui_face_enabled_count(), ui_face_count());
+
+      /* 隐藏的正是当前正在显示的表盘 → 切到下一个仍启用的，否则会停在隐藏页 */
+      if (!on && ui_pages_current_face() == id) {
+        int nxt = ui_face_next(id, 1);
+        if (nxt >= 0 && nxt != id && ui_pages_set_face(nxt)) {
+          ui_face_sweep_if_speed(nxt);
+          Serial.printf("[控制] 当前表盘被隐藏，已切到 %d(%s)\n", nxt,
+                        ui_pages_current_face_name());
+        }
+      }
+
+      save_face_prefs(ui_pages_current_face(), ui_face_mask());
+      s_faces_dirty = true;
       break;
     }
     case CONTROL_ROTATE:
@@ -1373,7 +1506,16 @@ void setup()
 
   /* 恢复上次保存的屏幕方向（NVS）；无记录则用编译期默认 DISPLAY_ROT */
   restore_display_rotation();
-  ui_pages_show(DEFAULT_PAGE);
+
+  /*
+   * 恢复表盘状态（断电记忆）：先恢复启用/隐藏集合，再恢复当前表盘。
+   * 必须在 ui_pages_init() 之后（注册表已就绪），且在首次 show 之前
+   * —— 否则会先闪一下默认表盘再跳到记忆的表盘。
+   */
+  restore_face_state();
+  publish_faces_report(); /* 表盘注册完成，上报名单供 App 读取 */
+
+  ui_pages_show((ui_page_t)s_last_face);
 
   /*
    * 初始状态：无遥测 → 速度页显示无效（NO FIX / --），指针归零。
@@ -1617,7 +1759,27 @@ void loop()
 {
   s_loop_cnt++;                /* 性能：循环速率 */
   handle_serial();            /* 串口命令：校时 / 切页 */
-  control_poll();             /* BLE 下行控制：亮度 / 息屏 */
+  control_poll();             /* BLE 下行控制：亮度 / 息屏 / 表盘 */
+
+  /*
+   * 表盘变化检测：**滑动、串口命令、BLE 命令**都会改变当前表盘，
+   * 与其在每处分别持久化（容易漏），不如在循环里统一比对一次。
+   * 这样"断电记忆"对所有切换途径都生效。
+   */
+  {
+    int cur = ui_pages_current_face();
+    if (cur != s_last_face) {
+      s_last_face = cur;
+      save_face_prefs(cur, ui_face_mask());
+      Serial.printf("[表盘] 当前 → %d(%s)（已存 NVS，断电后沿用）\n", cur,
+                    ui_pages_current_face_name());
+    }
+    /* App 改动过启用/隐藏状态 → 重新上报，保持两端一致 */
+    if (s_faces_dirty) {
+      s_faces_dirty = false;
+      publish_faces_report();
+    }
+  }
 
   /* 速度指针斜坡推进（#2）：按实际经过时间匀速逼近目标，与帧率无关 */
   {

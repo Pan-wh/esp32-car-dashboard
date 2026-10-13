@@ -37,6 +37,8 @@ simulator/shots/
 # ⚠️ sync_firmware.sh 会复制 simulator/ui/ 下的**所有** .c/.h，
 #    因此每新增一个共享层模块，必须同时在此登记（否则会被误提交）。
 #    已踩坑：新增 nav.c/nav.h 时漏登记（原规则只含 ui_* 前缀）。
+firmware/dashboard/face_report.c
+firmware/dashboard/face_report.h
 firmware/dashboard/ui_*.c
 firmware/dashboard/ui_*.h
 firmware/dashboard/gnss_*.c

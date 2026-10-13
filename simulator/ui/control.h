@@ -6,6 +6,7 @@
  *   {"cmd":"screen","value":"off"}      息屏（仅关显示，触摸仍可唤醒由固件决定）
  *   {"cmd":"screen","value":"on"}       亮屏
  *   {"cmd":"face","value":2}            切换表盘（功能③预留）
+ *   {"cmd":"face_enabled","value":3,"on":0}  启用/隐藏某表盘（on 也接受 "on"/"off"）
  *   {"cmd":"rotate","value":90}         屏幕方向 0/90/180/270（度）
  *
  * 屏幕方向说明（rotate）：
@@ -34,12 +35,14 @@ typedef enum {
     CONTROL_BRIGHTNESS, /* value = 0..255 */
     CONTROL_SCREEN,     /* value = 0 关屏 / 1 亮屏 */
     CONTROL_FACE,       /* value = 表盘 id（>=0）*/
+    CONTROL_FACE_ENABLED, /* value = 表盘 id；value2 = 1 启用 / 0 隐藏 */
     CONTROL_ROTATE,     /* value = 屏幕方向角度：0 / 90 / 180 / 270 */
 } control_kind_t;
 
 typedef struct {
     control_kind_t kind;
-    int32_t value; /* 见 control_kind_t 说明 */
+    int32_t value;  /* 主参数，见 control_kind_t 说明 */
+    int32_t value2; /* 次参数；目前仅 CONTROL_FACE_ENABLED 使用（1 启用 / 0 隐藏）*/
 } control_cmd_t;
 
 /**

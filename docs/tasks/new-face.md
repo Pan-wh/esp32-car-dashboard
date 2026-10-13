@@ -44,7 +44,7 @@ ui_pages.c 的 ui_pages_init()
 | `simulator/ui/ui_<name>.h` | **新增**（导出 `create` 函数）|
 | `simulator/ui/ui_pages.c` | 加一行 `ui_face_register(...)` |
 | `simulator/ui/ui_pages.h` | `ui_page_t` 枚举加一项 |
-| `ios/.../ContentView.swift` | **同步**加一项到 `faces` 数组（见 §5）|
+| （可选）`ios/.../DeviceFaces.swift` | 加一条**中文名映射**。**不加也能用** —— 表盘列表由设备上报，未收录的名字会显示设备给的 `label` |
 
 ## 3. 🔴 你不能改的
 
@@ -52,7 +52,7 @@ ui_pages.c 的 ui_pages_init()
 |------|------|
 | `simulator/ui/*.h` 里**已有**的函数签名 | 固件与 App 依赖 |
 | `firmware/dashboard/**` | 同步产物 + 固件本体 |
-| `ios/**` 除 `ContentView.swift` 的 `faces` 数组 | 其它是定位/BLE 逻辑 |
+| `ios/**` | 其它是定位/BLE 逻辑（表盘列表已改为设备上报，**不再需要手工同步**）|
 | `telemetry.c` / `control.c` / `ui_face.c` | 业务逻辑与注册表实现 |
 | 已有表盘的 `.c` 实现 | 不在本任务范围 |
 
@@ -132,16 +132,20 @@ cd simulator && make -j8
 
 ---
 
-## 5. App 端同步（必需，否则 App 选择器对不上）
+## 5. App 端（**已不再必需**）
 
-`ios/CarDashboardPhone/CarDashboardPhone/ContentView.swift` 里的 `faces` 数组：
+> 📌 2026-10-13 起，表盘列表由**设备上报**（`Faces` 特征，见 docs/ble.md），
+> App 按 `name` 本地化、查不到就用设备给的 `label` 兜底。
+> 因此**新增表盘不需要改 App**，App 也能正确列出它（显示为 ASCII 名）。
+
+想让它显示中文名，在 `ios/.../DeviceFaces.swift` 的 `FaceDisplay.faceTitle`
+里加一条即可：
 
 ```swift
-private let faces: [(id: Int, name: String)] = [
-    (0, "模拟时钟"), (1, "数字时钟"), (2, "速度表"),
-    (3, "我的表盘"),                                    // ← 新增，id 必须与注册顺序一致
-]
+case "myface": return "我的表盘"
 ```
+
+不加也不影响功能 —— 这是"设备上报表盘列表"要解决的问题。
 
 ---
 
