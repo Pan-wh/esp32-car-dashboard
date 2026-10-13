@@ -67,7 +67,8 @@ tools/                        ← 资源与流程脚本
 
 1. 驱动层优先复用官方示例/配套库（`reference/.../examples/arduino/libraries`），只做薄封装。
 2. 数据模块与 UI 模块解耦：数据结构定义共享，UI 只读数据。
-3. GNSS 无效/低速时向 UI 输出明确状态位，UI 负责呈现无效状态，不伪造数据。
+3. **定位/速度无效时向 UI 输出明确状态位**（数据源现为 iPhone Core Location，
+   见 docs/hardware.md），UI 负责呈现无效状态，**不伪造数据**。
 4. 共用 I2C 总线只初始化一次，句柄传递（硬件约束，见 docs/hardware.md）。
 
 ## 可测核心逻辑（共享纯 C 层）

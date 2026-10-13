@@ -608,6 +608,13 @@ static void control_poll(void)
       /* 表盘切换（功能③）：value = face id，或负数语义 -1=下一个 / -2=上一个 */
       int want = (int)cmd.value;
       int cur = ui_pages_current_face();
+      /*
+       * ⚠️ 名字必须在**切换前**取好。
+       * ui_pages_current_face_name() 返回的是"当前"表盘的名字，切换后再调用
+       * 拿到的是新名字 —— 日志会变成 "3(nav) → 4(nav)"（两边同名的假象）。
+       * 它返回的是描述符里的字符串字面量，指针稳定，提前捕获是安全的。
+       */
+      const char *cur_name = ui_pages_current_face_name();
       int target = want;
       if (want == -1) target = ui_face_next(cur, 1);
       else if (want == -2) target = ui_face_prev(cur, 1);
@@ -619,7 +626,7 @@ static void control_poll(void)
          * 若不上报，App 只能靠本地猜测，设备因隐藏而自动切换时就会指错。
          */
         s_faces_dirty = true;
-        Serial.printf("[控制] 表盘 %d(%s) → %d(%s)\n", cur, ui_pages_current_face_name(), target,
+        Serial.printf("[控制] 表盘 %d(%s) → %d(%s)\n", cur, cur_name, target,
                       ui_pages_current_face_name());
       }
       else {

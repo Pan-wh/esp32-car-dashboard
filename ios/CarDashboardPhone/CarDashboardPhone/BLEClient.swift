@@ -325,7 +325,9 @@ extension BLEClient: CBPeripheralDelegate {
                 }
             } else {
                 // 截断或格式不对 → 走 Read 取完整值
-                peripheral.readValue(for: characteristic)
+                // 复用 refreshFaces() 而不是重复一遍 readValue，
+                // 避免"两处各自读取"将来只改一处而漏改（此前它就是个没人用的死方法）
+                refreshFaces()
             }
         }
     }
