@@ -56,6 +56,12 @@ firmware/dashboard/font_*.c
 # Node（网关）；本项目零依赖，正常不会出现
 node_modules/
 
+# ⚠️ 环境变量文件：高德 Key / 网关 token 等同密码，绝不入库
+# （保留 .env.example 作为模板，它不含任何真实密钥）
+.env
+.env.*
+!.env.example
+
 # Python 字节码缓存
 __pycache__/
 *.pyc

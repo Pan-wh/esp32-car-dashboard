@@ -18,11 +18,13 @@
 ```bash
 cd gateway
 
-# 1) 准备两个环境变量（都不要提交到 Git）
-export AMAP_KEY=你的Web服务Key          # 控制台申请，平台必须选「Web 服务」
-export GATEWAY_TOKEN=$(node -e "console.log(crypto.randomUUID())")
+# 1) 复制模板并填入真实值（.env 已被 .gitignore 忽略，不会误提交）
+cp .env.example .env
+#    然后编辑 .env：
+#      AMAP_KEY=        ← 控制台申请，服务平台必须选「Web 服务」
+#      GATEWAY_TOKEN=   ← 自己生成：node -e "console.log(crypto.randomUUID())"
 
-# 2) 起服务
+# 2) 起服务（会自动加载 .env，无需手动 export）
 npm start                                # 默认 127.0.0.1:8080
 
 # 3) 自检
@@ -99,6 +101,10 @@ curl -s -X POST localhost:8080/route \
 ---
 
 ## 环境变量
+
+> 推荐写在 `gateway/.env`（由 `--env-file-if-exists` 自动加载，**已被 gitignore**）；
+> 也可用 `export` 直接注入。缺 `AMAP_KEY` 或 `GATEWAY_TOKEN` 时**启动即失败**，
+> 不会带着空配置跑起来。
 
 | 变量 | 必填 | 默认 | 说明 |
 |------|------|------|------|
