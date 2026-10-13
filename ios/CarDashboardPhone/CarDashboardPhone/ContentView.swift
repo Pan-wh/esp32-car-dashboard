@@ -10,9 +10,11 @@ import CoreBluetooth
 struct ContentView: View {
     @StateObject private var session = DriveSessionManager()
 
-    /// 表盘列表（与固件 ui_face 注册表顺序一致：0 analog / 1 digital / 2 speed）
+    /// 表盘列表（**必须与固件 ui_face 注册顺序严格一致**：
+    /// 0 analog / 1 digital / 2 speed / 3 color）。
+    /// 新增表盘时此处必须同步，否则 App 选不到它（BLE 侧其实已支持）。
     private let faces: [(id: Int, name: String)] = [
-        (0, "模拟时钟"), (1, "数字时钟"), (2, "速度表"),
+        (0, "模拟时钟"), (1, "数字时钟"), (2, "速度表"), (3, "多彩时钟"),
     ]
     @State private var selectedFace = 2
     @State private var brightness: Double = 200
