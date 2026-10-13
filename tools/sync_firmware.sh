@@ -16,8 +16,8 @@ SRC="$ROOT/simulator/ui"
 mkdir -p "$DST"
 
 # 清理上次同步的文件。
-# ⚠️ 只删**确实来自 simulator/ui/ 的同名文件**，不要用 gnss_*.c 这类宽泛通配，
-#    否则会误删固件侧手写的文件（例如 gnss_lc76g.c 是固件专用的 I2C 读取层）。
+# ⚠️ 只删**确实来自 simulator/ui/ 的同名文件**，不要用宽泛通配，
+#    否则会误删固件侧手写的文件（例如 ble_telemetry.cpp 是固件专用）。
 for f in "$SRC"/*.c "$SRC"/*.h; do
   base=$(basename "$f")
   [ -e "$DST/$base" ] && rm -f "$DST/$base"
@@ -34,7 +34,7 @@ for f in "$SRC"/*.c "$SRC"/*.h; do
 done
 
 echo "已同步到 $DST："
-ls -1 "$DST" | grep -E '^(ui_|gnss_|font_|ui_driver)' | sed 's/^/  /'
+ls -1 "$DST" | grep -E '^(ui_|font_|control\.|telemetry\.)' | sed 's/^/  /'
 echo
 echo "接下来（在仓库根目录运行）："
 echo "  arduino-cli compile --fqbn \"esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB\" \\"

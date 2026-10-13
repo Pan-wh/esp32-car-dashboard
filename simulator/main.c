@@ -18,7 +18,6 @@
 #include <string.h>
 
 #include "lvgl.h"
-#include "nmea_replay.h"
 #include "ui_pages.h"
 #include "ui_speed.h"
 #include "ui_timesrc.h"
@@ -166,8 +165,6 @@ int main(int argc, char **argv)
     float speed_kmh = 0.0f;
     int nofix = 0;
     int driver_state = UI_DRIVER_AUTO;
-    const char *nmea_path = NULL;
-    float nmea_speedup = 10.0f;
     int gesture_test = 0;
     int ble_sim = 0; /* 复刻固件 ble_update 每帧调用 setter 的行为（性能回归复现） */
 
@@ -184,8 +181,6 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--driver") && i + 1 < argc) driver_state = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--gesture-test")) gesture_test = 1;
         else if (!strcmp(argv[i], "--ble-sim")) ble_sim = 1;
-        else if (!strcmp(argv[i], "--nmea") && i + 1 < argc) nmea_path = argv[++i];
-        else if (!strcmp(argv[i], "--nmea-speedup") && i + 1 < argc) nmea_speedup = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
             if (sscanf(argv[++i], "%d:%d:%d", &fh, &fm, &fs) < 2) fh = -1;
         }
@@ -269,16 +264,6 @@ int main(int argc, char **argv)
     }
 
     /* NMEA 日志回放：无硬件时验证「NMEA → 解析 → UI」整条链路 */
-    if (nmea_path != NULL) {
-        if (nmea_replay_load(nmea_path)) {
-            nmea_replay_start(nmea_speedup);
-            printf("NMEA 回放: %s（%d 组，%.1fx 速度）\n",
-                   nmea_path, nmea_replay_group_count(), (double)nmea_speedup);
-        }
-        else {
-            fprintf(stderr, "无法载入 NMEA 日志: %s\n", nmea_path);
-        }
-    }
 
     Uint32 deadline = run_ms ? SDL_GetTicks() + run_ms : 0;
     Uint32 last_tick = SDL_GetTicks();
@@ -414,7 +399,6 @@ int main(int argc, char **argv)
         }
 
         /* NMEA 回放推进（每帧检查，按时间倍速喂语句） */
-        if (nmea_replay_active()) nmea_replay_update(SDL_GetTicks());
 
         lv_timer_handler();
 
