@@ -65,189 +65,25 @@ struct ContentView: View {
     @State private var screenOn = true
     /// 防止 onAppear 重复触发自动连接（SwiftUI 可能多次调用）
     @State private var didAutoConnect = false
+    /// 当前标签页（0 仪表 / 1 数据 / 2 导航）
+    @State private var selectedTab = 0
 
     var body: some View {
-        NavigationView {
-            ScrollViewReader { proxy in
-            Form {
-                if session.needsPermissionExplanation {
-                    Section("为什么需要权限") {
-                        Text("定位：驾驶会话中读取车速、航向与位置，用于车载仪表显示。")
-                        Text("蓝牙：与车载仪表（CarDashboard）连接并发送这些数据。")
-                        Text("数据只在本机与仪表之间通过蓝牙传输，不上传云端。")
-                            .font(.footnote).foregroundColor(.secondary)
-                        Button("我了解了，申请权限") { session.requestPermissions() }
-                    }
-                }
-
-                Section("仪表连接") {
-                    HStack {
-                        Text("BLE 状态")
-                        Spacer()
-                        Text(session.ble.stateText).foregroundColor(bleConnected ? .green : .orange)
-                    }
-                    if let notice = session.ble.lastNotice {
-                        Text(notice).font(.footnote).foregroundColor(.secondary)
-                    }
-                    HStack {
-                        Text("定位权限")
-                        Spacer()
-                        Text(locationPermissionText)
-                    }
-                    Button(bleConnected ? "已连接 CarDashboard" : "连接仪表") {
-                        session.ble.scanAndConnect()
-                    }
-                    .disabled(bleConnected)
-                }
-
-                Section("驾驶会话") {
-                    Button(session.isDriving ? "结束驾驶" : "开始驾驶") {
-                        if session.isDriving { session.stopDriving() }
-                        else { session.requestPermissions(); session.startDriving() }
-                    }
-                    .foregroundColor(session.isDriving ? .red : .blue)
-
-                    row("累计发送", "\(session.sentCount) 包")
-                    row("最近发送", timeText(session.lastSendTime))
-                    row("定位数据时间", timeText(session.lastLocationTime))
-                }
-
-                // ── 全局显示设置 ────────────────────────────────────
-                // 旋转 / 亮度 / 息屏都是**整机**行为，对所有表盘生效，
-                // 不属于某个表盘 —— 因此独立成节，不要放进「表盘」里，
-                // 否则会让人以为"只影响当前那个表盘"。
-                Section {
-                    Picker("屏幕方向", selection: $selectedRotation) {
-                        ForEach(rotations, id: \.self) { deg in
-                            Text("\(deg)°").tag(deg)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: selectedRotation) { _, deg in
-                        _ = session.ble.setRotation(deg)
-                    }
-
-                    HStack {
-                        Text("亮度")
-                        Slider(value: $brightness, in: 1...255, step: 1) { editing in
-                            // 拖动结束才发送，避免高频写 BLE
-                            if !editing { _ = session.ble.setBrightness(Int(brightness)) }
-                        }
-                        Text("\(Int(brightness))").monospacedDigit().frame(width: 34)
-                    }
-
-                    Toggle("屏幕点亮", isOn: $screenOn)
-                        .onChange(of: screenOn) { _, on in
-                            _ = session.ble.setScreen(on: on)
-                        }
-                } header: {
-                    Text("屏幕显示")
-                } footer: {
-                    Text("对所有表盘生效，不是单个表盘的设置。")
-                }
-
-                // ── 表盘：先选分组，再看该分组内的表盘 ──────────────
-                //
-                // 层级：分组（时钟/速度表/导航…）→ 组内表盘
-                // 分组来自设备上报的 group 字段，只列出设备实际有的分组。
-                Section {
-                    if deviceFaces.isEmpty {
-                        Text(session.ble.isConnected
-                             ? "尚未读到设备的表盘列表"
-                             : "表盘列表读取中…（连接仪表后自动获取）")
-                            .font(.footnote).foregroundColor(.secondary)
-                    } else {
-                        Color.clear.frame(height: 0).id("faceGroupsAnchor")
-
-                        // 一级：分组（设备实际有的，通常 3 个）
-                        Picker("分组", selection: Binding(
-                            get: { effectiveGroup },
-                            set: { selectedGroup = $0 }
-                        )) {
-                            ForEach(groups, id: \.self) { g in
-                                Text(FaceDisplay.groupTitle(g)).tag(g)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        // 二级：**只列出当前分组**的表盘
-                        // 行布局：左=表盘图标（区分是哪种表盘）｜中=名称
-                        //         右=「切到这个表盘」按钮 + 「是否在滑动序列中」开关
-                        ForEach(facesInSelectedGroup) { f in
-                            faceRow(f)
-                        }
-
-                        if let notice = session.ble.lastNotice {
-                            Text(notice).font(.footnote).foregroundColor(.secondary)
-                        }
-                    }
-                } header: {
-                    Text("表盘")
-                } footer: {
-                    if !deviceFaces.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("→ 切到该表盘（✓ 为当前显示的）；开关控制是否出现在滑动序列中。")
-                            if session.ble.faces.enabledCount <= 1 {
-                                Text("至少保留一个表盘，最后一个无法隐藏。")
-                            }
-                            if session.ble.faces.truncated {
-                                Text("设备上报的列表不完整，部分开关可能显示不准。")
-                                    .foregroundColor(.orange)
-                            }
-                        }
-                    }
-                }
-
-                Section("实时数据") {
-                    if let loc = session.lastLocation {
-                        let speedKmh = loc.speed < 0 ? nil : loc.speed * 3.6
-                        row("速度", speedKmh.map { String(format: "%.1f km/h", $0) } ?? "--")
-                        row("航向", loc.course >= 0 ? String(format: "%.0f°", loc.course) : "--")
-                        row("定位精度", String(format: "±%.0f m", loc.horizontalAccuracy))
-
-                        // ---- 诊断：速度为何被判无效（AI_TASK §5 质量门槛）----
-                        // speed_valid 由 TelemetryQuality.isSpeedUsable() 决定，
-                        // 关键门槛：speed >= 0 且 speedAccuracy <= 2.0 m/s
-                        let speedOK = TelemetryQuality.isSpeedUsable(loc)
-                        let locOK = TelemetryQuality.isLocationUsable(loc)
-                        row("速度质量", speedOK ? "通过" : "被拦（不发送）")
-                        if #available(iOS 17.0, *) {
-                            let sa = loc.speedAccuracy
-                            row("测速精度", sa >= 0 ? String(format: "±%.2f m/s", sa) : "未知（负值）")
-                        }
-                        row("定位质量", locOK ? "通过" : "被拦（不发送）")
-                        row("speed 原始值", String(format: "%.2f m/s", loc.speed))
-                        row("纬度", String(format: "%.4f", loc.coordinate.latitude))
-                        row("经度", String(format: "%.4f", loc.coordinate.longitude))
-                        row("高度", String(format: "%.0f m", loc.altitude))
-                    } else {
-                        Text("等待定位数据…").foregroundColor(.secondary)
-                    }
-                    if let err = session.locationError {
-                        Text(err).foregroundColor(.red)
-                    }
-                }
-            }
-            .navigationTitle("CarDashboard")
-            #if DEBUG
-            /*
-             * 演示模式自动滚动到表盘分组。
-             * 目的：模拟器不支持蓝牙、连不上真机，若还要手动滚动才能看到
-             * 「分组 + 开关」，这个演示模式就失去了"验收 UI"的意义。
-             * 仅 Debug 构建 + -demoFaces 启动参数时生效。
-             */
-            .onAppear {
-                guard BLEClient.demoModeEnabled else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                    withAnimation { proxy.scrollTo("faceGroupsAnchor", anchor: .top) }
-                }
-            }
-            #endif
-            // 设备上报变化时校正本地选择：
-            //   - 选中的分组没了（设备改版）→ 退回第一个分组
-            //   - 当前表盘以**设备上报的 cur 为准**（设备可能因隐藏而自动切换过）
-            // 分组选中态与"当前表盘"都是**派生值**，无需在这里做任何同步。
-            }
+        // 三个标签页：配置仪表 / 观察数据 / 导航（预留）
+        //
+        // 为什么分页：此前所有内容挤在一页，开车时要看的"速度、航向"被
+        // 亮度、表盘开关等**配置项**挤到下面，每次都得滚动。
+        // 按"配置"与"观察"分成两页后，各页都短到一屏可见。
+        TabView(selection: $selectedTab) {
+            instrumentTab
+                .tag(0)
+                .tabItem { Label("仪表", systemImage: "gauge.medium") }
+            dataTab
+                .tag(1)
+                .tabItem { Label("数据", systemImage: "location.fill") }
+            navTab
+                .tag(2)
+                .tabItem { Label("导航", systemImage: "location.north.line") }
         }
         /*
          * App 启动即尝试连接仪表（#bug 修复）：
@@ -256,14 +92,322 @@ struct ContentView: View {
          * 这里在界面出现时自动扫描一次，用户无需先开始驾驶。
          */
         .onAppear {
-                #if DEBUG
-                if BLEClient.demoModeEnabled && !session.ble.facesReady {
-                    session.ble.loadDemoFaces()
-                }
-                #endif
+            #if DEBUG
+            // 便于截图/验收：-tab 0|1|2 指定初始标签页（正常运行由用户点切换）
+            let args = ProcessInfo.processInfo.arguments
+            if let i = args.firstIndex(of: "-tab"), i + 1 < args.count,
+               let t = Int(args[i + 1]), (0...2).contains(t) {
+                selectedTab = t
+            }
+            if BLEClient.demoModeEnabled && !session.ble.facesReady {
+                session.ble.loadDemoFaces()
+            }
+            #endif
             guard !didAutoConnect else { return }
             didAutoConnect = true
             session.ble.scanAndConnect()
+        }
+    }
+
+    // MARK: - 标签页 1：仪表（配置：连接 / 屏幕 / 表盘）
+
+    private var instrumentTab: some View {
+        NavigationView {
+            ScrollViewReader { proxy in
+                Form {
+                    permissionSection
+                    connectionSection
+                    screenSection
+                    faceSection
+                }
+                .navigationTitle("仪表")
+                .toolbar { connectionIndicator }
+                #if DEBUG
+                /*
+                 * 演示模式自动滚动到表盘分组。
+                 * 目的：模拟器不支持蓝牙、连不上真机，若还要手动滚动才能看到
+                 * 「分组 + 开关」，这个演示模式就失去了"验收 UI"的意义。
+                 * 仅 Debug 构建 + -demoFaces 启动参数时生效。
+                 */
+                .onAppear {
+                    // 只演示"表盘"这一屏时自动滚过去；看别的标签页时不要乱滚
+                    guard BLEClient.demoModeEnabled, selectedTab == 0 else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        withAnimation { proxy.scrollTo("faceGroupsAnchor", anchor: .top) }
+                    }
+                }
+                #endif
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    // MARK: - 标签页 2：数据（观察：发送状态 / 定位 / 诊断）
+
+    private var dataTab: some View {
+        NavigationView {
+            Form {
+                sendStatusSection
+                liveDataSection
+            }
+            .navigationTitle("数据")
+            .toolbar { connectionIndicator }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    // MARK: - 标签页 3：导航（预留）
+
+    private var navTab: some View {
+        NavigationView {
+            Form {
+                Section {
+                    Text("此页将显示导航指引：路线进度、下一转向、偏离路线与重新规划状态。")
+                        .font(.footnote)
+                    Text("数据来源：手机定位 → 本机导航核心匹配路线 → 经蓝牙下发到仪表。")
+                        .font(.footnote).foregroundColor(.secondary)
+                } header: {
+                    Text("导航（开发中）")
+                }
+
+                Section("当前进度") {
+                    // 如实标注各部分状态，避免看起来"已经能用"
+                    navStatusRow("后端网关（高德代理 + 坐标转换）", done: true)
+                    navStatusRow("导航核心（路线匹配 / 偏航 / 重算）", done: true)
+                    navStatusRow("本页界面与数据接入", done: false)
+                    Text("后端与核心已实现并在真机验证过；本页尚未接入。")
+                        .font(.footnote).foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("导航")
+            .toolbar { connectionIndicator }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    // MARK: - 各节内容
+
+    @ViewBuilder
+    private var screenSection: some View {
+        // ── 全局显示设置 ────────────────────────────────────
+        // 旋转 / 亮度 / 息屏都是**整机**行为，对所有表盘生效，
+        // 不属于某个表盘 —— 因此独立成节，不要放进「表盘」里，
+        // 否则会让人以为"只影响当前那个表盘"。
+        Section {
+            Picker("屏幕方向", selection: $selectedRotation) {
+                ForEach(rotations, id: \.self) { deg in
+                    Text("\(deg)°").tag(deg)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: selectedRotation) { _, deg in
+                _ = session.ble.setRotation(deg)
+            }
+
+            HStack {
+                Text("亮度")
+                Slider(value: $brightness, in: 1...255, step: 1) { editing in
+                    // 拖动结束才发送，避免高频写 BLE
+                    if !editing { _ = session.ble.setBrightness(Int(brightness)) }
+                }
+                Text("\(Int(brightness))").monospacedDigit().frame(width: 34)
+            }
+
+            Toggle("屏幕点亮", isOn: $screenOn)
+                .onChange(of: screenOn) { _, on in
+                    _ = session.ble.setScreen(on: on)
+                }
+        } header: {
+            Text("屏幕显示")
+        } footer: {
+            Text("对所有表盘生效，不是单个表盘的设置。")
+        }
+    }
+
+    @ViewBuilder
+    private var faceSection: some View {
+        // ── 表盘：先选分组，再看该分组内的表盘 ──────────────
+        //
+        // 层级：分组（时钟/速度表/导航…）→ 组内表盘
+        // 分组来自设备上报的 group 字段，只列出设备实际有的分组。
+        Section {
+            if deviceFaces.isEmpty {
+                Text(session.ble.isConnected
+                     ? "尚未读到设备的表盘列表"
+                     : "表盘列表读取中…（连接仪表后自动获取）")
+                    .font(.footnote).foregroundColor(.secondary)
+            } else {
+                Color.clear.frame(height: 0).id("faceGroupsAnchor")
+
+                // 一级：分组（设备实际有的，通常 3 个）
+                Picker("分组", selection: Binding(
+                    get: { effectiveGroup },
+                    set: { selectedGroup = $0 }
+                )) {
+                    ForEach(groups, id: \.self) { g in
+                        Text(FaceDisplay.groupTitle(g)).tag(g)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                // 二级：**只列出当前分组**的表盘
+                // 行布局：左=表盘图标（区分是哪种表盘）｜中=名称
+                //         右=「切到这个表盘」按钮 + 「是否在滑动序列中」开关
+                ForEach(facesInSelectedGroup) { f in
+                    faceRow(f)
+                }
+
+                if let notice = session.ble.lastNotice {
+                    Text(notice).font(.footnote).foregroundColor(.secondary)
+                }
+            }
+        } header: {
+            Text("表盘")
+        } footer: {
+            if !deviceFaces.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("→ 切到该表盘（✓ 为当前显示的）；开关控制是否出现在滑动序列中。")
+                    if session.ble.faces.enabledCount <= 1 {
+                        Text("至少保留一个表盘，最后一个无法隐藏。")
+                    }
+                    if session.ble.faces.truncated {
+                        Text("设备上报的列表不完整，部分开关可能显示不准。")
+                            .foregroundColor(.orange)
+                    }
+                }
+            }
+        }
+    }
+
+
+    @ViewBuilder
+    private var permissionSection: some View {
+        if session.needsPermissionExplanation {
+            Section("为什么需要权限") {
+                Text("定位：驾驶会话中读取车速、航向与位置，用于车载仪表显示。")
+                Text("蓝牙：与车载仪表（CarDashboard）连接并发送这些数据。")
+                Text("数据只在本机与仪表之间通过蓝牙传输，不上传云端。")
+                    .font(.footnote).foregroundColor(.secondary)
+                Button("我了解了，申请权限") { session.requestPermissions() }
+            }
+        }
+    }
+
+    /// 连接 + 开始驾驶。
+    ///
+    /// 「开始驾驶」放在这里（而不是数据页）：它是**动作**不是数据，
+    /// 与"连接"同页才能形成 连接 → 开始驾驶 的顺畅流程。
+    /// 发送统计属于"观察"，放在数据页。
+    @ViewBuilder
+    private var connectionSection: some View {
+        Section {
+            HStack {
+                Text("BLE 状态")
+                Spacer()
+                Text(session.ble.stateText).foregroundColor(bleConnected ? .green : .orange)
+            }
+            if let notice = session.ble.lastNotice {
+                Text(notice).font(.footnote).foregroundColor(.secondary)
+            }
+            HStack {
+                Text("定位权限")
+                Spacer()
+                Text(locationPermissionText)
+            }
+            Button(bleConnected ? "已连接 CarDashboard" : "连接仪表") {
+                session.ble.scanAndConnect()
+            }
+            .disabled(bleConnected)
+
+            Button(session.isDriving ? "结束驾驶" : "开始驾驶") {
+                if session.isDriving { session.stopDriving() }
+                else { session.requestPermissions(); session.startDriving() }
+            }
+            .foregroundColor(session.isDriving ? .red : .blue)
+        } header: {
+            Text("仪表连接")
+        } footer: {
+            Text("开始驾驶后，本机会持续把定位与车速通过蓝牙发送给仪表。")
+        }
+    }
+
+    /// 发送状态（原「驾驶会话」的统计部分）
+    @ViewBuilder
+    private var sendStatusSection: some View {
+        Section("发送状态") {
+            row("累计发送", "\(session.sentCount) 包")
+            row("最近发送", timeText(session.lastSendTime))
+            row("定位数据时间", timeText(session.lastLocationTime))
+            if !session.isDriving {
+                Text("未在发送：到「仪表」页点开始驾驶。")
+                    .font(.footnote).foregroundColor(.secondary)
+            }
+        }
+    }
+
+    /// 实时定位：**只放开车时真正要看的**（速度 / 航向 / 精度）。
+    /// 质量门槛、原始值、经纬度等排查用信息收进「诊断详情」，默认收起。
+    @ViewBuilder
+    private var liveDataSection: some View {
+        Section("实时数据") {
+            if let loc = session.lastLocation {
+                let speedKmh = loc.speed < 0 ? nil : loc.speed * 3.6
+                row("速度", speedKmh.map { String(format: "%.1f km/h", $0) } ?? "--")
+                row("航向", loc.course >= 0 ? String(format: "%.0f°", loc.course) : "--")
+                row("定位精度", String(format: "±%.0f m", loc.horizontalAccuracy))
+
+                DisclosureGroup("诊断详情") {
+                    // ---- 诊断：速度为何被判无效（§5 质量门槛）----
+                    // speed_valid 由 TelemetryQuality.isSpeedUsable() 决定，
+                    // 关键门槛：speed >= 0 且 speedAccuracy <= 2.0 m/s
+                    let speedOK = TelemetryQuality.isSpeedUsable(loc)
+                    let locOK = TelemetryQuality.isLocationUsable(loc)
+                    row("速度质量", speedOK ? "通过" : "被拦（不发送）")
+                    if #available(iOS 17.0, *) {
+                        let sa = loc.speedAccuracy
+                        row("测速精度", sa >= 0 ? String(format: "±%.2f m/s", sa) : "未知（负值）")
+                    }
+                    row("定位质量", locOK ? "通过" : "被拦（不发送）")
+                    row("speed 原始值", String(format: "%.2f m/s", loc.speed))
+                    row("纬度", String(format: "%.4f", loc.coordinate.latitude))
+                    row("经度", String(format: "%.4f", loc.coordinate.longitude))
+                    row("高度", String(format: "%.0f m", loc.altitude))
+                }
+                .font(.subheadline)
+            } else {
+                Text("等待定位数据…").foregroundColor(.secondary)
+            }
+            if let err = session.locationError {
+                Text(err).foregroundColor(.red)
+            }
+        }
+    }
+
+    /// 导航页的状态行（✅ / ⬜ + 文字）
+    private func navStatusRow(_ text: String, done: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: done ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(done ? .green : .secondary)
+            Text(text).font(.subheadline)
+        }
+    }
+
+    /// 连接状态指示器（三个标签页都显示）。
+    ///
+    /// 为什么每页都要：数据是否有效**完全取决于连接**。
+    /// 若只在「仪表」页显示，用户在「数据」页看到速度不动时，
+    /// 无法判断是"没定位"还是"压根没连上"，会白排查。
+    @ToolbarContentBuilder
+    private var connectionIndicator: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarTrailing) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(bleConnected ? Color.green : Color.orange)
+                    .frame(width: 8, height: 8)
+                Text(bleConnected ? "已连接" : "未连接")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
     }
 
