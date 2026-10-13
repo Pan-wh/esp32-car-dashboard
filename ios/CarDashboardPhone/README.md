@@ -53,7 +53,7 @@ JSON 字段与语义见 `../../docs/ble.md` 与 `TelemetryPacket.swift` 的 Codi
 | **xcodebuild 完整构建（模拟器）** | ✅ BUILD SUCCEEDED |
 | **App 启动运行无崩溃 + UI 渲染** | ✅ 截图像素验证 |
 | **XCUITest 自动化（会话开/关 + 定位→编码→计数）** | ✅ 2 项通过（Freeway Drive 场景）|
-| 真机运行 / 后台 / CarPlay | ⚠️ **待真机**（板子断开中，明日连接后测）|
+| 真机运行 / 后台 / 锁屏 / CarPlay | ✅ **已真机验证**（iPhone 12 / iOS 27）见 `docs/test-results.md` |
 
 ## 后台（阶段 4）注意事项
 

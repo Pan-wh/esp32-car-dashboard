@@ -6,6 +6,24 @@
 
 ---
 
+## 文档地图（先看这里找对文件）
+
+| 文件 | 职责 |
+|------|------|
+| [`PROGRESS.md`](PROGRESS.md)（本文）| **项目进度总览**：做到哪、还差什么、构建与串口速查 |
+| [`docs/test-results.md`](docs/test-results.md) | **测试台账**（单一事实来源）：§9 矩阵 12 项、DoD 8 项、复测指引 |
+| [`docs/troubleshooting.md`](docs/troubleshooting.md) | 排障记录：按主题索引，含根因分析与踩坑 |
+| [`docs/architecture.md`](docs/architecture.md) | 系统架构、模块划分、共享代码层 |
+| [`docs/ble.md`](docs/ble.md) | BLE 协议细节（GATT、JSON 字段）|
+| [`docs/decisions.md`](docs/decisions.md) | 设计决策（含已被取代的决策，保留历史）|
+| [`docs/hardware.md`](docs/hardware.md) | 硬件规格与引脚 |
+| [`docs/setup-macos.md`](docs/setup-macos.md) | 开发环境搭建 |
+| [`docs/ui-guidelines.md`](docs/ui-guidelines.md) | UI 规范与遗留设计选项 |
+| [`AI_CONTEXT.md`](AI_CONTEXT.md) | AI 协作上下文（协作规则、交付要求）|
+| [`AI_TASK_IPHONE_BLE_DASHBOARD.md`](AI_TASK_IPHONE_BLE_DASHBOARD.md) | 改造任务书（需求与验收标准）|
+
+---
+
 ## 一、项目目标
 
 把微雪 **ESP32-S3-Touch-AMOLED-1.75**（466×466 圆屏）做成车载仪表盘，
@@ -159,15 +177,21 @@ ESP32-S3 (dashboard.ino)
 
 ## 八、测试现状
 
+> **完整测试台账见 [`docs/test-results.md`](docs/test-results.md)**——
+> 含 §9 矩阵 12 项、DoD 8 项、复测指引（避免重复测试）。
+
 | 套件 | 数量 | 说明 |
 |------|------|------|
-| `test_telemetry` | 93 | JSON 解析/换算/平滑/合理性/行程 |
+| `test_telemetry` | 115 | 解析/换算/平滑/合理性/状态机/行程/**斜坡**/**防抖** |
 | `test_control` | 28 | 控制命令解析 |
 | `test_ui_face` | 32 | 表盘注册表 |
 | `test_ios_logic` | 32 | iOS 侧纯逻辑（Swift）|
+| **单测小计** | **207** | `cd tests && make run` |
 | `ui_regression.py` | 10 | UI 像素级回归 |
-| **合计** | **195** | `cd tests && make run` |
-| XCUITest | 4 | 会话开关/遥测计数/设备控制 UI/链路诊断 |
+| XCUITest | 5 | 会话/遥测计数/设备控制/链路诊断/BLE 状态 |
+| **自动化总计** | **222** | |
+
+**真机验证**（iPhone 12 / iOS 27）：§9 矩阵 **12/12 通过**，DoD **8/8 达成**。
 
 ---
 
