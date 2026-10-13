@@ -264,12 +264,14 @@ func testNoRouteAndClear() {
     let core = NavCore()
     check(core.snapshot.state == .noData, "初始状态应为 noData")
 
-    var snap = core.handle(fix: mkFix(pt(39.0), t: 1000), nowMs: 1000)
-    check(snap.state == .noData, "无路线时处理定位应为 noData")
+    let out1 = core.handle(fix: mkFix(pt(39.0), t: 1000), nowMs: 1000)
+    check(out1.snapshot.state == .noData, "无路线时处理定位应为 noData")
+    check(out1.commands.isEmpty, "无路线时不应产生命令")
 
     core.setRoute(straightRoute())
-    snap = core.handle(fix: mkFix(pt(39.005), t: 2000), nowMs: 2000)
-    check(snap.state == .active, "设置路线后应为 active")
+    let out2 = core.handle(fix: mkFix(pt(39.005), t: 2000), nowMs: 2000)
+    check(out2.snapshot.state == .active, "设置路线后应为 active")
+    check(out2.commands.isEmpty, "在路线上不应产生重算命令")
 
     core.clear()
     check(core.snapshot.state == .noData, "clear 后应回到 noData")
@@ -362,6 +364,193 @@ func testPointAt() {
     check(single.pointAt(distanceM: 0)?.lat == 39.0, "单点路线返回该点")
 }
 
+func testRerouteRequest() {
+    print("--- 偏航重算：请求新路线 ---")
+    let r = straightRoute()
+    var cfg = NavConfig()
+    cfg.offRouteConfirmations = 2
+    cfg.routeRetryAfterMs = 5000
+    cfg.maxRouteAttempts = 3
+    let core = NavCore(config: cfg)
+    core.setRoute(r)
+
+    // 到偏航位置：连续 2 次确认
+    let off = pt(39.005, lon: lon0 + 0.001)
+    let o1 = core.handle(fix: mkFix(off, t: 1000), nowMs: 1000)
+    check(o1.commands.isEmpty, "第 1 次偏航候选不应请求重算")
+    let o2 = core.handle(fix: mkFix(off, t: 2000), nowMs: 2000)
+    check(o2.snapshot.state == .rerouting, "应进入 rerouting")
+    check(o2.commands.count == 1, "确认偏航后应产出 1 条重算命令，实际 \(o2.commands.count)")
+
+    guard case .requestRoute(let req)? = o2.commands.first else {
+        check(false, "命令类型应为 requestRoute")
+        return
+    }
+    check(req.reason == .offRoute, "原因应为 offRoute")
+    check(req.attempt == 1, "首次尝试 attempt 应为 1，实际 \(req.attempt)")
+    check(abs(req.origin.lon - off.lon) < 1e-9 && abs(req.origin.lat - off.lat) < 1e-9,
+          "起点应为**当前位置**（偏航处），而不是路线上最近点")
+    // 终点应为原路线终点
+    if let dest = r.polyline.last {
+        check(abs(req.destination.lon - dest.lon) < 1e-9
+              && abs(req.destination.lat - dest.lat) < 1e-9, "终点应为原路线终点")
+    }
+    check(o2.snapshot.routeRequestInFlight, "应标记为等待新路线")
+    check(o2.snapshot.routeAttempts == 1, "尝试计数应为 1")
+}
+
+func testRerouteThrottle() {
+    print("--- 重算节流：不刷请求 ---")
+    let r = straightRoute()
+    var cfg = NavConfig()
+    cfg.offRouteConfirmations = 2
+    cfg.routeRetryAfterMs = 5000
+    cfg.maxRouteAttempts = 3
+    let core = NavCore(config: cfg)
+    core.setRoute(r)
+    let off = pt(39.005, lon: lon0 + 0.001)
+
+    _ = core.handle(fix: mkFix(off, t: 1000), nowMs: 1000)
+    let o2 = core.handle(fix: mkFix(off, t: 2000), nowMs: 2000)
+    check(o2.commands.count == 1, "第 1 次请求")
+
+    // 重试间隔内多次定位 → 不得重复请求（否则每秒定位都会打网关）
+    for i in 3...6 {
+        let o = core.handle(fix: mkFix(off, t: Int64(i) * 1000), nowMs: Int64(i) * 1000)
+        check(o.commands.isEmpty, "间隔内（\(i)s）不应重复请求")
+    }
+
+    // 超过重试间隔 → 视为上次失败，重试（attempt 递增）
+    let o7 = core.handle(fix: mkFix(off, t: 7000), nowMs: 7000)
+    check(o7.commands.count == 1, "超过重试间隔应再次请求")
+    if case .requestRoute(let req)? = o7.commands.first {
+        check(req.attempt == 2, "第 2 次尝试 attempt 应为 2，实际 \(req.attempt)")
+    } else { check(false, "应为 requestRoute") }
+}
+
+func testRerouteMaxAttempts() {
+    print("--- 重算上限：网关故障时不无限刷 ---")
+    let r = straightRoute()
+    var cfg = NavConfig()
+    cfg.offRouteConfirmations = 1
+    cfg.routeRetryAfterMs = 1000
+    cfg.maxRouteAttempts = 3
+    let core = NavCore(config: cfg)
+    core.setRoute(r)
+    let off = pt(39.005, lon: lon0 + 0.001)
+
+    var total = 0
+    var t: Int64 = 1000
+    for _ in 0..<20 {
+        let o = core.handle(fix: mkFix(off, t: t), nowMs: t)
+        total += o.commands.count
+        t += 1000
+    }
+    check(total == 3, "最多请求 \(cfg.maxRouteAttempts) 次，实际 \(total)")
+    check(core.snapshot.state == .rerouting, "达到上限后仍应停在 rerouting")
+    check(core.snapshot.routeAttempts == 3, "计数应停在 3")
+}
+
+func testRerouteRecoveryByNewRoute() {
+    print("--- 重算：交回新路线后恢复 ---")
+    let r = straightRoute()
+    var cfg = NavConfig()
+    cfg.offRouteConfirmations = 1
+    cfg.routeRetryAfterMs = 5000
+    let core = NavCore(config: cfg)
+    core.setRoute(r)
+    let off = pt(39.005, lon: lon0 + 0.001)
+
+    let o = core.handle(fix: mkFix(off, t: 1000), nowMs: 1000)
+    check(o.commands.count == 1, "应请求重算")
+
+    // 模拟"调用方拿到新路线并交回"：新路线从当前位置（偏航处）起
+    let newRoute = NavRoute(steps: [
+        NavStep(maneuver: .right, distanceM: 1111.95, polyline: [off, pt(39.015, lon: lon0 + 0.001)]),
+    ])
+    core.setRoute(newRoute)
+    check(core.snapshot.state == .active, "交回新路线后应回到 active")
+    check(core.snapshot.routeAttempts == 0, "重算计数应清零")
+    check(!core.snapshot.routeRequestInFlight, "等待标志应清除")
+
+    // 在新路线上正常行驶 → 不再产生命令
+    let o2 = core.handle(fix: mkFix(pt(39.008, lon: lon0 + 0.001), t: 2000), nowMs: 2000)
+    check(o2.commands.isEmpty, "新路线上不应再请求重算")
+    check(o2.snapshot.state == .active, "应保持 active")
+}
+
+func testRerouteCounterResetsOnRecovery() {
+    print("--- 重算：回到路线后计数重置 ---")
+    let r = straightRoute()
+    var cfg = NavConfig()
+    cfg.offRouteConfirmations = 1
+    cfg.routeRetryAfterMs = 1000
+    cfg.maxRouteAttempts = 5
+    let core = NavCore(config: cfg)
+    core.setRoute(r)
+    let off = pt(39.005, lon: lon0 + 0.001)
+
+    let o1 = core.handle(fix: mkFix(off, t: 1000), nowMs: 1000)
+    check(o1.commands.count == 1, "偏航 → 请求 1 次")
+    check(core.snapshot.routeAttempts == 1, "计数 1")
+
+    // 回到路线
+    let o2 = core.handle(fix: mkFix(pt(39.006), t: 2000), nowMs: 2000)
+    check(o2.commands.isEmpty, "回到路线不应请求")
+    check(o2.snapshot.routeAttempts == 0, "回到路线后计数应重置为 0")
+    check(!o2.snapshot.routeRequestInFlight, "等待标志应清除")
+
+    // 再次偏航 → 重新从 attempt=1 开始（而不是接着上次的 2）
+    let o3 = core.handle(fix: mkFix(pt(39.006, lon: lon0 + 0.001), t: 3000), nowMs: 3000)
+    check(o3.commands.count == 1, "再次偏航应重新请求")
+    if case .requestRoute(let req)? = o3.commands.first {
+        check(req.attempt == 1, "计数已重置，attempt 应为 1，实际 \(req.attempt)")
+    }
+}
+
+func testRerouteViaTick() {
+    print("--- 重算：即使没有新定位，tick 也会按重试间隔续请求 ---")
+    let r = straightRoute()
+    var cfg = NavConfig()
+    cfg.offRouteConfirmations = 1
+    cfg.routeRetryAfterMs = 5000
+    cfg.maxRouteAttempts = 3
+    cfg.staleAfterMs = 60000   // 放大过期阈值，避免与本用例的 stale 混淆
+    let core = NavCore(config: cfg)
+    core.setRoute(r)
+    let off = pt(39.005, lon: lon0 + 0.001)
+
+    let o1 = core.handle(fix: mkFix(off, t: 1000), nowMs: 1000)
+    check(o1.commands.count == 1, "首次请求")
+
+    // 没有新定位，但时间推进超过重试间隔 → tick 应再次产出命令
+    let o2 = core.tick(nowMs: 3000)
+    check(o2.commands.isEmpty, "间隔内 tick 不应请求")
+    let o3 = core.tick(nowMs: 8000)
+    check(o3.commands.count == 1, "超过重试间隔后 tick 应再次请求")
+    if case .requestRoute(let req)? = o3.commands.first {
+        check(req.attempt == 2, "attempt 应为 2")
+    }
+}
+
+func testNoRerouteWhenArrived() {
+    print("--- 到达后不应再请求重算 ---")
+    let r = straightRoute()
+    var cfg = NavConfig()
+    cfg.offRouteConfirmations = 1
+    cfg.arrivalConfirmations = 1
+    let core = NavCore(config: cfg)
+    core.setRoute(r)
+
+    let o = core.handle(fix: mkFix(pt(39.0199), t: 1000), nowMs: 1000)
+    check(o.snapshot.state == .arrived, "应判定到达")
+    check(o.commands.isEmpty, "到达时不应请求重算")
+
+    // 到达后即使"位置很偏"也不该触发重算（到达是锁存的）
+    let o2 = core.handle(fix: mkFix(pt(39.0199, lon: lon0 + 0.01), t: 2000), nowMs: 2000)
+    check(o2.commands.isEmpty, "到达锁存后不应请求重算")
+}
+
 func testCrossLanguageCoords() {
     print("--- 坐标转换：与 JS 实现交叉验证 ---")
 
@@ -440,6 +629,13 @@ struct TestNavCore {
         testManeuverEnumMatchesProtocol()
         testStepRangeScaling()
         testPointAt()
+        testRerouteRequest()
+        testRerouteThrottle()
+        testRerouteMaxAttempts()
+        testRerouteRecoveryByNewRoute()
+        testRerouteCounterResetsOnRecovery()
+        testRerouteViaTick()
+        testNoRerouteWhenArrived()
         testCrossLanguageCoords()
 
         print("结果: \(gPass) 通过, \(gFail) 失败")

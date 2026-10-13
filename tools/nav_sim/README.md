@@ -61,9 +61,24 @@ curl -s -X POST localhost:8080/route \
 # 3) 只看会发什么，不连设备
 /tmp/nav_sim --route-file /tmp/route.json --dry-run
 
-# 4) 人为制造偏航，验证 rerouting 分支
-/tmp/nav_sim --route-file /tmp/route.json --offroute-from 300 --offroute-offset 80
+# 4) 人为制造偏航，验证"重算"全流程（会自动调网关取新路线并续导）
+/tmp/nav_sim --from 116.397428,39.90923 --to 116.461000,39.908700 \
+             --offroute-from 300 --offroute-offset 80
+
+# 5) 只看"进入 rerouting"，不真的去重算
+/tmp/nav_sim --route-file /tmp/route.json --offroute-from 300 --offroute-offset 80 --no-reroute
 ```
+
+### 重算流程会做什么
+
+偏航确认后，模拟器会：
+
+1. 从导航核心收到 `NavCommand.requestRoute`（核心**不自己发请求**）
+2. 把核心的 GCJ-02 坐标转回 **WGS84**（网关约定），调网关取新路线
+3. 用 `setRoute` 交回核心 → 状态回到 `active`，**立即显示新路线首个转向**
+4. 里程表**跨重算累计**（不归零），但"路线进度"从 0 重新开始
+
+失败时核心**保持在 `rerouting`**，并按 5 秒间隔重试（最多 5 次）。
 
 `--from/--to` 是 **WGS84**（手机定位坐标系），网关会转 GCJ-02。
 

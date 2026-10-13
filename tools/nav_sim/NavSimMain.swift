@@ -47,6 +47,8 @@ struct Options {
     var dryRun = false
     var maxTicks = 10_000
     var deviceName = "CarDashboard"
+    /// 偏航后是否真的去网关取新路线（默认开）。关掉可只观察"进入 rerouting"。
+    var reroute = true
 }
 
 let USAGE = """
@@ -63,6 +65,7 @@ let USAGE = """
   --offroute-offset <米> 偏航横向偏移（正数向东，默认 0）
   --max-ticks <n>        最多推进多少步（默认 10000）
   --device <名称>        BLE 广播名（默认 CarDashboard）
+  --no-reroute           偏航后不去网关取新路线（只观察 rerouting 状态）
   --dry-run              不连 BLE，只打印将要发送的内容
   -h, --help             显示本帮助
 
@@ -90,6 +93,7 @@ func parseArgs(_ argv: [String]) -> Options? {
         case "--offroute-offset": o.offRouteOffset = Double(next() ?? "") ?? 0
         case "--max-ticks": o.maxTicks = Int(next() ?? "") ?? o.maxTicks
         case "--device": o.deviceName = next() ?? o.deviceName
+        case "--no-reroute": o.reroute = false
         case "--dry-run": o.dryRun = true
         case "-h", "--help": return nil
         default:
@@ -209,9 +213,14 @@ struct NavSim {
         var t = 0.0
         var tick = 0
         var sentArrived = 0
+        var rerouteCount = 0
+        /// 物理里程表：跨重算累计（重算后"路线进度"会归零，但车没有瞬移）
+        var odometerM = 0.0
 
         while tick < opts.maxTicks {
+            let traveledBefore = sim.traveledM
             guard let gcjTrue = sim.advance(dt: opts.interval) else { break }
+            odometerM += sim.traveledM - traveledBefore
             // 先推进时间，让打印的 t 与里程对应（t=1.0 时才是走完第 1 秒的里程）
             t += opts.interval
 
@@ -225,7 +234,34 @@ struct NavSim {
             let nowMs = Int64(t * 1000)
             let fix = NavFix(position: gcjFix, horizontalAccuracyM: 5,
                              courseDeg: nil, timestampMs: nowMs)
-            let snap = core.handle(fix: fix, nowMs: nowMs)
+            let outcome = core.handle(fix: fix, nowMs: nowMs)
+            var snap = outcome.snapshot
+
+            // ---- 执行核心请求的副作用（重算）----
+            if !outcome.commands.isEmpty {
+                if !opts.reroute {
+                    print("    [重算] 收到 \(outcome.commands.count) 条重算请求（--no-reroute 已禁用，跳过）")
+                } else if opts.token.isEmpty {
+                    print("    [重算] 收到重算请求 —— 缺少网关令牌，无法执行")
+                } else {
+                    let provider = GatewayRouteProvider(gateway: opts.gateway, token: opts.token)
+                    let res = RerouteDispatcher.dispatch(commands: outcome.commands,
+                                                         provider: provider,
+                                                         core: core)
+                    if res.applied, let nr = res.newRoute {
+                        sim = DriveSimulator(route: nr, speedMps: opts.speedKmh / 3.6)
+                        sim.offRouteFromM = nil   // 新路线起于偏航处，无需再注入偏航
+                        sim.offRouteOffsetM = 0
+                        rerouteCount += 1
+                        print(String(format: "    [重算] 成功：新路线 %.0f m / %d 段（起于当前位置）",
+                                     nr.totalDistanceM, nr.steps.count))
+                    } else if let e = res.errorText {
+                        print("    [重算] 失败：\(e)")
+                    }
+                }
+                // 重算后快照已变（若成功），重新取一次用于显示与下发
+                snap = core.snapshot
+            }
 
             // 构造 BLE 消息：字段与 docs/ble.md 一致
             var json = "{\"t\":\"nav\",\"state\":\(snap.state.rawValue),\"maneuver\":\(snap.maneuver.rawValue)"
@@ -239,7 +275,7 @@ struct NavSim {
             if tick % 2 == 0 || snap.state != .active {   // 每 2 秒打一行，状态变化时必打
                 let dm = snap.distanceToManeuverM.map { "\($0) m" } ?? "--"
                 print("  " + padLeft(String(format: "%.0f", t), 5)
-                      + padLeft(String(format: "%.0f", sim.traveledM), 8)
+                      + padLeft(String(format: "%.0f", odometerM), 8)
                       + "  " + pad(stateName(snap.state), 11)
                       + pad(maneuverName(snap.maneuver), 13)
                       + pad(dm, 9)
@@ -271,7 +307,11 @@ struct NavSim {
         } else {
             print("[结果] dry-run 完成（共 \(tick) 步）")
         }
-        print("[结果] 模拟结束：里程 \(Int(sim.traveledM)) m / \(Int(navRoute.totalDistanceM)) m")
+        print(String(format: "[结果] 物理里程 %.0f m；当前路线剩余 %.0f m / %.0f m",
+                     odometerM, sim.route.totalDistanceM - sim.traveledM, sim.route.totalDistanceM))
+        if rerouteCount > 0 {
+            print("[结果] 途中重新规划 \(rerouteCount) 次")
+        }
         exit(0)
     }
 }

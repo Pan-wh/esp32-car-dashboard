@@ -105,7 +105,7 @@ func testOffRoutePerpendicular() {
         let snap = core.handle(
             fix: NavFix(position: Coords.wgs84ToGcj02(Coords.gcj02ToWgs84(gcj)),
                         horizontalAccuracyM: 5, courseDeg: nil, timestampMs: t),
-            nowMs: t)
+            nowMs: t).snapshot
         if sim.traveledM >= 210 {
             maxCross = max(maxCross, snap.crossTrackM)
             if snap.state == .rerouting { sawOffRoute = true }
@@ -142,7 +142,7 @@ func testMessageSequence() {
         let snap = core.handle(
             fix: NavFix(position: Coords.wgs84ToGcj02(Coords.gcj02ToWgs84(gcj)),
                         horizontalAccuracyM: 5, courseDeg: nil, timestampMs: t),
-            nowMs: t)
+            nowMs: t).snapshot
 
         // 与 NavSimMain 相同的构造方式
         var json = "{\"t\":\"nav\",\"state\":\(snap.state.rawValue),\"maneuver\":\(snap.maneuver.rawValue)"
@@ -180,6 +180,147 @@ func testMessageSequence() {
     print("     产出 \(messages.count) 条消息，动作集合 \(maneuvers.sorted())")
 }
 
+// MARK: - 重算调度（用假 RouteProvider，不需要真网关）
+
+/// 假路线来源：记录调用参数，返回一条固定新路线
+final class FakeProvider: RouteProvider {
+    var calls: [(origin: GeoPoint, destination: GeoPoint)] = []
+    var result: RouteBundle?
+    var error: Error?
+
+    init(result: RouteBundle? = nil, error: Error? = nil) {
+        self.result = result
+        self.error = error
+    }
+
+    func route(originWGS84: GeoPoint, destinationWGS84: GeoPoint) throws -> RouteBundle {
+        calls.append((originWGS84, destinationWGS84))
+        if let e = error { throw e }
+        guard let r = result else { throw GatewayError.decode("假实现未提供路线") }
+        return r
+    }
+}
+
+/// 造一条从 `start` 起、向北走的两段小路线
+func tinyBundle(start: GeoPoint) -> RouteBundle {
+    func pt(_ lat: Double, _ lon: Double) -> RouteBundlePoint {
+        RouteBundlePoint(lon: lon, lat: lat)
+    }
+    let p0 = pt(start.lat, start.lon)
+    let p1 = pt(start.lat + 0.002, start.lon)
+    let p2 = pt(start.lat + 0.004, start.lon)
+    let steps = [
+        RouteBundleStep(index: 0, maneuver: 2, distanceM: 222, roadName: "甲路",
+                        instruction: "左转", durationS: 20, polyline: [p0, p1]),
+        RouteBundleStep(index: 1, maneuver: 3, distanceM: 222, roadName: "乙路",
+                        instruction: "右转", durationS: 20, polyline: [p1, p2]),
+    ]
+    return RouteBundle(routeId: "fake", distanceM: 444, durationS: 40,
+                       origin: p0, destination: p2,
+                       steps: steps, polyline: [p0, p1, p2], alternativeCount: 0)
+}
+
+func testRerouteDispatch() {
+    print("--- 重算调度：命令 → 取新路线 → 交回核心 ---")
+    guard let b = loadBundle() else { check(false, "夹具缺失"); return }
+    let r = b.toNavRoute()
+
+    var cfg = NavConfig()
+    cfg.offRouteConfirmations = 1
+    cfg.routeRetryAfterMs = 5000
+    let core = NavCore(config: cfg)
+    core.setRoute(r)
+
+    // 制造偏航 → 应产出命令
+    let off = GeoPoint(lon: r.polyline[0].lon + 0.001, lat: r.polyline[0].lat)
+    let outcome = core.handle(
+        fix: NavFix(position: off, horizontalAccuracyM: 5, courseDeg: nil, timestampMs: 1000),
+        nowMs: 1000)
+    check(outcome.snapshot.state == .rerouting, "应进入 rerouting")
+    check(outcome.commands.count == 1, "应产出 1 条重算命令")
+
+    // 用假来源处理命令
+    let newStart = GeoPoint(lon: off.lon, lat: off.lat)
+    let provider = FakeProvider(result: tinyBundle(start: newStart))
+    let res = RerouteDispatcher.dispatch(commands: outcome.commands, provider: provider, core: core)
+
+    check(res.applied, "应成功替换路线")
+    check(res.handled == 1, "应处理 1 条命令")
+    check(provider.calls.count == 1, "应调用来源 1 次")
+    check(core.snapshot.state == .active, "交回新路线后应回到 active")
+    check(core.snapshot.maneuver == .left,
+          "★ 应**立即**给出新路线首个转向（left），避免空白帧；实际 \(core.snapshot.maneuver)")
+    check(core.snapshot.distanceToManeuverM != nil, "应立即有距离")
+
+    // 发出的坐标必须是 WGS84（网关约定）—— 与输入的 GCJ-02 不同
+    if let call = provider.calls.first {
+        check(abs(call.origin.lon - off.lon) > 1e-7,
+              "★ 传给网关的应是 WGS84（应被转换过），而不是原样 GCJ-02")
+    }
+}
+
+func testRerouteDispatchFailure() {
+    print("--- 重算失败：保持 rerouting，等待重试 ---")
+    guard let b = loadBundle() else { check(false, "夹具缺失"); return }
+    let r = b.toNavRoute()
+
+    var cfg = NavConfig()
+    cfg.offRouteConfirmations = 1
+    cfg.routeRetryAfterMs = 5000
+    let core = NavCore(config: cfg)
+    core.setRoute(r)
+
+    let off = GeoPoint(lon: r.polyline[0].lon + 0.001, lat: r.polyline[0].lat)
+    let outcome = core.handle(
+        fix: NavFix(position: off, horizontalAccuracyM: 5, courseDeg: nil, timestampMs: 1000),
+        nowMs: 1000)
+
+    let provider = FakeProvider(error: GatewayError.transport("模拟网关故障"))
+    let res = RerouteDispatcher.dispatch(commands: outcome.commands, provider: provider, core: core)
+
+    check(!res.applied, "失败时不应标记已替换")
+    check(res.errorText != nil, "应带失败原因")
+    check(core.snapshot.state == .rerouting, "★ 失败后应**保持在 rerouting**（而不是伪装成正常）")
+    check(core.snapshot.maneuver == .unknown, "失败时不得给出转向指引")
+
+    // 重试间隔后应再请求（次数递增）
+    let o2 = core.tick(nowMs: 8000)
+    check(o2.commands.count == 1, "超过重试间隔应再次请求")
+    if case .requestRoute(let req)? = o2.commands.first {
+        check(req.attempt == 2, "attempt 应为 2，实际 \(req.attempt)")
+    } else { check(false, "应为 requestRoute") }
+}
+
+func testRerouteDispatchRejectsBadRoute() {
+    print("--- 重算：新路线不合格时不应替换 ---")
+    guard let b = loadBundle() else { check(false, "夹具缺失"); return }
+    let r = b.toNavRoute()
+
+    var cfg = NavConfig()
+    cfg.offRouteConfirmations = 1
+    let core = NavCore(config: cfg)
+    core.setRoute(r)
+
+    let off = GeoPoint(lon: r.polyline[0].lon + 0.001, lat: r.polyline[0].lat)
+    let outcome = core.handle(
+        fix: NavFix(position: off, horizontalAccuracyM: 5, courseDeg: nil, timestampMs: 1000),
+        nowMs: 1000)
+
+    // 折线点不足的"路线"（只有 1 个点）
+    let p = RouteBundlePoint(lon: off.lon, lat: off.lat)
+    let bad = RouteBundle(routeId: nil, distanceM: 0, durationS: 0, origin: p, destination: p,
+                          steps: [RouteBundleStep(index: 0, maneuver: 1, distanceM: 0,
+                                                  roadName: nil, instruction: nil,
+                                                  durationS: 0, polyline: [p])],
+                          polyline: [p], alternativeCount: 0)
+    let provider = FakeProvider(result: bad)
+    let res = RerouteDispatcher.dispatch(commands: outcome.commands, provider: provider, core: core)
+
+    check(!res.applied, "折线点不足不应替换")
+    check(res.errorText != nil, "应给出原因")
+    check(core.snapshot.state == .rerouting, "应保持 rerouting")
+}
+
 @main
 struct TestNavSim {
     static func main() {
@@ -188,6 +329,9 @@ struct TestNavSim {
         testDriveSimulator()
         testOffRoutePerpendicular()
         testMessageSequence()
+        testRerouteDispatch()
+        testRerouteDispatchFailure()
+        testRerouteDispatchRejectsBadRoute()
         print("结果: \(gPass) 通过, \(gFail) 失败")
         exit(gFail == 0 ? 0 : 1)
     }
