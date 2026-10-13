@@ -53,6 +53,9 @@ firmware/dashboard/img_indexed.c
 firmware/dashboard/img_indexed.h
 firmware/dashboard/font_*.c
 
+# Node（网关）；本项目零依赖，正常不会出现
+node_modules/
+
 # Python 字节码缓存
 __pycache__/
 *.pyc

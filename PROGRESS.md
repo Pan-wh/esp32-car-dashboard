@@ -20,7 +20,8 @@
 | [`docs/architecture.md`](docs/architecture.md) | 系统架构、模块划分、共享代码层 |
 | [`docs/ble.md`](docs/ble.md) | BLE 协议细节（GATT、JSON 字段）|
 | [`docs/decisions.md`](docs/decisions.md) | 设计决策（含已被取代的决策，保留历史）|
-| [`docs/nav-backend.md`](docs/nav-backend.md) | 导航数据源/网关：**引用归属、部署、维护、合规风险**（阶段 3）|
+| [`docs/nav-backend.md`](docs/nav-backend.md) | 导航数据源/网关：**引用归属、部署、维护、合规**（阶段 3）|
+| [`gateway/README.md`](gateway/README.md) | 导航网关（已实现）：接口、环境变量、接真实 Key 后必做的核对 |
 | [`docs/hardware.md`](docs/hardware.md) | 硬件规格与引脚 |
 | [`docs/setup-macos.md`](docs/setup-macos.md) | 开发环境搭建 |
 | [`docs/ui-guidelines.md`](docs/ui-guidelines.md) | UI 规范与遗留设计选项 |
@@ -202,11 +203,12 @@ ESP32-S3 (dashboard.ino)
 | `test_nav` | 63 | 导航卡片纯逻辑（动作/状态/距离格式化）|
 | `test_nav_parse` | 72 | 导航消息解析（分流/容错/向前兼容）|
 | `test_img_indexed` | 28 | 索引图解码（调色板字节序/16位截断/边界/越界）|
+| `gateway` (Node) | 50 | 导航网关（坐标转换/动作映射/归一化/HTTP，全离线）|
 | `test_ios_logic` | 32 | iOS 侧纯逻辑（Swift）|
-| **单测小计** | **418** | `cd tests && make run` |
+| **单测小计** | **468** | `cd tests && make run` |
 | `ui_regression.py` | 33 | UI 像素级回归 |
 | XCUITest | 5 | 会话/遥测计数/设备控制/链路诊断/BLE 状态 |
-| **自动化总计** | **456** | |
+| **自动化总计** | **506** | |
 
 **真机验证**（iPhone 12 / iOS 27）：§9 矩阵 **12/12 通过**，DoD **8/8 达成**。
 

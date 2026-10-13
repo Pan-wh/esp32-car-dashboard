@@ -58,8 +58,10 @@ esp32-car-dashboard/
 ├── docs/                # 硬件、环境、架构、UI 规范、决策与排障记录
 ├── design/              # 线框图与设计资源（含许可说明）
 ├── firmware/dashboard/  # 实际固件工程（Arduino）
+├── ios/                 # iPhone App（Swift/SwiftUI）
+├── gateway/             # 导航网关（Node，零依赖）：代理高德，Key 只在服务端
 ├── reference/           # 微雪官方仓库（gitignore，按需克隆，独立参考依赖）
-├── tests/               # 可自动化测试
+├── tests/               # 可自动化测试（统一入口：make run）
 └── tools/               # 辅助脚本
 ```
 

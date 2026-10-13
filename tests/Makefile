@@ -34,6 +34,12 @@ run: test_telemetry test_control test_ui_face test_nav test_nav_parse test_img_i
 	./test_nav
 	./test_nav_parse
 	./test_img_indexed
+	@echo "--- 导航网关（Node，零依赖，全部离线）---"
+	@if command -v node >/dev/null 2>&1; then \
+		(cd ../gateway && node --test "test/**/*.test.js") ; \
+	else \
+		echo "  跳过：未找到 node（网关测试需要 Node >= 18）"; \
+	fi
 	@echo "--- iOS 侧纯逻辑（无需 iOS 运行时）---"
 	@swift ../tools/test_ios_logic.swift
 	@echo "--- UI 像素级回归（需已构建 simulator/dashboard_sim）---"
