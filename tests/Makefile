@@ -7,6 +7,12 @@ SRC     := ../simulator/ui/telemetry.c
 
 TESTS   := test_telemetry test_control test_ui_face test_nav test_nav_parse test_img_indexed
 
+# iOS 侧导航核心：直接编译 App 的真实源文件（不复制逻辑，避免与实现漂移）
+NAV_SRC      := ../ios/CarDashboardPhone/CarDashboardPhone/Nav/NavCore.swift \
+                ../ios/CarDashboardPhone/CarDashboardPhone/Nav/Coords.swift
+COORD_VECTORS := ../gateway/test/fixtures/coord-vectors.json
+NAV_BIN      := test_nav_core
+
 all: $(TESTS)
 
 test_telemetry: test_telemetry.c ../simulator/ui/telemetry.c
@@ -34,6 +40,8 @@ run: test_telemetry test_control test_ui_face test_nav test_nav_parse test_img_i
 	./test_nav
 	./test_nav_parse
 	./test_img_indexed
+	@echo "--- iOS 导航核心（Swift，编译 App 真实源文件）---"
+	@$(MAKE) --no-print-directory test-nav-core
 	@echo "--- 导航网关（Node，零依赖，全部离线）---"
 	@if command -v node >/dev/null 2>&1; then \
 		(cd ../gateway && node --test "test/**/*.test.js") ; \
@@ -51,7 +59,21 @@ run: test_telemetry test_control test_ui_face test_nav test_nav_parse test_img_i
 		$(PYTHON) ../tools/ui_regression.py; \
 	fi
 
-clean:
-	rm -f $(TESTS)
+# 导航核心（需要 swiftc，即 Xcode 命令行工具）
+# ⚠️ 构建与运行必须拆成两个目标：
+#    若让 test_nav_core 既编译又运行，产物与目标同名，
+#    第二次 make 会认为"已是最新"而**静默跳过测试**（已踩过）。
+$(NAV_BIN): $(NAV_SRC) ../tools/test_nav_core.swift
+	@if ! command -v swiftc >/dev/null 2>&1; then \
+		echo "  跳过：未找到 swiftc（需 Xcode 命令行工具）"; \
+		exit 0; \
+	fi
+	swiftc -O -o $(NAV_BIN) $(NAV_SRC) ../tools/test_nav_core.swift
 
-.PHONY: all run clean
+test-nav-core: $(NAV_BIN)
+	@COORD_VECTORS=$(COORD_VECTORS) ./$(NAV_BIN)
+
+clean:
+	rm -f $(TESTS) $(NAV_BIN)
+
+.PHONY: all run clean test-nav-core

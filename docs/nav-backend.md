@@ -1,8 +1,9 @@
 # 导航数据源与网关（阶段 3）
 
 > **状态**：阶段 1（UI）与阶段 2（BLE 协议）已完成；
-> 阶段 3 的**网关部分已实现**（见 [`gateway/README.md`](../gateway/README.md)），
-> **iOS 导航核心与真实 Key 联调尚未开始**。
+> 阶段 3 的**网关**（见 [`gateway/README.md`](../gateway/README.md)）与
+> **iOS 导航核心**（`ios/CarDashboardPhone/CarDashboardPhone/Nav/`）**已实现**；
+> ⬜ **真实 Key 联调**与 App 接入尚未开始。
 > **先读**：[§0 项目定位与合规](#零项目定位与合规先读) —— 含**基准定位声明**（后续文档以此为前提）
 > 与高德协议中需注意的条款。
 
