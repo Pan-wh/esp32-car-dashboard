@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "telemetry.h"
+#include "nav_parse.h"
 
 #define DEVICE_NAME      "CarDashboard"
 #define SERVICE_UUID        "7D2A0001-8F4A-4B7C-9D21-5E6A3B8C1000"
@@ -46,6 +47,11 @@ static volatile uint32_t s_cmd_ok = 0, s_cmd_err = 0;
 
 /* ---- JSON 重组（MTU 可能小于包长，一次消息会被拆成多个 write） ---- */
 static char s_asm[ASM_BUF_MAX];
+
+/* 导航消息暂存（回调只写，主循环消费后清除）*/
+static nav_msg_t s_pending_nav;
+static volatile bool s_have_nav = false;
+static uint32_t s_nav_ok = 0;
 static size_t s_asm_len = 0;
 
 static void inline store_msg(const telemetry_msg_t *m)
@@ -76,13 +82,31 @@ static void handle_chunk(const char *data, size_t n)
 
     /* 判完整：以 '{' 开头且以 '}' 结尾即可（本协议为扁平对象） */
     if (s_asm_len > 0 && s_asm[0] == '{' && s_asm[s_asm_len - 1] == '}') {
-        telemetry_msg_t m;
-        if (telemetry_parse(s_asm, s_asm_len, &m) && m.v == PROTOCOL_VERSION) {
-            store_msg(&m);
-            s_ok++;
+        /*
+         * 分流：同一特征承载两类消息，用 "t":"nav" 区分。
+         * ⚠️ 必须**先判导航**再按遥测解析 —— 导航包没有 "v" 字段，
+         *    走遥测分支必然解析失败并计入 s_parse_err（污染统计）。
+         * 回调内只做"解析 + 存变量"，硬件副作用留给主循环（架构约定）。
+         */
+        if (nav_parse(s_asm, s_asm_len, &s_pending_nav)) {
+            s_have_nav = true;
+            s_nav_ok++;
+            /*
+             * ⚠️ 这里**不要**打印 s_asm 的内容：那是 BLE 回调共用的重组缓冲区，
+             *    在回调里对共享缓冲区做 %s 打印会与下一次写入形成竞态
+             *    （排查时短暂加过，日志尾部出现过错拼）。需要看内容请在
+             *    主循环消费后打印 —— nav_poll 里已有等价日志。
+             */
         }
         else {
-            s_parse_err++;
+            telemetry_msg_t m;
+            if (telemetry_parse(s_asm, s_asm_len, &m) && m.v == PROTOCOL_VERSION) {
+                store_msg(&m);
+                s_ok++;
+            }
+            else {
+                s_parse_err++;
+            }
         }
         s_asm_len = 0;
     }
@@ -262,6 +286,19 @@ bool ble_telemetry_take_command(control_cmd_t *out)
     }
     portEXIT_CRITICAL(&s_cmd_mux);
     return got;
+}
+
+bool ble_telemetry_take_nav(nav_msg_t *out)
+{
+    if (!s_have_nav) return false;
+    if (out != NULL) *out = s_pending_nav;
+    s_have_nav = false; /* 取走即清，避免主循环反复应用同一条 */
+    return true;
+}
+
+void ble_telemetry_nav_stats(uint32_t *ok)
+{
+    if (ok != NULL) *ok = s_nav_ok;
 }
 
 void ble_telemetry_command_stats(uint32_t *ok, uint32_t *err)

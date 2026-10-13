@@ -1376,8 +1376,63 @@ static bool time_sync_maybe(int64_t utc_ms)
  * 速度有效 = 协议层 speed_valid 且 speed_mps >= 0（iOS 负值表示无效）。
  * 解析/线程安全在 ble_telemetry.cpp 内部处理，此处只消费结果。
  */
+/*
+ * 导航消息消费（阶段 2）。
+ *
+ * 架构约定：BLE 回调只解析+暂存，UI 更新一律在主循环做。
+ *
+ * 过期语义：导航数据变化慢（一次转弯可能几分钟），故用**独立的长阈值**
+ * NAV_STALE_MS（10s），而非遥测的 2.5s —— 否则会频繁误报过期。
+ * 关键：一旦过期，**不得继续显示旧指引**（§6.3），由 ui_nav_set_state 落地。
+ */
+static void nav_poll(void)
+{
+  static uint32_t s_last_nav_ms = 0;
+  static bool s_nav_active = false; /* 是否处于"收到过导航数据"的状态 */
+
+  nav_msg_t nm;
+  if (ble_telemetry_take_nav(&nm)) {
+    s_last_nav_ms = millis();
+    s_nav_active = true;
+
+    /* 只应用**实际提供**的字段：缺字段保留旧值（不因缺字段清空显示）*/
+    if (nm.has_state)    ui_nav_set_state((int)nm.state);
+    if (nm.has_maneuver) ui_nav_set_maneuver((int)nm.maneuver);
+    if (nm.has_dist)     ui_nav_set_distance(nm.distance_m);
+
+    Serial.printf("[导航] state=%s maneuver=%s dist=%d\n",
+                  nav_state_name(nm.has_state ? nm.state : NAV_STATE_NO_DATA),
+                  nav_maneuver_name(nm.has_maneuver ? nm.maneuver : NAV_MANEUVER_UNKNOWN),
+                  nm.has_dist ? nm.distance_m : -1);
+    return;
+  }
+
+  /* 无新数据：检查是否过期 */
+  if (!s_nav_active) return;
+
+  uint32_t age = millis() - s_last_nav_ms;
+
+  /* BLE 断开 → 立即进入"无数据"（不等超时）*/
+  if (!ble_telemetry_connected()) {
+    if (ui_nav_get_state() != NAV_STATE_NO_DATA) {
+      ui_nav_set_state(NAV_STATE_NO_DATA);
+      s_nav_active = false;
+      Serial.println("[导航] BLE 断开 → 无数据");
+    }
+    return;
+  }
+
+  /* 超时 → 过期（**不显示旧指引**）*/
+  if (age > NAV_STALE_MS && ui_nav_get_state() == NAV_STATE_ACTIVE) {
+    ui_nav_set_state(NAV_STATE_STALE);
+    Serial.printf("[导航] 数据过期（%u ms 无更新）→ 停止显示旧指引\n", (unsigned)age);
+  }
+}
+
 static void ble_poll(void)
 {
+  nav_poll(); /* 导航消息（与遥测同一特征，先生效以便状态切换）*/
+
   telemetry_msg_t m;
   uint32_t rx_ms = 0;
 

@@ -1,6 +1,7 @@
 # ESP32-S3 车载仪表项目
 
-基于 **微雪 Waveshare ESP32-S3-Touch-AMOLED-1.75-G** 开发板的车载辅助显示设备。
+基于 **微雪 Waveshare ESP32-S3-Touch-AMOLED-1.75**（**无 GNSS 版本**）开发板的车载辅助显示设备。
+数据源为 iPhone Core Location 经 BLE 下发，**仪表侧不做定位**。
 项目定位：独立的车载仪表/信息显示器（非完整 CarPlay），强调稳定、清晰、低延迟、适合驾驶时快速读取。
 
 ## 项目状态

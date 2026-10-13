@@ -47,6 +47,8 @@ firmware/dashboard/control.c
 firmware/dashboard/control.h
 firmware/dashboard/nav.c
 firmware/dashboard/nav.h
+firmware/dashboard/nav_parse.c
+firmware/dashboard/nav_parse.h
 firmware/dashboard/font_*.c
 
 # 字体管线中间产物与 Python 库（tools/make_fonts.sh 可重建）
