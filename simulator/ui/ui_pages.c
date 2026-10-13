@@ -7,6 +7,8 @@
  */
 #include "ui_pages.h"
 
+#include "ui_face.h"
+
 #include "ui_analog.h"
 #include "ui_clock.h"
 #include "ui_speed.h"
@@ -117,10 +119,21 @@ void ui_pages_init(void)
         s_pages[i] = page;
     }
 
-    /* 页面内容 */
-    ui_analog_create(s_pages[UI_PAGE_ANALOG]);
-    ui_clock_create(s_pages[UI_PAGE_DIGITAL]);
-    ui_speed_create(s_pages[UI_PAGE_SPEED]);
+    /*
+     * 页面内容由表盘注册表驱动（功能③）：
+     * 每个页面 = 一个表盘；注册顺序即 face id 顺序，也与 ui_page_t 一一对应。
+     * 将来新增表盘（例如功能②的「图片背景 + 时钟」）只需在此多注册一项，
+     * 分页/翻页/BLE 通路都无需改动。
+     */
+    ui_face_reset();
+    ui_face_register(&(ui_face_desc_t){ "analog", "Analog", (ui_face_build_cb)ui_analog_create });
+    ui_face_register(&(ui_face_desc_t){ "digital", "Digital", (ui_face_build_cb)ui_clock_create });
+    ui_face_register(&(ui_face_desc_t){ "speed", "Speed", (ui_face_build_cb)ui_speed_create });
+
+    for (int i = 0; i < UI_PAGE_COUNT && i < ui_face_count(); i++) {
+        const ui_face_desc_t *f = ui_face_get(i);
+        if (f != NULL && f->build != NULL) f->build(s_pages[i]);
+    }
 
     /* 子对象不再参与输入（只让页面容器接收按压） */
     for (int i = 0; i < UI_PAGE_COUNT; i++) {
@@ -199,6 +212,25 @@ void ui_pages_show(ui_page_t page)
 
     s_current = page;
     s_ready = true;
+}
+
+bool ui_pages_set_face(int face_id)
+{
+    if (face_id < 0 || face_id >= UI_PAGE_COUNT) return false;
+    if (face_id >= ui_face_count()) return false;
+    ui_pages_show((ui_page_t)face_id);
+    return true;
+}
+
+int ui_pages_current_face(void)
+{
+    return (int)s_current;
+}
+
+const char *ui_pages_current_face_name(void)
+{
+    const ui_face_desc_t *f = ui_face_get((int)s_current);
+    return (f != NULL && f->name != NULL) ? f->name : "?";
 }
 
 ui_page_t ui_pages_current(void)

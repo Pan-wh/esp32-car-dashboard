@@ -36,6 +36,7 @@
 
 /* 共享模块（C 代码，需 extern "C") */
 extern "C" {
+#include "ui_face.h"
 #include "ui_pages.h"
 #include "ui_speed.h"
 #include "ui_clock.h"    /* 数字时钟页（时间同步状态标签） */
@@ -391,10 +392,23 @@ static void control_poll(void)
       apply_screen(cmd.value == 0);
       Serial.printf("[控制] %s\n", cmd.value == 0 ? "息屏" : "亮屏");
       break;
-    case CONTROL_FACE:
-      /* 表盘切换（功能③）：当前尚无多表盘，先记录请求 */
-      Serial.printf("[控制] 请求切换表盘 id=%d（暂未实现多表盘）\n", (int)cmd.value);
+    case CONTROL_FACE: {
+      /* 表盘切换（功能③）：value = face id，或负数语义 -1=下一个 / -2=上一个 */
+      int want = (int)cmd.value;
+      int cur = ui_pages_current_face();
+      int target = want;
+      if (want == -1) target = ui_face_next(cur, 1);
+      else if (want == -2) target = ui_face_prev(cur, 1);
+
+      if (ui_pages_set_face(target)) {
+        Serial.printf("[控制] 表盘 %d(%s) → %d(%s)\n", cur, ui_pages_current_face_name(), target,
+                      ui_pages_current_face_name());
+      }
+      else {
+        Serial.printf("[控制] 表盘 id=%d 无效（共 %d 个）\n", target, ui_face_count());
+      }
       break;
+    }
     default:
       break;
   }
@@ -611,6 +625,7 @@ static void print_help(void)
   Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
   Serial.println("       screen on|off             亮屏 / 息屏");
   Serial.println("       trip [reset]              行程统计：里程/最高速/均速");
+  Serial.println("       face [id|next|prev]       查看/切换表盘（不带参数=列出全部）");
   Serial.println("       rot 0|1|2|3              屏幕内容旋转（0=0° 1=90° 2=180° 3=270°）");
   Serial.println("       mem                      显示 LVGL/ESP 内存情况");
   Serial.println("       dump                     打印当前屏幕的元素树（排查元素缺失）");
@@ -779,6 +794,37 @@ static void process_command(char *cmd)
   }
   else if (strcmp(cmd, "scan") == 0) {
     print_scan();
+  }
+  else if (strncmp(cmd, "face", 4) == 0) {
+    const char *arg = cmd + 4;
+    if (*arg == '\0') {
+      Serial.printf("[表盘] 当前=%d(%s)，共 %d 个\n", ui_pages_current_face(),
+                    ui_pages_current_face_name(), ui_face_count());
+      for (int i = 0; i < ui_face_count(); i++) {
+        const ui_face_desc_t *f = ui_face_get(i);
+        Serial.printf("       %d: %-10s %s\n", i, f->name, f->label);
+      }
+      Serial.println("       用法：face <id> | face next | face prev");
+    }
+    else if (strncmp(arg, " next", 5) == 0) {
+      int t = ui_face_next(ui_pages_current_face(), 1);
+      ui_pages_set_face(t);
+      Serial.printf("[表盘] → %d(%s)\n", t, ui_pages_current_face_name());
+    }
+    else if (strncmp(arg, " prev", 5) == 0) {
+      int t = ui_face_prev(ui_pages_current_face(), 1);
+      ui_pages_set_face(t);
+      Serial.printf("[表盘] → %d(%s)\n", t, ui_pages_current_face_name());
+    }
+    else {
+      int t = atoi(arg);
+      if (ui_pages_set_face(t)) {
+        Serial.printf("[表盘] → %d(%s)\n", t, ui_pages_current_face_name());
+      }
+      else {
+        Serial.printf("[表盘] id=%d 无效（共 %d 个）\n", t, ui_face_count());
+      }
+    }
   }
   else if (strncmp(cmd, "trip", 4) == 0) {
     const char *arg = cmd + 4;
