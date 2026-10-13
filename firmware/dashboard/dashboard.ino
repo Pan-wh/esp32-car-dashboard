@@ -21,6 +21,7 @@
  *   未连接 / 无定位 / 数据过期时，速度页显示无效状态（不伪造旧值）。
  */
 #include <Arduino.h>
+#include <esp_heap_caps.h> /* PSRAM 分配 */
 #include <Wire.h>
 #include <SPI.h>
 #include <lvgl.h>
@@ -82,6 +83,23 @@ static lv_color_t buf[LCD_WIDTH * LCD_HEIGHT / 10]; /* 与官方示例相同的�
 /* 性能诊断：重绘/循环速率（卡顿回归的客观指标，见 docs/troubleshooting.md）*/
 static volatile uint32_t s_flush_cnt = 0;
 static uint32_t s_loop_cnt = 0;
+static volatile uint32_t s_render_us_max = 0; /* 窗口内单次 lv_timer_handler 最大耗时 */
+static volatile uint32_t s_render_us_sum = 0;  /* 窗口内渲染总耗时（算占空比） */
+static volatile uint32_t s_flush_us_sum = 0;   /* 窗口内 QSPI 传输累计耗时（从渲染耗时中区分） */
+static volatile uint32_t s_flush_us_max = 0;   /* 窗口内单次 flush 最大耗时 */
+
+/*
+ * 滑动卡顿优化：全帧 PSRAM 绘制缓冲（partial 模式不变）。
+ * 现状：内部 1/10 屏缓冲 → 整屏脏区被切成 ~10 块，仪表（100+ 刻度）与
+ * 300×300 插画**每块都完整重算一遍**（LVGL 8 对象绘制按块执行）。
+ * 全帧缓冲 → 任何脏区只算 1 块 → 渲染成本 ÷10；flush 仍只发脏区
+ * （空闲小脏区行为不变，不学 direct_mode 的全屏发送）。
+ * 依据：厂商 IDF BSP（03_esp-brookesia）本身就用 PSRAM 全帧缓冲；
+ * 本机芯片 ESP32-S3R8 = 8MB 八线 PSRAM → 构建选项 PSRAM=opi。
+ */
+static lv_disp_draw_buf_t s_draw_buf_psram;
+static lv_color_t *s_buf_psram = NULL;
+static bool s_buf_psram_active = false;
 
 /* ---------------- 触摸 ---------------- */
 
@@ -184,6 +202,7 @@ static void rounder_cb(struct _lv_disp_drv_t *disp_drv, lv_area_t *area)
 
 static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
 {
+  uint32_t t_flush = micros();
   s_flush_cnt++;
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
@@ -194,6 +213,11 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
   gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)&color_p->full, w, h);
 #endif
 
+  {
+    uint32_t dt_flush = micros() - t_flush;
+    s_flush_us_sum += dt_flush;
+    if (dt_flush > s_flush_us_max) s_flush_us_max = dt_flush;
+  }
   lv_disp_flush_ready(disp);
 }
 
@@ -336,7 +360,32 @@ static void lvgl_init(void)
   disp_drv.rotated = LV_DISP_ROT_NONE;
 #endif
 
+  /* 注册显示驱动（**必须先于 PSRAM 块**：注册时创建 lv_disp_t 与默认屏幕） */
   lv_disp_drv_register(&disp_drv);
+
+  /*
+   * PSRAM 全帧绘制缓冲：partial 模式下，缓冲 ≥ 脏区时 LVGL 只切 1 块。
+   * bufmode 串口命令可运行时在 内部/PSRAM 间切换（A/B 实测用）。
+   */
+  s_buf_psram = (lv_color_t *)heap_caps_malloc(
+      (size_t)LCD_WIDTH * LCD_HEIGHT * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+  if (s_buf_psram != NULL) {
+    lv_disp_draw_buf_init(&s_draw_buf_psram, s_buf_psram, NULL,
+                          (uint32_t)LCD_WIDTH * (uint32_t)LCD_HEIGHT);
+    Serial.printf("[显示] PSRAM 全帧缓冲就绪（%u B，free PSRAM %u B）\n",
+                  (unsigned)((size_t)LCD_WIDTH * LCD_HEIGHT * sizeof(lv_color_t)),
+                  (unsigned)ESP.getFreePsram());
+    /* 默认启用（等下通过 driver 指针切换；LVGL 8.4 的 disp->driver 指向本函数的
+       静态 disp_drv，可直接改 draw_buf 字段）*/
+    lv_disp_t *d = lv_disp_get_default();
+    if (d != NULL) {
+      d->driver->draw_buf = &s_draw_buf_psram;
+      s_buf_psram_active = true;
+    }
+  }
+  else {
+    Serial.println("[显示] PSRAM 缓冲分配失败（仅内部缓冲可用）");
+  }
 
   static lv_indev_drv_t indev_drv;
   lv_indev_drv_init(&indev_drv);
@@ -391,6 +440,7 @@ static void print_help(void)
   Serial.println("       pages                    列出页面");
   Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
+  Serial.println("       bufmode [psram|internal]  查看/切换绘制缓冲（滑动性能 A/B 对比）");
   Serial.println("       rot 0|1|2|3              屏幕内容旋转（0=0° 1=90° 2=180° 3=270°）");
   Serial.println("       mem                      显示 LVGL/ESP 内存情况");
   Serial.println("       dump                     打印当前屏幕的元素树（排查元素缺失）");
@@ -466,6 +516,13 @@ static void print_mem(void)
                 (unsigned)mon.free_biggest_size, (unsigned)mon.frag_pct);
   Serial.printf("        ESP 空闲堆 %u B, 历史最低 %u B\n", (unsigned)ESP.getFreeHeap(),
                 (unsigned)ESP.getMinFreeHeap());
+  if (ESP.getPsramSize() > 0) {
+    Serial.printf("        PSRAM 总 %u B, 空闲 %u B\n", (unsigned)ESP.getPsramSize(),
+                  (unsigned)ESP.getFreePsram());
+  }
+  else {
+    Serial.println("        PSRAM：未启用（构建选项 PSRAM=opi 未开？）");
+  }
 }
 
 /* 递归打印对象树（排查页面上到底创建了哪些元素） */
@@ -543,6 +600,29 @@ static void process_command(char *cmd)
   }
   else if (strcmp(cmd, "scan") == 0) {
     print_scan();
+  }
+  else if (strncmp(cmd, "bufmode", 7) == 0) {
+    const char *arg = cmd + 7;
+    lv_disp_t *d = lv_disp_get_default();
+    if (*arg == '\0') {
+      Serial.printf("[缓冲] 当前=%s（重绘/循环见心跳）\n",
+                    s_buf_psram_active ? "PSRAM 全帧 434KB" : "内部 1/10 屏 43KB");
+    }
+    else if (d != NULL && strcmp(arg, " psram") == 0 && s_buf_psram != NULL) {
+      d->driver->draw_buf = &s_draw_buf_psram;
+      s_buf_psram_active = true;
+      lv_obj_invalidate(lv_scr_act());
+      Serial.println("[缓冲] → PSRAM 全帧（脏区单块渲染）");
+    }
+    else if (d != NULL && strcmp(arg, " internal") == 0) {
+      d->driver->draw_buf = &draw_buf;
+      s_buf_psram_active = false;
+      lv_obj_invalidate(lv_scr_act());
+      Serial.println("[缓冲] → 内部 1/10 屏（基线，分块渲染）");
+    }
+    else {
+      Serial.println("[缓冲] 用法：bufmode | bufmode psram | bufmode internal");
+    }
   }
   else if (strcmp(cmd, "ble") == 0) {
     print_ble();
@@ -858,7 +938,13 @@ void loop()
   ble_poll();                 /* 取 BLE 遥测 + 校时（无新数据直接返回） */
   ble_update();               /* 五态状态机，每循环驱动速度页 */
   s_page_seen = (int)ui_pages_current(); /* 记录当前页，供手势诊断取 before */
-  lv_timer_handler();
+  {
+    uint32_t t_render = micros();
+    lv_timer_handler();
+    uint32_t dt = micros() - t_render;
+    if (dt > s_render_us_max) s_render_us_max = dt;
+    s_render_us_sum += dt;
+  }
   delay(5);
 
   /* 心跳日志：每 5 秒打印运行状态 + 重绘/循环速率（性能回归监测）*/
@@ -869,10 +955,20 @@ void loop()
     uint32_t dt = now - last;
     last = now;
     uint32_t f = s_flush_cnt, l = s_loop_cnt;
-    Serial.printf("[运行] %lu s  空闲堆 %u B  循环 %u/s  重绘 %u/s\n",
+    Serial.printf("[运行] %lu s  空闲堆 %u B  循环 %u/s  重绘 %u/s  缓冲=%s\n",
                   (unsigned long)(now / 1000), (unsigned)ESP.getFreeHeap(),
                   (unsigned)((l - last_loop) * 1000UL / dt),
-                  (unsigned)((f - last_flush) * 1000UL / dt));
+                  (unsigned)((f - last_flush) * 1000UL / dt),
+                  s_buf_psram_active ? "PSRAM全帧" : "内部1/10");
+    Serial.printf("       渲染最大 %lu ms（占空 %u%%）｜QSPI 传输 合计 %lu ms 单次最大 %lu ms\n",
+                  (unsigned long)(s_render_us_max / 1000),
+                  (unsigned)(s_render_us_sum / (dt * 10)),
+                  (unsigned long)(s_flush_us_sum / 1000),
+                  (unsigned long)(s_flush_us_max / 1000));
+    s_render_us_max = 0;
+    s_render_us_sum = 0;
+    s_flush_us_sum = 0;
+    s_flush_us_max = 0;
     last_flush = f;
     last_loop = l;
   }

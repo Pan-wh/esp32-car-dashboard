@@ -90,7 +90,7 @@ git clone https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75.git \
 ```bash
 cd esp32-car-dashboard
 arduino-cli compile \
-  --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc" \
+  --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
   --libraries reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/libraries \
   reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/01_HelloWorld
 ```
@@ -111,7 +111,7 @@ arduino-cli compile \
 3. 烧录：
    ```bash
    arduino-cli upload \
-     --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc" \
+     --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
      --port /dev/cu.usbmodemXXXX \
      reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/01_HelloWorld
    ```
@@ -155,7 +155,7 @@ arduino-cli compile \
 
 ### 01_HelloWorld 编译验证记录
 
-- 命令：见本文第 4 节（FQBN `esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc`）
+- 命令：见本文第 4 节（FQBN `esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi`）
 - 结果（2026-10-10）：**编译通过**（仅编译验证，未烧录、未上硬件）
   - Sketch：413124 bytes（程序区 3145728 bytes 的 13%）
   - 全局变量：23704 bytes（动态内存 327680 bytes 的 7%）

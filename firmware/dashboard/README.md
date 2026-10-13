@@ -36,7 +36,7 @@ tools/sync_firmware.sh
 # 2) 编译（仓库根目录执行）
 CLI="/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli"
 "$CLI" compile \
-  --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc" \
+  --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
   --libraries reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/libraries \
   firmware/dashboard
 ```
@@ -45,7 +45,7 @@ CLI="/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/
 
 ```bash
 "$CLI" upload \
-  --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc" \
+  --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
   --libraries reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/libraries \
   -p /dev/cu.usbmodemXXXX firmware/dashboard
 ```
