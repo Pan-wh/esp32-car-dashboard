@@ -105,9 +105,16 @@ def main():
         rate = grew / max(1.0, (time.time() - start))
         print(f'平均 {rate:.2f} 包/秒（2Hz 数据源预期 ≈2）')
     print(f'LIVE 期间无增长次数：{stalls}')
-    verdict = '通过' if (live > total * 0.8 and stalls <= 1) else '需进一步确认'
-    print(f'\n判定：{verdict}')
-    print('（通过 = 导航 App 运行期间本 App 仍持续收到定位并下发）')
+    # 判定：核心是「LIVE 期间必须持续有包」+「无断连」。
+    # 不用 LIVE 占比作硬指标——静止时 iOS 降频到约 1Hz，偶发擦过 2.5s 阈值
+    # 会产生少量 STALE，这与 CarPlay 无关（实测无 CarPlay 时比例相近）。
+    conn_drops = off
+    ok = (stalls == 0 and conn_drops == 0 and grew > 0)
+    print(f'\n判定：{"通过" if ok else "需进一步确认"}')
+    print('  判据：LIVE 期间无增长次数 = 0、BLE 断连 = 0、包数有增长')
+    print(f'  实际：无增长 {stalls}、断连 {conn_drops}、增长 +{grew if first_ok is not None else 0}')
+    print('  说明：STALE 占比不作硬指标——静止时 iOS 降频至约 1Hz，')
+    print('        偶发擦过 2.5s 超时阈值，与导航 App 共存无关（已实测对比）。')
     os.close(fd)
     return 0
 
