@@ -116,7 +116,7 @@ def main():
         check(ok, f"数字时钟中部应有时间文字（非背景像素 {n}）")
 
     # ---------- 4. 速度页 V5：白底 ----------
-    im_s = shot("speed_v5", "--page", "2", "--variant", "4", "--speed", "0", "--status", "4")
+    im_s = shot("speed_v5", "--page", "2", "--speed", "0", "--status", "4")
     if im_s:
         # 白底（V5 表盘底色为纯白；模拟器经圆遮罩后会有些许偏差，容差放宽）
         n_white = count_color(im_s, WHITE_V5, tol=10, region=(60, 60, 406, 406))
@@ -128,7 +128,7 @@ def main():
         3: ("STALE", RED_STALE),
     }
     for st, (name, col) in state_colors.items():
-        im_st = shot(f"status_{st}", "--page", "2", "--variant", "4", "--speed", "0", "--status", str(st))
+        im_st = shot(f"status_{st}", "--page", "2", "--speed", "0", "--status", str(st))
         if im_st:
             n = count_color(im_st, col, tol=14)
             check(n > 30, f"状态 {name} 的文字应以 {col} 显示（匹配像素 {n}）")
@@ -137,7 +137,7 @@ def main():
     # 标签几何由固件 `dump` 实测：pos(190,30) size 87x32，居中于 x=233。
     # 注意：测量窗口必须只覆盖标签本身——若放大到整条顶部带会把刻度环算进来
     # （刻度本就靠近边缘，属正常），从而产生假失败。
-    im_top = shot("status_top", "--page", "2", "--variant", "4", "--speed", "0", "--status", "1")
+    im_top = shot("status_top", "--page", "2", "--speed", "0", "--status", "1")
     if im_top:
         px = im_top.load()
         pts = []
