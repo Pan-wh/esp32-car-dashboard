@@ -23,15 +23,17 @@ final class DeviceControlUITests: XCTestCase {
 
         let seg = app.segmentedControls.firstMatch
         XCTAssertTrue(seg.exists, "应有表盘分段控件")
-        XCTAssertEqual(seg.buttons.count, 3, "应有三个表盘选项")
+        // 数量需与固件 ui_face 注册表 + ContentView.faces 三者一致
+        // （0 模拟时钟 / 1 数字时钟 / 2 速度表 / 3 多彩时钟）
+        XCTAssertEqual(seg.buttons.count, 4, "应有四个表盘选项")
 
-        // 切表盘：依次点击三个选项（未连接时只更新本地状态，不应崩溃）
-        for name in ["模拟时钟", "数字时钟", "速度表"] {
+        // 切表盘：依次点击全部选项（未连接时只更新本地状态，不应崩溃）
+        for name in ["模拟时钟", "数字时钟", "速度表", "多彩时钟"] {
             let b = seg.buttons[name]
             XCTAssertTrue(b.exists, "分段控件应有「\(name)」")
             b.tap()
         }
-        XCTAssertEqual(seg.buttons.count, 3, "三次切换后分段控件结构不变")
+        XCTAssertEqual(seg.buttons.count, 4, "四次切换后分段控件结构不变")
 
         // 切息屏开关：应能切换（未连接时会给出提示，不应崩溃）
         let sw = app.switches["屏幕点亮"]
