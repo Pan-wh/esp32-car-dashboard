@@ -4,7 +4,8 @@
 >
 > 配套文档：[`../PROGRESS.md`](../PROGRESS.md)（进度总览）｜
 > [`test-results.md`](test-results.md)（测试台账）｜
-> [`troubleshooting.md`](troubleshooting.md)（踩坑记录）
+> [`troubleshooting.md`](troubleshooting.md)（踩坑记录）｜
+> [`ai-task-boundaries.md`](ai-task-boundaries.md)（**交给 AI 改代码时用这个**）
 
 ---
 
