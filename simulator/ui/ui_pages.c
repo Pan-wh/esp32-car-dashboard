@@ -12,6 +12,7 @@
 #include "ui_analog.h"
 #include "ui_clock.h"
 #include "ui_color_clock.h"
+#include "ui_nav.h"
 #include "ui_speed.h"
 
 #define UI_BG_COLOR 0x000000
@@ -127,10 +128,12 @@ void ui_pages_init(void)
      * 分页/翻页/BLE 通路都无需改动。
      */
     ui_face_reset();
-    ui_face_register(&(ui_face_desc_t){ "analog", "Analog", (ui_face_build_cb)ui_analog_create });
-    ui_face_register(&(ui_face_desc_t){ "digital", "Digital", (ui_face_build_cb)ui_clock_create });
-    ui_face_register(&(ui_face_desc_t){ "speed", "Speed", (ui_face_build_cb)ui_speed_create });
-    ui_face_register(&(ui_face_desc_t){ "color", "Color", (ui_face_build_cb)ui_color_clock_create });
+    /* group 字段用于 App 按「模块」分组显示；设备侧滑动仍是线性遍历已启用表盘 */
+    ui_face_register(&(ui_face_desc_t){ "analog",  "Analog",  (ui_face_build_cb)ui_analog_create,     UI_FACE_GROUP_CLOCK });
+    ui_face_register(&(ui_face_desc_t){ "digital", "Digital", (ui_face_build_cb)ui_clock_create,      UI_FACE_GROUP_CLOCK });
+    ui_face_register(&(ui_face_desc_t){ "speed",   "Speed",   (ui_face_build_cb)ui_speed_create,      UI_FACE_GROUP_SPEED });
+    ui_face_register(&(ui_face_desc_t){ "color",   "Color",   (ui_face_build_cb)ui_color_clock_create, UI_FACE_GROUP_CLOCK });
+    ui_face_register(&(ui_face_desc_t){ "nav",     "Nav",     (ui_face_build_cb)ui_nav_create,        UI_FACE_GROUP_NAV   });
 
     for (int i = 0; i < UI_PAGE_COUNT && i < ui_face_count(); i++) {
         const ui_face_desc_t *f = ui_face_get(i);

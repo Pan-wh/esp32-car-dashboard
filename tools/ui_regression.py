@@ -174,6 +174,79 @@ def main():
         else:
             check(False, "未能在标签带找到状态文字像素")
 
+    # ---------------- 导航指引卡片（阶段 1）----------------
+    # 区域约定（466×466，圆心 233,233）：
+    #   图标区 y 82..242、x 153..313；距离区 y 244..360、x 175..290
+    print("--- 导航指引卡片 ---")
+    NAV_ICON = (170, 95, 296, 235)
+    NAV_DIST = (170, 245, 296, 362)
+
+    if True:
+        WHITE = (245, 245, 247)
+
+        # 导航中 + 直行：图标区应有内容，距离区应有数字
+        im_n = shot("nav_straight", "--page", "4", "--nav-state", "1",
+                    "--nav-maneuver", "1", "--nav-dist", "500", "--nav-speed", "68")
+        if im_n is not None:
+            ok_icon, n_icon = has_text_like(im_n, NAV_ICON, (0, 0, 0), min_nonbg=200)
+            check(ok_icon, f"导航中应显示转向图标（图标区非空像素 {n_icon}）")
+            ok_dist, n_dist = has_text_like(im_n, NAV_DIST, (0, 0, 0), min_nonbg=200)
+            check(ok_dist, f"应显示距离数值（距离区非空像素 {n_dist}）")
+
+        # 8 种动作都应能渲染出图标（防某个 case 漏配几何）
+        for mi, mname in enumerate(["unknown", "straight", "left", "right",
+                                    "u_turn", "keep_left", "keep_right", "arrive"]):
+            im_m = shot(f"nav_m{mi}_{mname}", "--page", "4", "--nav-state", "1",
+                        "--nav-maneuver", str(mi), "--nav-dist", "300",
+                        "--nav-speed", "40")
+            if im_m is None:
+                continue
+            ok_m, n_m = has_text_like(im_m, NAV_ICON, (0, 0, 0), min_nonbg=150)
+            check(ok_m, f"动作 {mname} 应渲染出图标（非空像素 {n_m}）")
+
+        # ★ 安全项：数据过期时**不得**继续显示旧指引
+        #   距离用**对比式**判定："--" 也是白色像素，绝对阈值不可靠，
+        #   改为比较"有真实数字"与"过期"两种情况的白像素量。
+        n_digits = count_color(im_n, (255, 255, 255), tol=12, region=NAV_DIST) if im_n else 0
+        im_stale = shot("nav_stale", "--page", "4", "--nav-state", "4",
+                        "--nav-maneuver", "2", "--nav-dist", "500", "--nav-speed", "68")
+        if im_stale is not None:
+            n_stale = count_color(im_stale, WHITE, tol=12, region=NAV_ICON)
+            check(n_stale == 0,
+                  f"★ 过期状态下图标区必须为空（实际白像素 {n_stale}）——不得用旧指引误导")
+            n_stale_d = count_color(im_stale, (255, 255, 255), tol=12, region=NAV_DIST)
+            check(n_stale_d < n_digits,
+                  f"★ 过期时距离不得显示旧值 500（过期 {n_stale_d} 应少于真实数字 {n_digits}）")
+
+        # 无数据同样不得显示指引
+        im_nod = shot("nav_nodata", "--page", "4", "--nav-state", "5",
+                      "--nav-maneuver", "3", "--nav-dist", "800")
+        if im_nod is not None:
+            n_nod = count_color(im_nod, WHITE, tol=12, region=NAV_ICON)
+            check(n_nod == 0, f"★ 无数据状态下图标区必须为空（实际 {n_nod}）")
+
+        # 到达：显示"目的地"符号 + ARRIVED 文案
+        im_arr = shot("nav_arrived", "--page", "4", "--nav-state", "3",
+                      "--nav-dist", "50", "--nav-speed", "12")
+        if im_arr is not None:
+            ok_a, n_a = has_text_like(im_arr, NAV_ICON, (0, 0, 0), min_nonbg=150)
+            check(ok_a, f"到达状态应显示「目的地」符号（非空像素 {n_a}）")
+            # 状态文案区（顶部）应为绿色 ARRIVED
+            n_green = count_color(im_arr, (52, 199, 89), tol=24, region=(140, 50, 330, 85))
+            check(n_green > 40, f"到达状态文案应为绿色（绿像素 {n_green}）")
+
+        # 距离单位随量级变化（m / km）
+        im_km = shot("nav_km", "--page", "4", "--nav-state", "1",
+                     "--nav-maneuver", "1", "--nav-dist", "1250")
+        im_m = shot("nav_m", "--page", "4", "--nav-state", "1",
+                    "--nav-maneuver", "1", "--nav-dist", "180")
+        if im_km is not None and im_m is not None:
+            # 单位区（y 365..400）应随 m/km 文字宽度不同而不同
+            ok_km, n_km = has_text_like(im_km, (200, 363, 266, 400), (0, 0, 0), min_nonbg=20)
+            ok_m, n_m = has_text_like(im_m, (215, 363, 251, 400), (0, 0, 0), min_nonbg=20)
+            check(ok_km, f"1.25km 应显示 km 单位（非空像素 {n_km}）")
+            check(ok_m, f"180m 应显示 m 单位（非空像素 {n_m}）")
+
     print(f"\n结果: {pass_n} 通过, {fail_n} 失败")
     return 0 if fail_n == 0 else 1
 

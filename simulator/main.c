@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "lvgl.h"
+#include "ui_nav.h"
 #include "ui_pages.h"
 #include "ui_speed.h"
 #include "ui_timesrc.h"
@@ -163,6 +164,9 @@ int main(int argc, char **argv)
     int status_state = -1; /* --status N：设置五态链路状态（用于安全区/文案验证） */
     float speed_kmh = 0.0f;
     int rot_deg = 0;              /* LVGL 软件旋转角度（0/90/180/270）*/
+    /* 导航卡片（阶段 1）模拟数据：-1 表示不覆盖，保持表盘默认 */
+    int nav_state = -1, nav_maneuver = -1, nav_dist = -1;
+    float nav_speed = -1.0f;
     int nofix = 0;
     int driver_state = UI_DRIVER_AUTO;
     int gesture_test = 0;
@@ -178,6 +182,11 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--speed") && i + 1 < argc) speed_kmh = (float)atof(argv[++i]);
         /* --rot N：启用 LVGL 软件旋转（0/90/180/270），用于验证旋转正确性与布局 */
         else if (!strcmp(argv[i], "--rot") && i + 1 < argc) rot_deg = atoi(argv[++i]);
+        /* 导航卡片模拟数据（阶段 1 验证用）*/
+        else if (!strcmp(argv[i], "--nav-state") && i + 1 < argc) nav_state = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--nav-maneuver") && i + 1 < argc) nav_maneuver = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--nav-dist") && i + 1 < argc) nav_dist = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--nav-speed") && i + 1 < argc) nav_speed = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--nofix")) nofix = 1;
         else if (!strcmp(argv[i], "--status") && i + 1 < argc) status_state = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--driver") && i + 1 < argc) driver_state = atoi(argv[++i]);
@@ -273,6 +282,12 @@ int main(int argc, char **argv)
      * 表盘与指针是在页面构建时创建的，之前调用 s_meter 仍为 NULL 会直接返回。
      */
     if (sweep_test) ui_speed_sweep();
+
+    /* 导航卡片模拟数据：必须在 ui_pages_init() 之后（表盘此时才建好）*/
+    if (nav_state >= 0)    ui_nav_set_state(nav_state);
+    if (nav_maneuver >= 0) ui_nav_set_maneuver(nav_maneuver);
+    if (nav_dist >= 0)     ui_nav_set_distance(nav_dist);
+    if (nav_speed >= 0.0f) ui_nav_set_speed(nav_speed, true);
     ui_pages_show((ui_page_t)start_page);
 
     if (gesture_test) {

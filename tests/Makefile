@@ -5,7 +5,7 @@ PYTHON  ?= python3
 CFLAGS  := -O1 -std=gnu99 -Wall -Wextra -I../simulator/ui
 SRC     := ../simulator/ui/telemetry.c
 
-TESTS   := test_telemetry test_control test_ui_face
+TESTS   := test_telemetry test_control test_ui_face test_nav
 
 all: $(TESTS)
 
@@ -18,10 +18,14 @@ test_control: test_control.c ../simulator/ui/control.c
 test_ui_face: test_ui_face.c ../simulator/ui/ui_face.c
 	$(CC) $(CFLAGS) -o $@ $^
 
-run: test_telemetry test_control test_ui_face
+test_nav: test_nav.c ../simulator/ui/nav.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+run: test_telemetry test_control test_ui_face test_nav
 	./test_telemetry
 	./test_control
 	./test_ui_face
+	./test_nav
 	@echo "--- iOS 侧纯逻辑（无需 iOS 运行时）---"
 	@swift ../tools/test_ios_logic.swift
 	@echo "--- UI 像素级回归（需已构建 simulator/dashboard_sim）---"
