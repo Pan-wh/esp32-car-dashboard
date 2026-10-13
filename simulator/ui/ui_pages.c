@@ -159,6 +159,7 @@ void ui_pages_flick(int dir)
     int next = (int)s_current + dir;
     if (next < 0 || next >= UI_PAGE_COUNT) return; /* 到头不循环 */
     ui_pages_show((ui_page_t)next);
+    ui_face_sweep_if_speed(next); /* 滑到速度表也做自检扫表（#2b）*/
 }
 
 /* 翻页动画时长（ms）：LVGL 内置吸附按像素速度算，200-400ms 偏钝，这里固定短动画 */
@@ -178,6 +179,7 @@ void ui_pages_settle(void)
     if (page < 0) page = 0;
     if (page >= UI_PAGE_COUNT) page = UI_PAGE_COUNT - 1;
     ui_pages_show((ui_page_t)page);
+    ui_face_sweep_if_speed(page);
 }
 
 void ui_pages_show(ui_page_t page)
@@ -212,6 +214,12 @@ void ui_pages_show(ui_page_t page)
 
     s_current = page;
     s_ready = true;
+}
+
+void ui_face_sweep_if_speed(int face_id)
+{
+    /* 表盘 id 与注册顺序一致：2 = speed（见 ui_pages_init 的注册顺序） */
+    if (face_id == (int)UI_PAGE_SPEED) ui_speed_sweep();
 }
 
 bool ui_pages_set_face(int face_id)

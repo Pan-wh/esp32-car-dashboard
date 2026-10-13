@@ -165,6 +165,7 @@ int main(int argc, char **argv)
     int nofix = 0;
     int driver_state = UI_DRIVER_AUTO;
     int gesture_test = 0;
+    int sweep_test = 0;
     int ble_sim = 0; /* 复刻固件 ble_update 每帧调用 setter 的行为（性能回归复现） */
 
     for (int i = 1; i < argc; i++) {
@@ -178,6 +179,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--status") && i + 1 < argc) status_state = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--driver") && i + 1 < argc) driver_state = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--gesture-test")) gesture_test = 1;
+        else if (!strcmp(argv[i], "--sweep")) sweep_test = 1;
         else if (!strcmp(argv[i], "--ble-sim")) ble_sim = 1;
         else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
             if (sscanf(argv[++i], "%d:%d:%d", &fh, &fm, &fs) < 2) fh = -1;
@@ -248,6 +250,12 @@ int main(int argc, char **argv)
 
     /* 业务 UI：页面管理（模拟时钟 / 数字时钟 / 速度表盘） */
     ui_pages_init();
+
+    /*
+     * #2b 扫表动画：必须在 ui_pages_init() **之后**调用——
+     * 表盘与指针是在页面构建时创建的，之前调用 s_meter 仍为 NULL 会直接返回。
+     */
+    if (sweep_test) ui_speed_sweep();
     ui_pages_show((ui_page_t)start_page);
 
     if (gesture_test) {

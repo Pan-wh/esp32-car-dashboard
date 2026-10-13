@@ -41,6 +41,12 @@ void ui_pages_show(ui_page_t page);
  */
 void ui_pages_flick(int dir);
 
+/*
+ * 若目标表盘是速度表（UI_PAGE_SPEED），触发一次自检扫表（#2b）。
+ * 集中在此判断，避免"什么算速度表"的知识散落到固件各调用点。
+ */
+void ui_face_sweep_if_speed(int face_id);
+
 /* 松手后按最近页吸附（无 flick 的缓慢拖拽用），同样走 130ms 短动画 */
 void ui_pages_settle(void);
 

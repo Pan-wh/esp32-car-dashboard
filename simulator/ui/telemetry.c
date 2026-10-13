@@ -368,3 +368,65 @@ float telemetry_trip_avg_kmh(const telemetry_trip_t *t)
     if (t == NULL || t->time_ms == 0) return 0.0f;
     return (float)(t->sum_kmh_ms / (double)t->time_ms);
 }
+
+/* ---------------- 速度指针线性斜坡（#2）---------------- */
+
+void telemetry_ramp_reset(telemetry_ramp_t *r)
+{
+    if (r == NULL) return;
+    r->value_kmh = 0.0f;
+    r->target_kmh = 0.0f;
+    r->inited = false;
+}
+
+void telemetry_ramp_set_target(telemetry_ramp_t *r, float kmh, bool valid)
+{
+    if (r == NULL) return;
+
+    if (!valid) {
+        /* 无效：目标归零（由斜坡平滑收回，不闪现旧值） */
+        r->target_kmh = 0.0f;
+        if (!r->inited) r->value_kmh = 0.0f;
+        return;
+    }
+
+    if (kmh < 0.0f) kmh = 0.0f;
+    r->target_kmh = kmh;
+
+    if (!r->inited) {
+        /* 首次拿到有效值：直接对齐，避免从 0 慢慢爬（起步即准） */
+        r->value_kmh = kmh;
+        r->inited = true;
+    }
+}
+
+float telemetry_ramp_step(telemetry_ramp_t *r, uint32_t dt_ms)
+{
+    if (r == NULL) return 0.0f;
+    if (!r->inited) return 0.0f;
+    if (dt_ms == 0) return r->value_kmh;
+
+    float diff = r->target_kmh - r->value_kmh;
+    if (diff == 0.0f) return r->value_kmh;
+
+    /* 按方向选择速率，换算成本帧允许的最大变化量 */
+    float rate = (diff > 0.0f) ? TELEMETRY_RAMP_UP_KMH_PER_S
+                               : TELEMETRY_RAMP_DOWN_KMH_PER_S;
+    float max_step = rate * ((float)dt_ms / 1000.0f);
+
+    if (diff > max_step) {
+        r->value_kmh += max_step;
+    }
+    else if (diff < -max_step) {
+        r->value_kmh -= max_step;
+    }
+    else {
+        r->value_kmh = r->target_kmh; /* 足够接近：直接对齐，避免无限逼近 */
+    }
+    return r->value_kmh;
+}
+
+float telemetry_ramp_value(const telemetry_ramp_t *r)
+{
+    return (r == NULL) ? 0.0f : r->value_kmh;
+}

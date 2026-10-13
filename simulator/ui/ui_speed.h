@@ -48,6 +48,19 @@ void ui_speed_set_heading(int deg);
  */
 void ui_speed_set_trip(float distance_km, float max_kmh);
 
+/*
+ * 开机扫表动画（#2b）：指针 0 → 满量程 → 回落，类似汽车自检。
+ * 动画期间会屏蔽数据驱动的速度写入，结束后自动落位到最新真实值。
+ * 指针尚未创建时（表盘未构建）调用为无操作。
+ */
+void ui_speed_sweep(void);
+
+/* 立即中止扫表（例如表盘被销毁前） */
+void ui_speed_sweep_stop(void);
+
+/* 扫表进行中？ */
+bool ui_speed_is_sweeping(void);
+
 /* ---- 诊断接口（排查"速度 0 但指针不归零"）---- */
 float ui_speed_get_speed(void);   /* 当前速度（km/h）*/
 int ui_speed_get_valid(void);     /* 速度是否有效 */
