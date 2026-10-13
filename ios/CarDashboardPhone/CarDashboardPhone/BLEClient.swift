@@ -3,6 +3,7 @@
 // 与固件 ble_telemetry.cpp 对应：
 //   设备名 CarDashboard；Service 7D2A0001-8F4A-4B7C-9D21-5E6A3B8C1000
 //   Telemetry 特征（Write）7D2A0002-…；Status（Read/Notify）7D2A0003-…
+//   Command（Write）7D2A0004-…：设备控制（亮度/息屏/表盘切换）
 import CoreBluetooth
 import Combine
 import Foundation
@@ -18,10 +19,12 @@ final class BLEClient: NSObject, ObservableObject {
     private var peripheral: CBPeripheral?
     private var telemetryChar: CBCharacteristic?
     private var statusChar: CBCharacteristic?
+    private var commandChar: CBCharacteristic?
 
     private let serviceUUID = CBUUID(string: "7D2A0001-8F4A-4B7C-9D21-5E6A3B8C1000")
     private let telemetryUUID = CBUUID(string: "7D2A0002-8F4A-4B7C-9D21-5E6A3B8C1000")
     private let statusUUID = CBUUID(string: "7D2A0003-8F4A-4B7C-9D21-5E6A3B8C1000")
+    private let commandUUID = CBUUID(string: "7D2A0004-8F4A-4B7C-9D21-5E6A3B8C1000")
     private let deviceName = "CarDashboard"
 
     // 待发队列：BLE 尚未就绪时缓存最新一条，连接/发现特征后立即补发
@@ -61,6 +64,38 @@ final class BLEClient: NSObject, ObservableObject {
         case .poweredOff: return "蓝牙已关闭"
         @unknown default: return "未知"
         }
+    }
+
+    /// 发送设备控制命令（功能①/③）。返回是否已发出（未连接/特征未就绪时返回 false）。
+    /// - Parameter json: 形如 {"cmd":"brightness","value":128}
+    @discardableResult
+    func sendCommand(_ json: String) -> Bool {
+        guard let per = peripheral, let ch = commandChar, isConnected else {
+            lastNotice = "命令未发送：仪表未连接或命令特征未就绪"
+            return false
+        }
+        guard let data = json.data(using: .utf8) else { return false }
+        per.writeValue(data, for: ch, type: .withResponse)
+        lastNotice = "已发送：\(json)"
+        return true
+    }
+
+    /// 便捷方法：亮度 0-255
+    @discardableResult
+    func setBrightness(_ value: Int) -> Bool {
+        sendCommand("{\"cmd\":\"brightness\",\"value\":\(max(0, min(255, value)))}")
+    }
+
+    /// 便捷方法：息屏 / 亮屏
+    @discardableResult
+    func setScreen(on: Bool) -> Bool {
+        sendCommand("{\"cmd\":\"screen\",\"value\":\"\(on ? "on" : "off")\"}")
+    }
+
+    /// 便捷方法：切换到指定表盘（功能③）
+    @discardableResult
+    func setFace(_ id: Int) -> Bool {
+        sendCommand("{\"cmd\":\"face\",\"value\":\(id)}")
     }
 
     func send(packet: TelemetryPacket) {
@@ -126,7 +161,7 @@ extension BLEClient: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let services = peripheral.services else { return }
         for svc in services where svc.uuid == serviceUUID {
-            peripheral.discoverCharacteristics([telemetryUUID, statusUUID], for: svc)
+            peripheral.discoverCharacteristics([telemetryUUID, statusUUID, commandUUID], for: svc)
         }
     }
 
@@ -138,6 +173,8 @@ extension BLEClient: CBPeripheralDelegate {
             } else if ch.uuid == statusUUID {
                 statusChar = ch
                 peripheral.setNotifyValue(true, for: ch)
+            } else if ch.uuid == commandUUID {
+                commandChar = ch
             }
         }
         // 若连接前有待发包，立即补发

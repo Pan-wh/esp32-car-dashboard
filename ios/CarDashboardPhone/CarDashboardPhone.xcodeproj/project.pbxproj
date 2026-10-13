@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0CA6F67E51915967DA974C10 /* DeviceControlUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83A4705DB30A4F47EAD99B1A /* DeviceControlUITests.swift */; };
 		3325EE76B686D6EB495C914E /* BLEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DE0D4C728A95FAA998B576A /* BLEClient.swift */; };
 		7E4EACB073A1F46147DC479B /* TelemetryQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32314E9EB764F0A3F2BBE843 /* TelemetryQuality.swift */; };
 		8CD13893D8207814F5D90067 /* CarDashboardPhoneUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0D22E82D27FEF70D93C0BC2 /* CarDashboardPhoneUITests.swift */; };
@@ -34,6 +35,7 @@
 		44C43BB0CCB313C4FB88F21C /* CarDashboardPhone.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CarDashboardPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5FB8403418EFFC9FF3B4E519 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		6DE0D4C728A95FAA998B576A /* BLEClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEClient.swift; sourceTree = "<group>"; };
+		83A4705DB30A4F47EAD99B1A /* DeviceControlUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceControlUITests.swift; sourceTree = "<group>"; };
 		90328C9C31C539EC52E1A87D /* CarDashboardPhoneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarDashboardPhoneApp.swift; sourceTree = "<group>"; };
 		9D701C08799DB6BAE20DB1FE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		A77792F272247B65306766CE /* LocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationService.swift; sourceTree = "<group>"; };
@@ -46,6 +48,7 @@
 			isa = PBXGroup;
 			children = (
 				B0D22E82D27FEF70D93C0BC2 /* CarDashboardPhoneUITests.swift */,
+				83A4705DB30A4F47EAD99B1A /* DeviceControlUITests.swift */,
 			);
 			path = CarDashboardPhoneUITests;
 			sourceTree = "<group>";
@@ -178,6 +181,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8CD13893D8207814F5D90067 /* CarDashboardPhoneUITests.swift in Sources */,
+				0CA6F67E51915967DA974C10 /* DeviceControlUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

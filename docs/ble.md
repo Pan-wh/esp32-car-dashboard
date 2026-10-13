@@ -115,7 +115,31 @@
 {"cmd":"brightness","value":128}   // 亮度 0-255
 {"cmd":"screen","value":"off"}     // 息屏（也接受 value:0）
 {"cmd":"screen","value":"on"}      // 亮屏（也接受 value:1）
-{"cmd":"face","value":2}           // 切表盘（功能③预留）
+{"cmd":"face","value":2}           // 切表盘：直接指定 id
+{"cmd":"face","value":-1}          // 下一个表盘
+{"cmd":"face","value":-2}          // 上一个表盘
+```
+
+## 表盘系统（功能③）
+
+表盘由**注册表**驱动（`simulator/ui/ui_face.c`），当前注册 3 个：
+
+| id | name | 内容 |
+|----|------|------|
+| 0 | `analog` | 模拟指针时钟（烘焙表盘 + 三针）|
+| 1 | `digital` | 数字时钟（138px 时间 + 日期 + 同步状态）|
+| 2 | `speed` | 速度表（烘焙表盘 + 插画 + 指针 + 航向/行程 HUD）|
+
+注册顺序即 id 顺序，也与 `ui_page_t` 一一对应。新增表盘只需在
+`ui_pages_init()` 里多注册一项（例如功能②的「图片背景 + 时钟」），
+分页、翻页手势、BLE/串口命令通路都无需改动。
+
+固件串口命令（无 App 时验证）：
+
+```
+face              列出全部表盘与当前表盘
+face 1            切到指定 id
+face next/prev    下一个 / 上一个（循环）
 ```
 
 约定与遥测上行一致：**BLE 回调只解析并暂存，硬件副作用（`setBrightness` /

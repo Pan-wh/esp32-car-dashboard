@@ -10,6 +10,14 @@ import CoreBluetooth
 struct ContentView: View {
     @StateObject private var session = DriveSessionManager()
 
+    /// 表盘列表（与固件 ui_face 注册表顺序一致：0 analog / 1 digital / 2 speed）
+    private let faces: [(id: Int, name: String)] = [
+        (0, "模拟时钟"), (1, "数字时钟"), (2, "速度表"),
+    ]
+    @State private var selectedFace = 2
+    @State private var brightness: Double = 200
+    @State private var screenOn = true
+
     var body: some View {
         NavigationView {
             Form {
@@ -53,6 +61,36 @@ struct ContentView: View {
                     row("累计发送", "\(session.sentCount) 包")
                     row("最近发送", timeText(session.lastSendTime))
                     row("定位数据时间", timeText(session.lastLocationTime))
+                }
+
+                Section("仪表控制") {
+                    Picker("表盘", selection: $selectedFace) {
+                        ForEach(faces, id: \.id) { f in
+                            Text(f.name).tag(f.id)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: selectedFace) { _, newValue in
+                        _ = session.ble.setFace(newValue)
+                    }
+
+                    HStack {
+                        Text("亮度")
+                        Slider(value: $brightness, in: 1...255, step: 1) { editing in
+                            // 拖动结束才发送，避免高频写 BLE
+                            if !editing { _ = session.ble.setBrightness(Int(brightness)) }
+                        }
+                        Text("\(Int(brightness))").monospacedDigit().frame(width: 34)
+                    }
+
+                    Toggle("屏幕点亮", isOn: $screenOn)
+                        .onChange(of: screenOn) { _, on in
+                            _ = session.ble.setScreen(on: on)
+                        }
+
+                    if let notice = session.ble.lastNotice {
+                        Text(notice).font(.footnote).foregroundColor(.secondary)
+                    }
                 }
 
                 Section("实时数据") {

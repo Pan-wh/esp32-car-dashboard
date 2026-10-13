@@ -68,3 +68,18 @@ JSON 字段与语义见 `../../docs/ble.md` 与 `TelemetryPacket.swift` 的 Codi
   固件串口应出现 `[BLE] v=1 速度=…` 与 `[同步] …UTC → RTC…`。
 - 协议往返已在本机验证：Swift `JSONEncoder` 输出 → 固件 `telemetry.c` 解析结果完全一致
   （`v=1 ts=1791792803000 speed=19.03 course=120.0 location=1 → kmh=68.5`）。
+
+## 仪表控制（App 端）
+
+「仪表控制」分区（需仪表已连接）：
+
+| 控件 | 作用 | BLE 命令 |
+|------|------|---------|
+| 表盘分段选择器 | 模拟时钟 / 数字时钟 / 速度表 | `{"cmd":"face","value":N}` |
+| 亮度滑块 | 1-255（拖动结束才发送，避免高频写）| `{"cmd":"brightness","value":N}` |
+| 屏幕点亮开关 | 息屏 / 亮屏 | `{"cmd":"screen","value":"on"\|"off"}` |
+
+未连接时操作会给出明确提示（`lastNotice`），不会「点了没反应」。
+
+XCUITest 覆盖：`DeviceControlUITests` 验证分区可达、分段控件含 3 个表盘选项、
+滑块与开关可交互且不崩溃（模拟器无 BLE 外设，故只验证 UI 路径）。
