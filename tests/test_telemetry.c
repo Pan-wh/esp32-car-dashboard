@@ -319,6 +319,71 @@ int main(void)
         CHECK(t.distance_km == 0.0 && t.max_kmh == 0.0f && t.time_ms == 0, "复位清空");
     }
 
+    /* ---------------- 速度线性斜坡（#2）---------------- */
+    printf("=== 速度线性斜坡 ===\n");
+    {
+        telemetry_ramp_t r;
+        telemetry_ramp_reset(&r);
+        CHECK(telemetry_ramp_value(&r) == 0.0f, "复位后为 0");
+
+        /* 首次设定目标：直接对齐（起步即准，不从 0 爬） */
+        telemetry_ramp_set_target(&r, 60.0f, true);
+        CHECK_NEAR(telemetry_ramp_value(&r), 60.0, 1e-3, "首次对齐到 60");
+
+        /* 加速：40 km/h/s，100ms 应走 4 km/h（时间基线性） */
+        telemetry_ramp_set_target(&r, 100.0f, true);
+        float v = telemetry_ramp_step(&r, 100);
+        CHECK_NEAR(v, 64.0, 1e-3, "100ms 后 = 60 + 40*0.1 = 64");
+
+        /* 再 100ms → 68（等速前进，证明与帧率无关） */
+        v = telemetry_ramp_step(&r, 100);
+        CHECK_NEAR(v, 68.0, 1e-3, "再 100ms → 68");
+
+        /* 帧率无关性：同样的总时长，拆成多帧结果一致 */
+        telemetry_ramp_t a, b;
+        telemetry_ramp_reset(&a); telemetry_ramp_reset(&b);
+        telemetry_ramp_set_target(&a, 0.0f, true);
+        telemetry_ramp_set_target(&b, 0.0f, true);
+        telemetry_ramp_set_target(&a, 100.0f, true);
+        telemetry_ramp_set_target(&b, 100.0f, true);
+        for (int i = 0; i < 50; i++) telemetry_ramp_step(&a, 20);   /* 50 帧 × 20ms = 1s */
+        for (int i = 0; i < 5; i++) telemetry_ramp_step(&b, 200);   /* 5 帧 × 200ms = 1s */
+        CHECK_NEAR(telemetry_ramp_value(&a), telemetry_ramp_value(&b), 1e-3,
+                   "1 秒总时长：50×20ms 与 5×200ms 结果一致（帧率无关）");
+
+        /* 减速：用更快速率（80 km/h/s） */
+        telemetry_ramp_reset(&r);
+        telemetry_ramp_set_target(&r, 100.0f, true);   /* 对齐 100 */
+        telemetry_ramp_set_target(&r, 0.0f, true);
+        v = telemetry_ramp_step(&r, 100);
+        CHECK_NEAR(v, 92.0, 1e-3, "减速 100ms = 100 - 80*0.1 = 92");
+
+        /* 足够接近时直接对齐，不会无限逼近 */
+        telemetry_ramp_reset(&r);
+        telemetry_ramp_set_target(&r, 50.0f, true);
+        telemetry_ramp_set_target(&r, 50.5f, true);
+        for (int i = 0; i < 20; i++) telemetry_ramp_step(&r, 50);
+        CHECK_NEAR(telemetry_ramp_value(&r), 50.5, 1e-3, "收敛到目标值");
+
+        /* 无效数据：目标归零，但通过斜坡收回（不闪现） */
+        telemetry_ramp_reset(&r);
+        telemetry_ramp_set_target(&r, 80.0f, true);
+        telemetry_ramp_set_target(&r, 0.0f, false);
+        v = telemetry_ramp_step(&r, 100);
+        CHECK(v < 80.0f && v > 0.0f, "无效后开始下降但未瞬时归零（实测 %.1f）", (double)v);
+
+        /* dt=0 不推进 */
+        telemetry_ramp_reset(&r);
+        telemetry_ramp_set_target(&r, 50.0f, true);
+        telemetry_ramp_set_target(&r, 100.0f, true);
+        CHECK_NEAR(telemetry_ramp_step(&r, 0), 50.0, 1e-3, "dt=0 不推进");
+
+        /* 负速度视为 0 */
+        telemetry_ramp_reset(&r);
+        telemetry_ramp_set_target(&r, -5.0f, true);
+        CHECK_NEAR(telemetry_ramp_value(&r), 0.0, 1e-3, "负速度归一为 0");
+    }
+
     printf("结果: %d 通过, %d 失败\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

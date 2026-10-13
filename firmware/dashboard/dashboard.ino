@@ -170,6 +170,18 @@ static void tlog_add(int16_t x, int16_t y, bool pressed)
 
 /* ---------------- BLE 遥测（iPhone Core Location 数据源）---------------- */
 
+/*
+ * 时间重校阈值：已同步后，只有偏差超过该值才重写 RTC。
+ *
+ * ⚠️ 曾用 2s 阈值，实测会导致时钟界面隔几秒"重置"一下：
+ *    time(NULL) 只有**秒级**精度，而手机发来的是**毫秒级** UTC，
+ *    两者边界错开时 diff 天然可达 ±1000ms，再叠加传输/处理延迟就逼近 2s，
+ *    于是频繁触发重校 → 反复写 RTC → 时钟跳变。
+ * 手机在驾驶期间持续 2Hz 发送时间戳，仪表本地走时足够准，
+ * 因此改为「**首次校时 + 仅偏差过大才重校**」，正常驾驶期间零重写。
+ */
+#define TIME_RESYNC_THRESHOLD_MS 30000
+
 /* 数据过期阈值：超过该时长无有效遥测 → 速度置无效（不显示旧值） */
 #define BLE_STALE_MS 2500
 
@@ -188,7 +200,7 @@ static uint32_t s_trip_last_ms = 0;
 #define TRIP_STEP_MS 200 /* 每 200ms 累积一步 */
 
 static uint32_t s_implausible = 0; /* 被丢弃的不合理包计数（§7） */
-static telemetry_smooth_t s_smooth;  /* 速度平滑（§5.4，限制滞后、失效即重置） */
+static telemetry_ramp_t s_ramp;      /* 速度线性斜坡（#2：按时间匀速逼近目标，消除跳针）*/
 static const char *s_reset_reason = "未知"; /* 本次启动的复位原因（启动时记录） */
 static int s_reset_reason_code = -1;        /* esp_reset_reason() 原始值 */
 
@@ -401,6 +413,7 @@ static void control_poll(void)
       else if (want == -2) target = ui_face_prev(cur, 1);
 
       if (ui_pages_set_face(target)) {
+        ui_face_sweep_if_speed(target); /* #2b 切到速度表盘 → 自检扫表 */
         Serial.printf("[控制] 表盘 %d(%s) → %d(%s)\n", cur, ui_pages_current_face_name(), target,
                       ui_pages_current_face_name());
       }
@@ -692,8 +705,9 @@ static void print_ble(void)
   }
   Serial.printf("   本次启动复位原因=%s(码 %d)，已运行 %lu s\n", s_reset_reason,
                 s_reset_reason_code, (unsigned long)(millis() / 1000));
-  Serial.printf("   平滑速度=%.1f km/h（原始 %.1f）\n",
-                (double)s_smooth.value_kmh,
+  Serial.printf("   显示速度=%.1f km/h（目标 %.1f，原始遥测 %.1f）\n",
+                (double)telemetry_ramp_value(&s_ramp),
+                (double)s_ramp.target_kmh,
                 (double)(s_tel_valid ? telemetry_speed_kmh(&s_tel) : 0.0f));
 }
 
@@ -1069,6 +1083,7 @@ void setup()
    * 收到有效 BLE 遥测后由 ble_poll 驱动。
    */
   telemetry_trip_reset(&s_trip);
+  telemetry_ramp_reset(&s_ramp);
   s_trip_last_ms = millis();
   ui_speed_set_fix(false, 0);
   ui_speed_set_status(UI_STATUS_CONNECTING); /* 初始 BT OFF */
@@ -1092,10 +1107,19 @@ static bool time_sync_maybe(int64_t utc_ms)
 {
   if (utc_ms <= 0) return false;
 
-  /* 已同步且偏差小：不重写（手机 1-2Hz 连续发同一时间） */
-  time_t now = time(NULL);
-  int64_t diff_ms = (int64_t)now * 1000 - utc_ms;
-  if (s_time_synced && diff_ms >= -2000 && diff_ms <= 2000) return false;
+  /*
+   * 已同步：只在偏差**明显过大**时才重校（见 TIME_RESYNC_THRESHOLD_MS 注释）。
+   * 取中间时刻估算，抵消 time() 的秒级截断（±500ms）带来的固有误差。
+   */
+  if (s_time_synced) {
+    struct timeval tv_now;
+    gettimeofday(&tv_now, NULL);
+    int64_t local_ms = (int64_t)tv_now.tv_sec * 1000 + tv_now.tv_usec / 1000;
+    int64_t diff_ms = local_ms - utc_ms;
+    if (diff_ms < 0) diff_ms = -diff_ms;
+    if (diff_ms <= TIME_RESYNC_THRESHOLD_MS) return false; /* 正常：不重写 RTC */
+    Serial.printf("[同步] 偏差 %lld ms 超阈值，重校\n", (long long)diff_ms);
+  }
 
   /* 合理性校验（换算成日历后年份区间） */
   time_t utc = (time_t)(utc_ms / 1000);
@@ -1204,18 +1228,21 @@ static void ble_update(void)
     bool speed_ok = s_tel.speed_valid && s_tel.speed_mps >= 0.0f;
     ui_speed_set_fix(true, 0);
     if (speed_ok) {
-      /* 低速抖动抑制：减速立即跟随、加速轻量平滑，滞后有界（§5.4） */
-      float kmh = telemetry_smooth_step(&s_smooth, telemetry_speed_kmh(&s_tel), true);
-      ui_speed_set_speed(kmh);
+      /*
+       * 只设定**目标值**；指针由主循环的斜坡按时间匀速推进（#2 修跳针）。
+       * 原先在这里直接 EMA 出显示值并写入：数据 2Hz 而 UI 50Hz，
+       * 指针呈"每 500ms 走一段就停"的阶梯运动，观感即跳针。
+       */
+      telemetry_ramp_set_target(&s_ramp, telemetry_speed_kmh(&s_tel), true);
       if (s_tel.has_course) ui_speed_set_heading((int)(s_tel.course_deg + 0.5f));
     }
     else {
-      telemetry_smooth_reset(&s_smooth); /* 速度不可信：清平滑状态 */
+      telemetry_ramp_set_target(&s_ramp, 0.0f, false); /* 速度不可信：目标归零 */
     }
   }
   else {
-    telemetry_smooth_reset(&s_smooth); /* 失效/超时/断连：立即重置，绝不残留旧值 */
-    ui_speed_set_fix(false, 0);        /* 指针归零，不显示旧值 */
+    telemetry_ramp_reset(&s_ramp); /* 失效/超时/断连：立即重置 */
+    ui_speed_set_fix(false, 0);    /* 指针归零，不显示旧值 */
   }
 }
 
@@ -1224,6 +1251,18 @@ void loop()
   s_loop_cnt++;                /* 性能：循环速率 */
   handle_serial();            /* 串口命令：校时 / 切页 */
   control_poll();             /* BLE 下行控制：亮度 / 息屏 */
+
+  /* 速度指针斜坡推进（#2）：按实际经过时间匀速逼近目标，与帧率无关 */
+  {
+    static uint32_t last_ramp_ms = 0;
+    uint32_t now_r = millis();
+    uint32_t dt_r = now_r - last_ramp_ms;
+    if (dt_r >= 20) { /* 50Hz 推进 */
+      last_ramp_ms = now_r;
+      float shown = telemetry_ramp_step(&s_ramp, dt_r);
+      ui_speed_set_speed(shown);
+    }
+  }
 
   /* 行程统计（功能④）：仅在链路 LIVE 且速度有效时累积，失效不计入 */
   {

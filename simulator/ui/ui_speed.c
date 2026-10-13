@@ -81,6 +81,7 @@ static void hud5_refresh(void); /* 定义见下方（build_v5 需先引用） */
 static lv_meter_indicator_t *s_needle5; /* V5 指针（与 V2 区分，绘制时外移内端） */
 static lv_point_t s_marker_inner;       /* 指针内端缓存（必须静态：存活到绘制调用） */
 static int s_driver_state = UI_DRIVER_AUTO;
+static bool s_sweeping = false;   /* 扫表动画进行中（屏蔽数据驱动，见 ui_speed_sweep）*/
 static int s_heading = 45;        /* 航向（度，正北 0，顺时针） */
 static float s_trip_km = 0.0f;    /* 行程里程（km，功能④） */
 static float s_trip_max = 0.0f;   /* 行程最高速（km/h） */
@@ -284,6 +285,8 @@ static void apply_state(void)
                 lv_obj_set_style_text_color(s_status5, lv_color_hex(status5_color()), 0);
             }
         }
+        /* 底部 HUD 含数字速度，速度变化时必须刷新（内部有同文案去重） */
+        hud5_refresh();
         return;
     }
 }
@@ -331,6 +334,7 @@ void ui_speed_set_speed(float kmh)
      */
     if (kmh == s_speed) return;
     s_speed = kmh;
+    if (s_sweeping) return; /* 扫表动画期间不打断指针 */
     apply_state();
 }
 
@@ -366,16 +370,112 @@ static const char *compass_name(int deg)
 }
 
 /* 底部 HUD 文案："N 0° · 12.3 km · MAX 87"（无里程时只显示航向） */
+/*
+ * 底部 HUD 文案（#3 用户反馈：信息过多导致超框）。
+ * 只保留「数字速度 + 航向」；里程/最高速移到串口 trip 命令查询，不再上屏。
+ * 无有效速度时显示 "--"，避免把 0 误读成"真的静止"。
+ */
 static void hud5_text(char *buf, size_t sz)
 {
     int h = ((s_heading % 360) + 360) % 360;
-    if (s_trip_km > 0.05f) {
-        snprintf(buf, sz, "%s %d\xc2\xb0 \xc2\xb7 %.1f km \xc2\xb7 MAX %.0f",
-                 compass_name(h), h, (double)s_trip_km, (double)s_trip_max);
+
+    if (s_valid) {
+        snprintf(buf, sz, "%.0f km/h  %s %d\xc2\xb0", (double)s_speed, compass_name(h), h);
     }
     else {
-        snprintf(buf, sz, "%s %d\xc2\xb0", compass_name(h), h);
+        snprintf(buf, sz, "-- km/h  %s %d\xc2\xb0", compass_name(h), h);
     }
+}
+
+/*
+ * ---- 开机扫表动画（#2b 用户需求：切到速度表盘时指针自检扫一遍）----
+ *
+ * 行为：指针 0 → 满量程 → 回落到当前真实速度，类似汽车启动自检。
+ * 实现要点：
+ *   1. 两段动画（上升 ease_out + 回落 ease_in_out），用第一阶段 ready 回调
+ *      启动第二阶段，避免依赖延迟启动 API 的版本差异；
+ *   2. 动画期间置 s_sweeping，**屏蔽**数据驱动的 set_speed，
+ *      否则 2Hz 遥测会把扫表打断（指针扫一半就被拉回真实值）；
+ *   3. 动画结束后恢复数据驱动（apply_state 用最新 s_speed 落位）。
+ */
+#define SWEEP_UP_MS   420 /* 0 → 满量程 */
+#define SWEEP_DOWN_MS 460 /* 满量程 → 当前值 */
+
+static lv_anim_t s_sweep_anim;
+static lv_timer_t *s_sweep_timer = NULL;
+
+/* 扫表结束：解除屏蔽并落位到最新真实速度 */
+static void sweep_end_timer_cb(lv_timer_t *tm)
+{
+    (void)tm;
+    s_sweeping = false;
+    s_sweep_timer = NULL;
+    apply_state();
+}
+
+static void sweep_anim_cb(void *var, int32_t v)
+{
+    (void)var;
+    if (s_meter && s_needle5) lv_meter_set_indicator_value(s_meter, s_needle5, v);
+}
+
+/* 第一阶段结束：启动回落段 */
+static void sweep_up_done_cb(lv_anim_t *a)
+{
+    (void)a;
+    int32_t target = s_valid ? (int32_t)lroundf(s_speed) : 0;
+
+    lv_anim_init(&s_sweep_anim);
+    lv_anim_set_var(&s_sweep_anim, NULL);
+    lv_anim_set_exec_cb(&s_sweep_anim, sweep_anim_cb);
+    lv_anim_set_values(&s_sweep_anim, (int32_t)SPEED_MAX, target);
+    lv_anim_set_time(&s_sweep_anim, SWEEP_DOWN_MS);
+    lv_anim_set_path_cb(&s_sweep_anim, lv_anim_path_ease_in_out);
+    lv_anim_set_ready_cb(&s_sweep_anim, NULL);
+    lv_anim_start(&s_sweep_anim);
+}
+
+void ui_speed_sweep(void)
+{
+    if (s_meter == NULL || s_needle5 == NULL) return;
+
+    lv_anim_del(&s_sweep_anim, NULL);
+    if (s_sweep_timer != NULL) { /* 连点切换表盘时避免叠加多个定时器 */
+        lv_timer_del(s_sweep_timer);
+        s_sweep_timer = NULL;
+    }
+    s_sweeping = true; /* 动画期间屏蔽数据驱动 */
+
+    lv_anim_init(&s_sweep_anim);
+    lv_anim_set_var(&s_sweep_anim, NULL);
+    lv_anim_set_exec_cb(&s_sweep_anim, sweep_anim_cb);
+    lv_anim_set_values(&s_sweep_anim, 0, (int32_t)SPEED_MAX);
+    lv_anim_set_time(&s_sweep_anim, SWEEP_UP_MS);
+    lv_anim_set_path_cb(&s_sweep_anim, lv_anim_path_ease_out);
+    lv_anim_set_ready_cb(&s_sweep_anim, sweep_up_done_cb);
+    lv_anim_start(&s_sweep_anim);
+
+    /*
+     * 扫表结束后解除屏蔽：用一次性 lv_timer（总时长 = 上升 + 回落 + 余量）。
+     * 比依赖动画 ready 链更直观，也便于单点取消。
+     */
+    s_sweep_timer = lv_timer_create(sweep_end_timer_cb, SWEEP_UP_MS + SWEEP_DOWN_MS + 60, NULL);
+    lv_timer_set_repeat_count(s_sweep_timer, 1);
+}
+
+void ui_speed_sweep_stop(void)
+{
+    lv_anim_del(&s_sweep_anim, NULL);
+    if (s_sweep_timer != NULL) {
+        lv_timer_del(s_sweep_timer);
+        s_sweep_timer = NULL;
+    }
+    s_sweeping = false;
+}
+
+bool ui_speed_is_sweeping(void)
+{
+    return s_sweeping;
 }
 
 /* 底部 HUD 刷新（同文案不重设，避免无谓 invalidate） */

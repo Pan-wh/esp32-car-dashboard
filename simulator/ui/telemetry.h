@@ -72,6 +72,40 @@ bool telemetry_parse(const char *json, size_t len, telemetry_msg_t *out);
 float telemetry_speed_kmh(const telemetry_msg_t *m);
 
 /*
+ * ---- 速度指针线性斜坡（#2 修复"跳针"）----
+ *
+ * 原 EMA 方案的问题：`telemetry_smooth_step()` 按**调用次数**收敛，
+ * 而固件以 50Hz 调用、数据源只有 2Hz → 指针呈"每 500ms 走一段就停"的
+ * 阶梯式运动，观感是跳针且更新慢。
+ *
+ * 本方案改为**按时间**的固定速率斜坡（用户选择的"假线性"）：
+ *   - 每帧代入实际经过的 dt_ms，指针以 ramp_kmh_per_s 匀速逼近目标
+ *   - 无论调用频率多少，视觉速度一致（时间基，不受帧率影响）
+ *   - 减速同样走斜坡（但速率更快），既线性又不会长时间滞后显示高车速
+ */
+typedef struct {
+    float value_kmh;  /* 当前显示值 */
+    float target_kmh; /* 目标值（最新遥测） */
+    bool inited;
+} telemetry_ramp_t;
+
+/* 加速斜坡速率（km/h 每秒）：约 0→100 需 2.5s，视觉平滑不拖沓 */
+#define TELEMETRY_RAMP_UP_KMH_PER_S 40.0f
+/* 减速斜坡速率（km/h 每秒）：比加速快一倍，保证刹车时读数及时下降 */
+#define TELEMETRY_RAMP_DOWN_KMH_PER_S 80.0f
+
+void telemetry_ramp_reset(telemetry_ramp_t *r);
+
+/* 设定目标速度（收到新遥测时调用） */
+void telemetry_ramp_set_target(telemetry_ramp_t *r, float kmh, bool valid);
+
+/* 按经过时间推进斜坡，返回当前应显示的速度 */
+float telemetry_ramp_step(telemetry_ramp_t *r, uint32_t dt_ms);
+
+/* 当前显示值 */
+float telemetry_ramp_value(const telemetry_ramp_t *r);
+
+/*
  * ---- 行程统计（功能④：里程 / 均速 / 最高速）----
  *
  * 由固件按固定周期调用 step 累积；纯逻辑放在共享层以便单测。
