@@ -36,6 +36,18 @@ final class BLEClient: NSObject, ObservableObject {
     }
 
     func scanAndConnect() {
+        /*
+         * 已连接时直接返回，**不要覆盖 lastNotice**。
+         *
+         * 真机踩坑：启动时 onAppear 自动连一次，用户随后点「开始驾驶」会再次
+         * 调用本函数 → 文案被改成"扫描中…"；但此时连接已建立，不会再有
+         * didConnect 回调来清空它 → 界面永久停在"扫描中…请确认仪表已上电"，
+         * 而 BLE 状态却显示"已连接"（自相矛盾）。
+         */
+        if isConnected {
+            lastNotice = "已连接 CarDashboard"
+            return
+        }
         switch state {
         case .poweredOn:
             lastNotice = "扫描中…请确认仪表已上电"
@@ -110,6 +122,7 @@ final class BLEClient: NSObject, ObservableObject {
 
 extension BLEClient: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        NSLog("[BLE] 状态回调: %d", central.state.rawValue)
         state = central.state
         if central.state != .poweredOn {
             isConnected = false
@@ -136,8 +149,9 @@ extension BLEClient: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        NSLog("[BLE] 已连接，开始发现服务")
         isConnected = true
-        lastNotice = nil
+        lastNotice = "已连接 CarDashboard"
         peripheral.delegate = self
         peripheral.discoverServices([serviceUUID])
     }
@@ -148,6 +162,7 @@ extension BLEClient: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        NSLog("[BLE] 已断开: %@", error?.localizedDescription ?? "无错误")
         isConnected = false
         lastNotice = "已断开，正在尝试重连…"
         telemetryChar = nil
@@ -167,6 +182,7 @@ extension BLEClient: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         guard let chars = service.characteristics else { return }
+        NSLog("[BLE] 发现 %d 个特征", chars.count)
         for ch in chars {
             if ch.uuid == telemetryUUID {
                 telemetryChar = ch
