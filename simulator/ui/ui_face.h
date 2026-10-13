@@ -17,11 +17,36 @@
 #ifndef UI_FACE_H
 #define UI_FACE_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define UI_FACE_MAX 8 /* 注册表容量（超出则注册失败） */
+#define UI_FACE_MAX 32 /* 注册表容量（位掩码按 uint32 存启用状态，故上限 32）*/
+
+/*
+ * 表盘所属**模块分组**。
+ *
+ * 为什么要分组：表盘会越来越多（时钟类就有 3 个），全部平铺既难找也不便扩展。
+ * 分组是 **App 端的组织方式**；设备侧没有"分组切换"手势，滑动仍是线性遍历
+ * 「已启用」的表盘。
+ *
+ * 扩展方式：新增模块时在此加一个枚举值，注册表盘时填对应的 group，
+ * App 会**自动**多出一个分组（无需改 App 代码，见 docs/ble.md 的 faces 上报）。
+ * NAV / PHOTO 即为后续「导航模块」「照片模块」预留。
+ */
+typedef enum {
+    UI_FACE_GROUP_CLOCK = 0, /* 时钟 */
+    UI_FACE_GROUP_SPEED,     /* 速度表 */
+    UI_FACE_GROUP_NAV,       /* 导航（预留，尚未实现） */
+    UI_FACE_GROUP_PHOTO,     /* 照片（预留，尚未实现） */
+    UI_FACE_GROUP_COUNT
+} ui_face_group_t;
+
+/* 分组名（ASCII，供日志/调试；App 侧显示名自行本地化） */
+const char *ui_face_group_name(int group);
 
 /*
  * 表盘构建回调：在给定父对象上创建内容（父对象尺寸 = 屏幕）。
@@ -36,6 +61,7 @@ typedef struct {
     const char *name;      /* 稳定标识（ASCII，供日志/调试；不是本地化显示名） */
     const char *label;     /* 用户可见名（ASCII，受限于现有字体字形集） */
     ui_face_build_cb build;/* 创建内容 */
+    uint8_t group;         /* ui_face_group_t：所属模块（App 据此分组显示） */
 } ui_face_desc_t;
 
 /*
@@ -56,9 +82,38 @@ int ui_face_find(const char *name);
 /*
  * 按 id 取「下一个 / 上一个」表盘 id，用于 BLE 的 next/prev 语义。
  * wrap=1 时循环，wrap=0 时到边界返回原 id。
+ *
+ * ⚠️ 本函数**会跳过已禁用的表盘**（默认全部启用，此时行为与"所有表盘"一致）。
  */
 int ui_face_next(int id, int wrap);
 int ui_face_prev(int id, int wrap);
+
+/*
+ * ---- 启用状态（用户可关闭不想要的表盘）----
+ *
+ * 语义：被禁用的表盘**从滑动序列中移除**（设备侧即生效，App 与设备一致）。
+ * 约束：**至少要保留一个启用的表盘**（否则仪表无内容可显示）。
+ * 持久化：固件把它存入 NVS；本模块只管内存中的位掩码（纯逻辑，可单测）。
+ */
+bool ui_face_is_enabled(int id);
+
+/** 设置单个表盘的启用状态。若会关掉最后一个启用项则**拒绝**并返回 false。 */
+bool ui_face_set_enabled(int id, bool on);
+
+/** 当前启用位掩码（bit i = face id i）。 */
+uint32_t ui_face_mask(void);
+
+/**
+ * 整体设置启用位掩码。
+ * @return false 表示非法（掩码为 0、或没有任何 bit 对应已注册表盘），此时不生效。
+ */
+bool ui_face_set_mask(uint32_t mask);
+
+/** 已启用的表盘数量（>=1；若注册表为空则为 0）。 */
+int ui_face_enabled_count(void);
+
+/** 指定分组下已启用的表盘数量（App 用于判断某模块是否该显示）。 */
+int ui_face_enabled_count_in_group(int group);
 
 /* 清空注册表（仅测试/初始化用） */
 void ui_face_reset(void);
