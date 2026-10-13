@@ -70,7 +70,11 @@
 ## D-007 GNSS 解析：平台无关纯 C + 单测 + 日志回放
 
 - **日期**：2026-10-10
-- **决策**：NMEA 解析写成**无 LVGL/硬件依赖的纯 C**（`simulator/ui/gnss_nmea.c`），
+> ⚠️ **本条决策已被取代（2026-10-13）**：板子确认**无 LC76G GNSS**，
+> 数据源改为 iPhone Core Location 经 BLE 下发，GNSS/NMEA 相关代码与文档已删除。
+> 以下内容仅作历史记录保留。
+>
+> **决策**：NMEA 解析写成**无 LVGL/硬件依赖的纯 C**（`simulator/ui/gnss_nmea.c`），
   配套单元测试（`tests/test_nmea.c`）与**日志回放**（`simulator/nmea_replay.c` +
   `tools/make_nmea_track.py` 合成轨迹）。
 - **原因**：

@@ -27,22 +27,26 @@ simulator/ui/                 ← 唯一源码（模拟器与固件共用）
 ├── ui_pages.[ch]             页面管理（左右滑动切换）+ 点击目标修正
 ├── ui_clock.[ch]             数字时钟（iPhone 息屏风格）
 ├── ui_analog.[ch]            模拟指针时钟（lv_meter，跳秒/扫秒开关）
-├── ui_speed.[ch]             速度表盘（V1-V4 变体 + V5 驾驶员表盘）
+├── ui_speed.[ch]             速度表盘 V5（定稿；旧变体 V1-V4 已删除）
+├── ui_face.[ch]              表盘注册表（可更换表盘系统）
 ├── ui_timesrc.[ch]           统一时间源（系统时间 / RTC 提供者 / 冻结时间）
-├── gnss_nmea.[ch]            NMEA 解析（纯 C，无 LVGL/硬件依赖）
+├── telemetry.[ch]            BLE 遥测解析/换算/平滑/合理性校验/行程统计
+├── control.[ch]              设备控制命令解析（亮度/息屏/表盘）
+├── ui_dial_faces.c           烘焙表盘图片（由 tools/make_dial_faces.py 生成）
 ├── ui_driver_images.c        驾驶员三态图像（由 tools/make_images.py 生成）
 └── font_*.c                  字模（由 tools/make_fonts.sh 生成）
 
 simulator/                    ← 仅模拟器
-├── main.c                    SDL2 绑定（显示/触摸/圆遮罩/截图/命令行）
-└── nmea_replay.[ch]          NMEA 日志回放（无硬件联调）
+└── main.c                    SDL2 绑定（显示/触摸/圆遮罩/截图/命令行）
 
 firmware/dashboard/           ← 固件（Arduino）
 ├── dashboard.ino             官方初始化流程 + 装配共享代码
 └── （共享源码由 tools/sync_firmware.sh 同步，gitignore）
 
 tests/                        ← PC 上运行的逻辑测试
-└── test_nmea.c               NMEA 解析 44 项断言
+├── test_telemetry.c          遥测解析/换算/平滑/合理性/行程（93 项）
+├── test_control.c            控制命令解析（28 项）
+└── test_ui_face.c            表盘注册表（32 项）
 
 tools/                        ← 资源与流程脚本
 ├── make_fonts.sh             字体管线（VF→实例化→子集化→字模）
@@ -71,11 +75,9 @@ tools/                        ← 资源与流程脚本
 
 | 模块 | 职责 | 测试数 |
 |------|------|--------|
-| `gnss_nmea.c` | NMEA 解析（休眠资产） | 44 |
-| `telemetry.c` 解析 | BLE 遥测 JSON 解析 | 46+ |
-| `telemetry.c` 校验 | `telemetry_plausible()` 超范围/自相矛盾 | 15 |
-| `telemetry.c` 平滑 | `telemetry_smooth_step()` 限滞后平滑 | 9 |
-| `telemetry.c` 状态机 | `telemetry_link_state()` §6.4 五态 + 并发 HOLD | 11 |
+| `telemetry.c` | BLE 遥测解析/换算/平滑/合理性校验/状态机/行程统计 | 93 |
+| `control.c` | 设备控制命令解析（亮度/息屏/表盘）| 28 |
+| `ui_face.c` | 表盘注册表（注册/查找/翻页语义）| 32 |
 
 iOS 侧纯逻辑（Foundation/CoreLocation，**可在 macOS 本机直接跑**，无需 iOS 运行时）：
 `tools/test_ios_logic.swift` —— 协议字段名契约、nil 省略、质量门槛边界、
