@@ -16,6 +16,7 @@
 #define BLE_TELEMETRY_H
 
 #include <stdint.h>
+#include "control.h"
 #include "telemetry.h"
 
 /* 初始化 BLE Peripheral 并开始广播；成功返回 true */
@@ -43,5 +44,14 @@ void ble_telemetry_stats(uint32_t *rx_bytes, uint32_t *ok, uint32_t *parse_err);
 
 /* 更新 Status 特征值（可读 + Notify，供 iPhone 读固件状态） */
 void ble_telemetry_set_status(const char *status);
+
+/*
+ * 取出待执行的下行控制命令（由主循环调用；BLE 回调只暂存不执行硬件动作）。
+ * @return true 表示取到一条命令（已消费）。
+ */
+bool ble_telemetry_take_command(control_cmd_t *out);
+
+/* 控制命令统计：成功解析 / 拒绝 */
+void ble_telemetry_command_stats(uint32_t *ok, uint32_t *err);
 
 #endif /* BLE_TELEMETRY_H */

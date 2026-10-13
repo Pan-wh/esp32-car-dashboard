@@ -99,3 +99,38 @@
 - `firmware/dashboard/dashboard.ino` —— `ble_poll()` / `ble_check_stale()` 装配
 - `tools/ble_client_test.swift` —— macOS BLE Central 测试客户端
 - `tests/test_telemetry.c` —— 46 项解析单测
+
+## 设备控制（下行命令特征）
+
+功能①：亮度 / 息屏，以及为多表盘（功能③）预留的切换命令。
+
+| 项 | 值 |
+|----|-----|
+| 服务 | `7D2A0001-8F4A-4B7C-9D21-5E6A3B8C1000` |
+| Command 特征 | `7D2A0004-8F4A-4B7C-9D21-5E6A3B8C1000`（Write）|
+
+命令格式（JSON，扁平结构）：
+
+```json
+{"cmd":"brightness","value":128}   // 亮度 0-255
+{"cmd":"screen","value":"off"}     // 息屏（也接受 value:0）
+{"cmd":"screen","value":"on"}      // 亮屏（也接受 value:1）
+{"cmd":"face","value":2}           // 切表盘（功能③预留）
+```
+
+约定与遥测上行一致：**BLE 回调只解析并暂存，硬件副作用（`setBrightness` /
+`displayOff`）回到主循环执行**——BLE 回调运行在 Bluedroid 任务里，不能碰显示驱动。
+
+亮度限幅：`0 → 1`（避免全屏黑被误认为死机），`>255 → 255`。
+
+无 App 时可用串口验证：
+
+```
+bright 120      设置亮度
+bright          查询当前亮度
+screen off      息屏
+screen on       亮屏
+ble             查看控制命令统计（成功/拒绝次数）
+```
+
+解析层是纯 C（`simulator/ui/control.c`），带 28 项单元测试（`tests/test_control.c`）。
