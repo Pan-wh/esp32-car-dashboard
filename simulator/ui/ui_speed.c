@@ -15,6 +15,7 @@
 #include "ui_speed.h"
 
 #include <math.h>
+#include <string.h>
 #include <stdio.h>
 
 #include "ui_timesrc.h"
@@ -76,10 +77,14 @@ static lv_obj_t *s_segs[SEG_CNT];    /* V4 分段 */
 /* V5 部件 */
 static lv_obj_t *s_driver_img;
 static lv_obj_t *s_status5; /* V5 顶部链路状态标签（五态文案） */
+static lv_obj_t *s_hud5;    /* V5 底部航向+行程 HUD（功能④） */
+static void hud5_refresh(void); /* 定义见下方（build_v5 需先引用） */
 static lv_meter_indicator_t *s_needle5; /* V5 指针（与 V2 区分，绘制时外移内端） */
 static lv_point_t s_marker_inner;       /* 指针内端缓存（必须静态：存活到绘制调用） */
 static int s_driver_state = UI_DRIVER_AUTO;
-static int s_heading = 45; /* 航向（mock，待 GNSS） */
+static int s_heading = 45;        /* 航向（度，正北 0，顺时针） */
+static float s_trip_km = 0.0f;    /* 行程里程（km，功能④） */
+static float s_trip_max = 0.0f;   /* 行程最高速（km/h） */
 
 /* ------------------------------------------------------------------ */
 /* 公共部件                                                            */
@@ -408,6 +413,14 @@ static void build_v5(lv_obj_t *p)
      * 结论：文字本身可读，但指针穿过时观感不佳，需调整位置或指针长度。 */
     s_status5 = make_label(p, &label_26, status5_color(), status5_text());
     lv_obj_align(s_status5, LV_ALIGN_TOP_MID, 0, 30);
+
+    /* ---- 底部：航向 + 行程（功能④）----
+     * 位置选在**指针扫不到**的扇区：量表从 135° 顺时针扫 270° 到 45°，
+     * 因此 45°~135°（穿过 6 点方向）永远没有指针；y≈411 也低于中央插画
+     * （230×230 → y 118~348），互不遮挡。 */
+    s_hud5 = make_label(p, &label_26, C_TEXT_DIM_L, "");
+    lv_obj_align(s_hud5, LV_ALIGN_BOTTOM_MID, 0, -18);
+    hud5_refresh();
 }
 
 static void apply_state(void)
@@ -569,11 +582,54 @@ void ui_speed_set_driver_state(int state)
     apply_state();
 }
 
+/* 8 方位罗盘名（纯 ASCII，与 label_26 字形集一致） */
+static const char *compass_name(int deg)
+{
+    static const char *names[8] = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
+    int oct = ((deg + 22) % 360) / 45; /* 四舍五入到 45° 扇区 */
+    if (oct < 0) oct += 8;
+    return names[oct % 8];
+}
+
+/* 底部 HUD 文案："N 0° · 12.3 km · MAX 87"（无里程时只显示航向） */
+static void hud5_text(char *buf, size_t sz)
+{
+    int h = ((s_heading % 360) + 360) % 360;
+    if (s_trip_km > 0.05f) {
+        snprintf(buf, sz, "%s %d\xc2\xb0 \xc2\xb7 %.1f km \xc2\xb7 MAX %.0f",
+                 compass_name(h), h, (double)s_trip_km, (double)s_trip_max);
+    }
+    else {
+        snprintf(buf, sz, "%s %d\xc2\xb0", compass_name(h), h);
+    }
+}
+
+/* 底部 HUD 刷新（同文案不重设，避免无谓 invalidate） */
+static void hud5_refresh(void)
+{
+    if (s_hud5 == NULL) return;
+    char buf[64];
+    hud5_text(buf, sizeof(buf));
+    static char shown[64] = "";
+    if (strcmp(shown, buf) == 0) return;
+    snprintf(shown, sizeof(shown), "%s", buf);
+    lv_label_set_text(s_hud5, buf);
+}
+
+void ui_speed_set_trip(float distance_km, float max_kmh)
+{
+    if (distance_km == s_trip_km && max_kmh == s_trip_max) return; /* 变更检测 */
+    s_trip_km = distance_km;
+    s_trip_max = max_kmh;
+    hud5_refresh();
+}
+
 void ui_speed_set_heading(int deg)
 {
     int h = ((deg % 360) + 360) % 360;
     if (h == s_heading) return; /* 变更检测 */
     s_heading = h;
+    hud5_refresh();
     apply_state();
 }
 

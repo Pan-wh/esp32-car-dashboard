@@ -67,3 +67,13 @@ esp32-car-dashboard/
 - 官方仓库：<https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75>
 - 官方文档：<https://docs.waveshare.net/ESP32-S3-Touch-AMOLED-1.75/>
 - 官方快速开始：<https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75/blob/main/docs/getting-started_ZH.md>
+
+## 设备功能
+
+| 功能 | 入口 | 说明 |
+|------|------|------|
+| 亮度调节 | BLE `{"cmd":"brightness","value":0-255}` / 串口 `bright <n>` | 0 视为最低可见亮度（避免全屏黑误判死机）|
+| 息屏 / 亮屏 | BLE `{"cmd":"screen","value":"off"\|"on"}` / 串口 `screen on\|off` | 仅关显示，触摸仍可唤醒（由固件决定）|
+| 航向显示 | 遥测 `course_deg` 自动驱动 | 速度页底部显示「NE 45°」（选在指针扫不到的扇区）|
+| 行程统计 | 串口 `trip` / `trip reset` | 里程、最高速、加权均速；**仅链路 LIVE 且速度有效时累积**（失效不计入）|
+| 表盘切换 | BLE `{"cmd":"face","value":N}` | 命令通路已就绪，多表盘实现中（功能③）|

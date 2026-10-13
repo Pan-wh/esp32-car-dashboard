@@ -337,3 +337,34 @@ bool telemetry_plausible(const telemetry_msg_t *m)
 
     return true;
 }
+
+/* ---------------- 行程统计（功能④）---------------- */
+
+void telemetry_trip_reset(telemetry_trip_t *t)
+{
+    if (t == NULL) return;
+    t->distance_km = 0.0;
+    t->max_kmh = 0.0f;
+    t->sum_kmh_ms = 0.0;
+    t->time_ms = 0;
+}
+
+void telemetry_trip_step(telemetry_trip_t *t, float speed_kmh, bool valid, uint32_t dt_ms)
+{
+    if (t == NULL) return;
+    if (!valid) return;          /* 失效不计入：不把旧值当里程 */
+    if (speed_kmh < 0.0f) return; /* 负速度为异常，忽略该步 */
+    if (dt_ms == 0) return;
+
+    /* 里程 = 速度(km/h) × 时间(h) */
+    t->distance_km += (double)speed_kmh * ((double)dt_ms / 3600000.0);
+    if (speed_kmh > t->max_kmh) t->max_kmh = speed_kmh;
+    t->sum_kmh_ms += (double)speed_kmh * (double)dt_ms;
+    t->time_ms += dt_ms;
+}
+
+float telemetry_trip_avg_kmh(const telemetry_trip_t *t)
+{
+    if (t == NULL || t->time_ms == 0) return 0.0f;
+    return (float)(t->sum_kmh_ms / (double)t->time_ms);
+}
