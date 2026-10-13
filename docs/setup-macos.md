@@ -1,4 +1,7 @@
-# macOS 开发环境安装与烧录步骤
+# macOS 开发环境配置
+
+> 本文是**环境搭建**（工具链、Arduino Core、官方库）。
+> **实际编译烧录 / App 部署请见 [`deployment.md`](deployment.md)。**
 
 本项目开发主机为 macOS。环境已于 **2026-10-10 配置完成**（见文末「本机已配置状态」）。
 新机器或重置环境时按本文从头执行即可。
@@ -84,6 +87,14 @@ git clone https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75.git \
 | USB Mode | **Hardware CDC and JTAG**（`USBMode=hwcdc`，默认即此） |
 | USB CDC On Boot | **Enabled**（`CDCOnBoot=cdc`）**必须手动打开**，否则串口日志走 UART0、USB 口看不到 |
 | Libraries | `reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/libraries` |
+| **编译附加参数** | `-DESP32QSPI_MAX_PIXELS_AT_ONCE=4096`（**本工程固件必需**，见下）|
+
+> ⚠️ **本工程固件还需一个额外编译参数**（官方示例不需要，但仪表固件必须）：
+> ```
+> --build-property "compiler.cpp.extra_flags=-DESP32QSPI_MAX_PIXELS_AT_ONCE=4096"
+> ```
+> 作用：QSPI 单次传输分块 1024→4096，否则**滑页明显掉帧**。
+> **完整部署流程见 [`deployment.md`](deployment.md)。**
 
 ### 命令行编译示例（01_HelloWorld）
 

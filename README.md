@@ -10,6 +10,9 @@
 > 📌 **先看 [`PROGRESS.md`](PROGRESS.md)** —— 项目进度总览（单一事实来源）：
 > 做到哪一步、还差什么、已知问题、构建命令、串口命令速查。
 >
+> 🚀 **要烧板/装 App？看 [`docs/deployment.md`](docs/deployment.md)** ——
+> 固件编译烧录（含两个不可省的参数）、App 签名安装、双端联调流程、故障排除。
+>
 > 🛠 **要改代码？看 [`docs/development-guide.md`](docs/development-guide.md)** ——
 > 「只改 UI / 新增表盘 / 改 App / 改协议」分别该动哪些文件，
 > 以及**已验证可行的能力清单**（可放心复用）。
