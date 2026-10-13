@@ -17,6 +17,8 @@ struct ContentView: View {
     @State private var selectedFace = 2
     @State private var brightness: Double = 200
     @State private var screenOn = true
+    /// 防止 onAppear 重复触发自动连接（SwiftUI 可能多次调用）
+    @State private var didAutoConnect = false
 
     var body: some View {
         NavigationView {
@@ -124,6 +126,17 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("CarDashboard")
+        }
+        /*
+         * App 启动即尝试连接仪表（#bug 修复）：
+         * 原先只有点「开始驾驶」才会 scanAndConnect，导致重开 App 后
+         * BLE 状态一直停留在初始态、必须手动点一下才刷新。
+         * 这里在界面出现时自动扫描一次，用户无需先开始驾驶。
+         */
+        .onAppear {
+            guard !didAutoConnect else { return }
+            didAutoConnect = true
+            session.ble.scanAndConnect()
         }
     }
 

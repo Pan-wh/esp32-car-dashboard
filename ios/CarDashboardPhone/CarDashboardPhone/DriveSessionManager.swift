@@ -22,6 +22,32 @@ final class DriveSessionManager: ObservableObject {
     let location = LocationService()
     let ble = BLEClient()
 
+    /*
+     * ⚠️ 关键：把 ble / location 的 @Published 变化**转发**给本对象。
+     *
+     * 背景（真机踩坑）：ContentView 观察的是 `session`（本类），而 BLE 状态
+     * 在 `session.ble` 里。`bleConnected` / `stateText` 都是**普通计算属性**，
+     * 不会触发本类的 objectWillChange → SwiftUI 不重绘 → 界面永远停在
+     * 首次渲染时的状态（表现为"强退重开后 BLE 状态一直是初始化中"，
+     * 点一下别的按钮（改变 @Published）才刷新）。
+     *
+     * 修复：订阅子对象的 objectWillChange 并向上转发。
+     */
+    private var cancellables = Set<AnyCancellable>()
+
+    private func forwardChanges() {
+        ble.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        location.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+    }
+
+    init() {
+        forwardChanges()
+    }
+
     private var sendTimer: Timer?
 
     static let sendInterval: TimeInterval = 0.5 // 2 Hz；实测后再调
