@@ -2,7 +2,8 @@
 # 字体管线：可变字体 → 实例化字重 → 子集化 → lv_font_conv 生成 LVGL 字模
 #
 # 产出（simulator/ui/，同时复制子集 TTF 到 design/lvglpro/fonts/）：
-#   font_clock_iphone_138.c  Inter ExtraLight 138px（数字时钟大号时间，iPhone 息屏风格）
+#   font_clock_rounded_132.c Nunito Bold 132px（数字时钟大号时间，圆润饱满）
+#   font_clock_color_224.c   Nunito Black 224px（多彩四位时钟，数字独立排版）
 #   font_num_dial_38.c       Nunito Bold 38px（模拟时钟表盘数字 1-12，圆润饱满）
 #   font_date_cjk_26.c       Noto Sans SC 26px（中文日期）
 #
@@ -40,6 +41,9 @@ fi
 # Nunito: wght=700 (Bold)，表盘数字——圆头圆角、笔画饱满（"圆润"观感）
 "$PY" -m fontTools.varLib.instancer "$SRC/Nunito-VF.ttf" wght=700 \
   -o "$SRC/Nunito-Bold.ttf"
+# Nunito: wght=900 (Black)，多彩时钟需要更接近 Apple Rounded 的饱满造型
+"$PY" -m fontTools.varLib.instancer "$SRC/Nunito-VF.ttf" wght=900 \
+  -o "$SRC/Nunito-Black.ttf"
 # Inter: wght=700 (Bold) + opsz=32，速度大数字（车速需要粗壮醒目）
 "$PY" -m fontTools.varLib.instancer "$SRC/Inter-VF.ttf" wght=700 opsz=32 \
   -o "$SRC/Inter-Bold.ttf"
@@ -55,6 +59,10 @@ fi
   --text="0123456789: " --output-file="$SRC/inter-el-sub.ttf"
 "$PY" -m fontTools.subset "$SRC/Nunito-Bold.ttf" \
   --text="0123456789" --output-file="$SRC/nunito-num-sub.ttf"
+"$PY" -m fontTools.subset "$SRC/Nunito-Bold.ttf" \
+  --text="0123456789:" --output-file="$SRC/nunito-clock-sub.ttf"
+"$PY" -m fontTools.subset "$SRC/Nunito-Black.ttf" \
+  --text="0123456789" --output-file="$SRC/nunito-color-sub.ttf"
 "$PY" -m fontTools.subset "$SRC/NotoSansSC-Regular.ttf" \
   --text="0123456789月日星期一二三四五六 ·" --output-file="$SRC/noto-date-sub.ttf"
 "$PY" -m fontTools.subset "$SRC/Inter-Bold.ttf" \
@@ -71,6 +79,12 @@ cd simulator
 npx --yes lv_font_conv --font "../$SRC/inter-el-sub.ttf" \
   --size 138 --bpp 1 --format lvgl --no-compress --lv-include lvgl.h \
   -r 0x20-0x3A --lv-font-name clock_iphone_138 -o ui/font_clock_iphone_138.c
+npx --yes lv_font_conv --font "../$SRC/nunito-clock-sub.ttf" \
+  --size 132 --bpp 2 --format lvgl --no-compress --lv-include lvgl.h \
+  -r 0x30-0x3A --lv-font-name clock_rounded_132 -o ui/font_clock_rounded_132.c
+npx --yes lv_font_conv --font "../$SRC/nunito-color-sub.ttf" \
+  --size 224 --bpp 2 --format lvgl --no-compress --lv-include lvgl.h \
+  -r 0x30-0x39 --lv-font-name clock_color_224 -o ui/font_clock_color_224.c
 # 注：表盘数字 1-12 已烘焙进 dial_analog 图片（tools/make_dial_faces.py），
 # font_num_dial_38 不再需要，故此处不再生成（Nunito 子集仍保留给其他用途）。
 npx --yes lv_font_conv --font "../$SRC/noto-date-sub.ttf" \
@@ -85,7 +99,7 @@ npx --yes lv_font_conv --font "../$SRC/inter-med-ascii-sub.ttf" \
 cd "$ROOT"
 
 # ---- 5) 同步子集 TTF 给 LVGL Pro 草稿工程 ----
-cp "$SRC/inter-el-sub.ttf" "$SRC/nunito-num-sub.ttf" "$SRC/noto-date-sub.ttf" \
+cp "$SRC/inter-el-sub.ttf" "$SRC/nunito-num-sub.ttf" "$SRC/nunito-clock-sub.ttf" "$SRC/nunito-color-sub.ttf" "$SRC/noto-date-sub.ttf" \
    "$SRC/inter-bold-num-sub.ttf" "$SRC/inter-med-ascii-sub.ttf" design/lvglpro/fonts/
 
 echo "完成：simulator/ui/font_*.c + design/lvglpro/fonts/*.ttf"

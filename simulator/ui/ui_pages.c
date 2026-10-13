@@ -11,6 +11,7 @@
 
 #include "ui_analog.h"
 #include "ui_clock.h"
+#include "ui_color_clock.h"
 #include "ui_speed.h"
 
 #define UI_BG_COLOR 0x000000
@@ -129,6 +130,7 @@ void ui_pages_init(void)
     ui_face_register(&(ui_face_desc_t){ "analog", "Analog", (ui_face_build_cb)ui_analog_create });
     ui_face_register(&(ui_face_desc_t){ "digital", "Digital", (ui_face_build_cb)ui_clock_create });
     ui_face_register(&(ui_face_desc_t){ "speed", "Speed", (ui_face_build_cb)ui_speed_create });
+    ui_face_register(&(ui_face_desc_t){ "color", "Color", (ui_face_build_cb)ui_color_clock_create });
 
     for (int i = 0; i < UI_PAGE_COUNT && i < ui_face_count(); i++) {
         const ui_face_desc_t *f = ui_face_get(i);

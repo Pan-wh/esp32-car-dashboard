@@ -22,6 +22,9 @@ extern "C" {
 typedef void (*ui_timesrc_provider_t)(struct tm *out);
 void ui_timesrc_set_provider(ui_timesrc_provider_t fn);
 
+/* 当前是否使用了固件注入的外部时间源（真机 RTC）。 */
+int ui_timesrc_uses_provider(void);
+
 /* 取当前时间（提供者时间 / 系统时间 / 冻结时间） */
 void ui_timesrc_now(struct tm *out);
 
