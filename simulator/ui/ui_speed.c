@@ -61,8 +61,14 @@ LV_IMG_DECLARE(driver_speeding);
 /* ---- 状态 ---- */
 static lv_obj_t *s_root;
 static int s_variant = 4; /* 默认 V5 驾驶员表盘（定稿设计）；其它变体可用 --variant / V 键切换 */
-static float s_speed = 88.0f; /* GNSS 接入前模拟值 */
-static bool s_valid = true;
+/*
+ * 默认「速度 0 且无效」：这两个值是 GNSS 时代的模拟残留（88 / true），
+ * 真机实测踩坑——速度明明无效，指针却停在 88（用户看到"0 速度但指针指 90"）。
+ * 数据源改为 iPhone 后，**任何时刻都不应存在"有效但没数据"的状态**，
+ * 因此默认必须是「无效」，由 set_fix/set_speed 显式驱动。
+ */
+static float s_speed = 0.0f;
+static bool s_valid = false;
 static int s_sats = 12;
 static ui_speed_status_t s_status_state = UI_STATUS_CONNECTING;
 
@@ -571,6 +577,11 @@ void ui_speed_set_fix(bool valid, int sats)
     if (valid == s_valid && sats == s_sats) return;
     s_valid = valid;
     s_sats = sats;
+    /*
+     * 变为无效时把速度也清零：否则「无效 → 再次有效」的瞬间会用旧速度
+     * 画一帧（指针闪一下旧值），且诊断接口会显示过期数据。
+     */
+    if (!valid) s_speed = 0.0f;
     apply_state();
 }
 
@@ -615,6 +626,10 @@ static void hud5_refresh(void)
     snprintf(shown, sizeof(shown), "%s", buf);
     lv_label_set_text(s_hud5, buf);
 }
+
+float ui_speed_get_speed(void) { return s_speed; }
+int ui_speed_get_valid(void) { return s_valid ? 1 : 0; }
+void *ui_speed_get_needle(void) { return (void *)s_needle5; }
 
 void ui_speed_set_trip(float distance_km, float max_kmh)
 {

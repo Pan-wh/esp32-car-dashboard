@@ -53,6 +53,11 @@ void ui_speed_set_heading(int deg);
  */
 void ui_speed_set_trip(float distance_km, float max_kmh);
 
+/* ---- 诊断接口（排查"速度 0 但指针不归零"）---- */
+float ui_speed_get_speed(void);   /* 当前速度（km/h）*/
+int ui_speed_get_valid(void);     /* 速度是否有效 */
+void *ui_speed_get_needle(void);  /* V5 指针对象（NULL = 未创建/variant 不符）*/
+
 /*
  * 数据链路状态（AI_TASK §6.4 五态）：驱动速度页顶部状态标签。
  * 与 ui_speed_set_fix()（控制指针/数字）正交：fix 管数值有效，status 管链路态。

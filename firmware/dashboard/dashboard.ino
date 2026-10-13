@@ -795,6 +795,25 @@ static void process_command(char *cmd)
   else if (strcmp(cmd, "scan") == 0) {
     print_scan();
   }
+  else if (strncmp(cmd, "spd", 3) == 0) {
+    /* 诊断命令：直接设置/查询速度指针（排查"速度 0 但指针不在 0"）*/
+    const char *arg = cmd + 3;
+    if (*arg == '\0') {
+      Serial.printf("[速度] 当前=%.1f km/h 有效=%d 变体=%d 指针对象=%p\n",
+                    (double)ui_speed_get_speed(), (int)ui_speed_get_valid(),
+                    ui_speed_get_variant(), (void *)ui_speed_get_needle());
+    }
+    else if (strncmp(arg, " reset", 6) == 0) {
+      ui_speed_set_fix(false, 0);
+      Serial.println("[速度] 已置为无效（指针应归零）");
+    }
+    else {
+      float v = (float)atof(arg);
+      ui_speed_set_fix(true, 12);
+      ui_speed_set_speed(v);
+      Serial.printf("[速度] 强制设为 %.1f km/h\n", (double)v);
+    }
+  }
   else if (strncmp(cmd, "face", 4) == 0) {
     const char *arg = cmd + 4;
     if (*arg == '\0') {
