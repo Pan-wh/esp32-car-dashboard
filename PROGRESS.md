@@ -204,12 +204,12 @@ ESP32-S3 (dashboard.ino)
 | `test_nav_parse` | 72 | 导航消息解析（分流/容错/向前兼容）|
 | `test_img_indexed` | 28 | 索引图解码（调色板字节序/16位截断/边界/越界）|
 | `test_nav_core` (Swift) | 106 | iOS 导航核心（投影/偏航/到达/过期）+ 坐标跨语言一致性 |
-| `gateway` (Node) | 50 | 导航网关（坐标转换/动作映射/归一化/HTTP，全离线）|
+| `gateway` (Node) | 58 | 导航网关（含真实响应结构回归，全离线）|
 | `test_ios_logic` | 32 | iOS 侧纯逻辑（Swift）|
-| **单测小计** | **574** | `cd tests && make run` |
+| **单测小计** | **582** | `cd tests && make run` |
 | `ui_regression.py` | 33 | UI 像素级回归 |
 | XCUITest | 5 | 会话/遥测计数/设备控制/链路诊断/BLE 状态 |
-| **自动化总计** | **612** | |
+| **自动化总计** | **620** | |
 
 **真机验证**（iPhone 12 / iOS 27）：§9 矩阵 **12/12 通过**，DoD **8/8 达成**。
 

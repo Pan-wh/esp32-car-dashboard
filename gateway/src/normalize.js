@@ -3,6 +3,8 @@
  *
  * ## 设计原则
  *
+ * 0. **字段名以实测为准**（2026-10-13 用真实 Key 核对，见 fixtures/amap-driving-real.json）：
+ *    `steps[].distance` / `steps[].road` / `steps[].action`（中文文本）
  * 1. **宽容解析**：高德把数字也返回成字符串（如 `"distance": "12345"`），
  *    且不同接口版本字段层级略有差异。这里统一容错，但**绝不把无法解析的值当成 0**
  *    （距离为 0 会让仪表显示"即将转向"，属危险误导）→ 解析失败记为 `null`。
@@ -34,6 +36,14 @@ export function toNumberOrNull(v) {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/** 取第一个非空字符串（用于兼容不同版本的字段名） */
+export function firstNonEmptyString(...vals) {
+  for (const v of vals) {
+    if (typeof v === 'string' && v.trim().length > 0) return v;
+  }
+  return null;
 }
 
 /** 把 "lon,lat;lon,lat;..." 解析为点数组；非法项跳过（不抛错，避免整条路线失败） */
@@ -92,14 +102,23 @@ function normalizePath(path, index) {
   const rawSteps = Array.isArray(path?.steps) ? path.steps : [];
 
   const steps = rawSteps.map((s, i) => {
-    const action = s?.navi?.action ?? s?.action;
+    // ⚠️ 字段名以**真实响应实测**为准（2026-10-13，v3 驾车路径规划）：
+    //      距离 = steps[].distance      （不是 step_distance）
+    //      路名 = steps[].road          （不是 road_name）
+    //      动作 = steps[].action        （**中文字符串**，如 "左转"）
+    //    同时兼容旧名/其它版本，避免上游小改就整条路线失效。
+    const rawAction = s?.navi?.action ?? s?.action;
     return {
       index: i,
-      maneuver: resolveManeuver({ action, instruction: s?.instruction }),
-      distanceM: toNumberOrNull(s?.step_distance),
-      roadName: typeof s?.road_name === 'string' && s.road_name.length > 0 ? s.road_name : null,
-      instruction:
-        typeof s?.instruction === 'string' && s.instruction.length > 0 ? s.instruction : null,
+      maneuver: resolveManeuver({
+        action: rawAction,
+        instruction: s?.instruction,
+        assistant_action: s?.assistant_action,
+      }),
+      distanceM: toNumberOrNull(s?.distance ?? s?.step_distance),
+      roadName: firstNonEmptyString(s?.road, s?.road_name),
+      instruction: firstNonEmptyString(s?.instruction),
+      durationS: toNumberOrNull(s?.duration),
       polyline: parsePolyline(s?.polyline),
     };
   });
