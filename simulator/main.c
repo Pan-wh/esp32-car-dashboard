@@ -18,6 +18,8 @@
 #include <string.h>
 
 #include "lvgl.h"
+#include "ui_baked_images.h"
+#include "ui_img_inflate.h"
 #include "ui_nav.h"
 #include "ui_pages.h"
 #include "ui_speed.h"
@@ -275,6 +277,17 @@ int main(int argc, char **argv)
     lv_indev_drv_register(&indev_drv);
 
     /* 业务 UI：页面管理（模拟时钟 / 数字时钟 / 速度表盘） */
+    /*
+     * 与真机走同一条渲染路径：把索引图充气成 RGB565 直通图。
+     * 若只在真机充气，像素回归测的就是"索引解码渲染"，
+     * 与真机实际渲染路径不一致，回归会失去意义。
+     */
+    {
+        lv_img_dsc_t *imgs[] = { &dial_analog, &dial_speed,
+                                 &driver_normal, &driver_spirited, &driver_speeding };
+        ui_img_inflate_all(imgs, NULL, 5, malloc);
+    }
+
     ui_pages_init();
 
     /*

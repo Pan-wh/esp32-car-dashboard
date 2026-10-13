@@ -19,6 +19,8 @@
  */
 #include "ui_analog.h"
 
+#include "ui_baked_images.h"
+
 #include <math.h>
 #include <stdio.h>
 
@@ -42,7 +44,7 @@
 #define NUM_RADIUS     160  /* 数字整体向圆心收，建立刻度与数字间留白 */
 #define NUM_Y_NUDGE    (-2) /* 字体框含降部空间，视觉中心微调 */
 
-LV_IMG_DECLARE(dial_analog); /* 烘焙好的静态表盘（刻度 + 数字 1-12），见 tools/make_dial_faces.py */
+/* 烘焙好的静态表盘（刻度 + 数字 1-12）声明见 ui_baked_images.h */
 
 /* 秒针模式：1 = 连续线性扫秒；0 = 每秒跳动（当前）。
  * 两种模式共用同一时间源，切换本宏即可（详见 design/wireframes/analog-clock.md 第 6 节）。 */

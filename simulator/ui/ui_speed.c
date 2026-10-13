@@ -14,6 +14,8 @@
  */
 #include "ui_speed.h"
 
+#include "ui_baked_images.h"
+
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -22,12 +24,8 @@
 
 LV_FONT_DECLARE(speed_num_150); /* Inter Bold 150px，速度大数字 */
 LV_FONT_DECLARE(label_26);      /* Inter Medium 26px，单位/标签/状态 */
-LV_IMG_DECLARE(dial_speed);     /* 烘焙的静态速度表盘（刻度+渐变+数字），见 tools/make_dial_faces.py */
 
 /* 驾驶员插画（由 tools/make_images.py 生成） */
-LV_IMG_DECLARE(driver_normal);
-LV_IMG_DECLARE(driver_spirited);
-LV_IMG_DECLARE(driver_speeding);
 
 /* ---- 设计常量（V1-V4：黑底主题）---- */
 #define C_BG      0x000000 /* 纯黑背景（OLED 省电） */

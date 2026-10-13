@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-图片资产工具：PNG → LVGL C 数组（CF_TRUE_COLOR / RGB565）+ 生成驾驶员临时底图
+图片资产工具：PNG → LVGL C 数组（CF_INDEXED_8BIT / 8bpp 索引色）+ 生成驾驶员临时底图
 
 用法：
   python3 tools/make_images.py            # 生成临时底图（若不存在）并转换为 C
@@ -15,12 +15,15 @@ driver_speeding.png，然后重跑本脚本即可。
 """
 import argparse
 import os
-import struct
+import sys
 
 try:
     from PIL import Image, ImageDraw
 except ImportError:  # pragma: no cover
     raise SystemExit("需要 Pillow：请用 DSH 运行环境的 python 执行本脚本")
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lvgl_img import img_to_lvgl_indexed8, write_atomic  # noqa: E402  （同目录工具）
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IMG_DIR = os.path.join(ROOT, "design", "assets", "images")
@@ -161,35 +164,13 @@ def draw_driver(state: str, size: int = 180) -> Image.Image:
 
 
 def png_to_lvgl_c(path_png: str, name: str) -> str:
-    """PNG → LVGL C 数组源码片段（CF_TRUE_COLOR，RGB565，小端）"""
-    im = Image.open(path_png).convert("RGB")
-    w, h = im.size
-    px = im.load()
-    data = bytearray()
-    for y in range(h):
-        for x in range(w):
-            r, g, b = px[x, y]
-            c = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
-            data += struct.pack("<H", c)
+    """PNG → LVGL C 数组源码片段（8bpp 索引色，编码规则见 tools/lvgl_img.py）
 
-    lines = []
-    lines.append(f"/* {name}: {w}x{h} RGB565, 由 tools/make_images.py 生成，请勿手改 */")
-    lines.append(f"const LV_ATTRIBUTE_MEM_ALIGN uint8_t {name}_map[] = {{")
-    for i in range(0, len(data), 16):
-        chunk = data[i:i + 16]
-        lines.append("    " + " ".join(f"0x{b:02X}," for b in chunk))
-    lines.append("};")
-    lines.append("")
-    lines.append(f"const lv_img_dsc_t {name} = {{")
-    lines.append("    .header.cf = LV_IMG_CF_TRUE_COLOR,")
-    lines.append("    .header.always_zero = 0,")
-    lines.append("    .header.reserved = 0,")
-    lines.append(f"    .header.w = {w},")
-    lines.append(f"    .header.h = {h},")
-    lines.append(f"    .data_size = {w * h * 2},")
-    lines.append(f"    .data = {name}_map,")
-    lines.append("};")
-    return "\n".join(lines)
+    改用索引色的原因：真机应用分区仅 3 MB，而 3 张 300×300 RGB565 插画占 527 KB。
+    这些插画颜色很少，8bpp 索引色可**逐像素无损**减半占用。
+    """
+    im = Image.open(path_png).convert("RGB")
+    return img_to_lvgl_indexed8(im, name, note=os.path.basename(path_png))
 
 
 def main():
@@ -216,13 +197,13 @@ def main():
  *
  * 由 tools/make_images.py 从 design/assets/images/driver_*.png 生成。
  * 替换真实素材：覆盖同名 PNG 后重跑该脚本。
- * 格式：LV_IMG_CF_TRUE_COLOR（RGB565，无 alpha，底色即页面的纯黑）
+ * 格式：LV_IMG_CF_INDEXED_8BIT（8 位索引色；底色即页面的纯黑）
+ *
+ * ⚠️ 生成脚本先前与本文件不同步：脚本的 #else 分支写的是 "lvgl/lvgl.h"，
+ *    而本项目 Arduino 构建里 `lvgl.h` 直接可用、`lvgl/lvgl.h` 不存在，
+ *    重新生成会导致编译失败（已实际踩到）。现统一为 "lvgl.h"。
  */
-#ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
-#else
-#include "lvgl/lvgl.h"
-#endif
 
 #ifndef LV_ATTRIBUTE_MEM_ALIGN
 #define LV_ATTRIBUTE_MEM_ALIGN
@@ -234,16 +215,18 @@ def main():
         parts.append(png_to_lvgl_c(os.path.join(IMG_DIR, STATE_FILES[st]), f"driver_{st}"))
         parts.append("")
 
-    with open(OUT_C, "w", encoding="utf-8") as f:
-        f.write("\n".join(parts))
+    # 原子写出：中途异常不破坏仓库里的生成物（曾因直接 "w" 写入而被截断）
+    write_atomic(OUT_C, "\n".join(parts))
 
-    # 统计实际 Flash 占用（RGB565 = 2 字节/像素）
+    # 统计实际 Flash 占用（8bpp 索引色：每像素 1 字节 + 每图 1 KB 调色板）
     total_px = 0
     for st in states:
         w, h = Image.open(os.path.join(IMG_DIR, STATE_FILES[st])).size
         total_px += w * h
+    after = total_px + len(states) * 1024
     print(f"已生成 {OUT_C}")
-    print(f"提示：{len(states)} 张图 RGB565 在 Flash 中约 {total_px * 2 / 1024:.0f} KB")
+    print(f"提示：{len(states)} 张图 8bpp 索引色在 Flash 中约 {after / 1024:.0f} KB"
+          f"（原 RGB565 约 {total_px * 2 / 1024:.0f} KB，省 {total_px / 1024:.0f} KB）")
 
 
 if __name__ == "__main__":
