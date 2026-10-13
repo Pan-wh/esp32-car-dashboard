@@ -54,8 +54,12 @@ tools/output/
 secrets/
 
 # 单测编译产物
-tests/test_nmea
-tests/test_telemetry
+# 测试编译产物（源码为 tests/test_*.c，产物无扩展名）。
+# 原先只列了 test_nmea/test_telemetry，导致 test_control / test_ui_face
+# 两个二进制被误提交进仓库（test_nmea 更成了源码已删的孤儿）。
+# 改为通配并显式排除源码，避免新增测试时再次漏掉。
+tests/test_*
+!tests/test_*.c
 
 # Xcode 用户数据 / 构建产物（xcodeproj 本身要提交，便于直接打开）
 ios/**/xcuserdata/

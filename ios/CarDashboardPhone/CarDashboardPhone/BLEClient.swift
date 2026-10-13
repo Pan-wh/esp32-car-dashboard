@@ -110,6 +110,13 @@ final class BLEClient: NSObject, ObservableObject {
         sendCommand("{\"cmd\":\"face\",\"value\":\(id)}")
     }
 
+    /// 设置屏幕方向（度）。仅接受 0/90/180/270 —— 固件侧会严格校验，
+    /// 非 90 的整数倍一律拒绝（避免误配方向）。
+    /// 方向会持久化到仪表 NVS，重启后保持。
+    func setRotation(_ degrees: Int) -> Bool {
+        sendCommand("{\"cmd\":\"rotate\",\"value\":\(degrees)}")
+    }
+
     func send(packet: TelemetryPacket) {
         guard let data = try? packet.encode() else { return }
         if let ch = telemetryChar, isConnected {

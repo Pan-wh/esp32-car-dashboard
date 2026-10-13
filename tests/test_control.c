@@ -78,6 +78,31 @@ int main(void)
     CHECK(!control_parse(NULL, 0, &c), "NULL 输入");
     CHECK(!control_parse("{\"cmd\":\"face\",\"value\":1}", 5, &c), "截断输入（长度不足）");
 
+    /* ---- 屏幕方向（rotate）---- */
+    printf("=== 屏幕方向命令 ===\n");
+    CHECK(PARSE("{\"cmd\":\"rotate\",\"value\":0}", c) && c.kind == CONTROL_ROTATE && c.value == 0,
+          "rotate 0°（正常）");
+    CHECK(PARSE("{\"cmd\":\"rotate\",\"value\":90}", c) && c.value == 90, "rotate 90°");
+    CHECK(PARSE("{\"cmd\":\"rotate\",\"value\":180}", c) && c.value == 180, "rotate 180°");
+    CHECK(PARSE("{\"cmd\":\"rotate\",\"value\":270}", c) && c.value == 270, "rotate 270°");
+
+    /* 归一化：超范围按 mod 360 折算 */
+    CHECK(PARSE("{\"cmd\":\"rotate\",\"value\":360}", c) && c.value == 0, "360° 归一为 0");
+    CHECK(PARSE("{\"cmd\":\"rotate\",\"value\":450}", c) && c.value == 90, "450° 归一为 90");
+    CHECK(PARSE("{\"cmd\":\"rotate\",\"value\":-90}", c) && c.value == 270, "-90° 归一为 270");
+    CHECK(PARSE("{\"cmd\":\"rotate\",\"value\":-180}", c) && c.value == 180, "-180° 归一为 180");
+
+    /* 非法值必须被明确拒绝（而不是悄悄转错方向）*/
+    CHECK(!PARSE("{\"cmd\":\"rotate\",\"value\":45}", c) && c.kind == CONTROL_NONE,
+          "45° 非 90 倍数 → 拒绝");
+    CHECK(!PARSE("{\"cmd\":\"rotate\",\"value\":1}", c) && c.kind == CONTROL_NONE,
+          "1° → 拒绝（避免与 0 基索引混淆）");
+    CHECK(!PARSE("{\"cmd\":\"rotate\",\"value\":89}", c) && c.kind == CONTROL_NONE,
+          "89° → 拒绝");
+    CHECK(!PARSE("{\"cmd\":\"rotate\"}", c) && c.kind == CONTROL_NONE, "缺 value → 拒绝");
+    CHECK(!PARSE("{\"cmd\":\"rotate\",\"value\":\"on\"}", c) && c.kind == CONTROL_NONE,
+          "字符串 value → 拒绝（rotate 只接受数字）");
+
     /* ---- 限幅 ---- */
     CHECK(control_clamp_brightness(0) == 1, "亮度 0 → 1（避免全黑）");
     CHECK(control_clamp_brightness(-5) == 1, "负亮度 → 1");

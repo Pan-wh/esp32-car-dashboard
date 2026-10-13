@@ -16,6 +16,12 @@ struct ContentView: View {
     private let faces: [(id: Int, name: String)] = [
         (0, "模拟时钟"), (1, "数字时钟"), (2, "速度表"), (3, "多彩时钟"),
     ]
+    /// 屏幕方向选项（度）—— 只列 90 的整数倍，与固件 control.c 的严格校验一致。
+    /// 仪表侧走 LVGL 软件旋转（本屏为圆形，旋转无长宽比副作用），
+    /// 并会持久化到 NVS，重启后保持。
+    private let rotations = [0, 90, 180, 270]
+    @State private var selectedRotation = 0
+
     @State private var selectedFace = 2
     @State private var brightness: Double = 200
     @State private var screenOn = true
@@ -76,6 +82,16 @@ struct ContentView: View {
                     .pickerStyle(.segmented)
                     .onChange(of: selectedFace) { _, newValue in
                         _ = session.ble.setFace(newValue)
+                    }
+
+                    Picker("屏幕方向", selection: $selectedRotation) {
+                        ForEach(rotations, id: \.self) { deg in
+                            Text("\(deg)°").tag(deg)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: selectedRotation) { _, deg in
+                        _ = session.ble.setRotation(deg)
                     }
 
                     HStack {

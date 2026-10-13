@@ -156,6 +156,20 @@ bool control_parse(const char *json, size_t len, control_cmd_t *out)
         out->value = num;
         return true;
     }
+    if (strcmp(cmd, "rotate") == 0) {
+        if (!have_num) return false;
+        /*
+         * 归一化到 [0,360) 后要求是 90 的整数倍。
+         * 严格校验的好处：方向配错会被**明确拒绝**（返回 false → 固件可回执错误），
+         * 而不是悄悄转到一个意外角度。
+         */
+        int32_t deg = num % 360;
+        if (deg < 0) deg += 360;
+        if (deg % 90 != 0) return false;
+        out->kind = CONTROL_ROTATE;
+        out->value = deg;
+        return true;
+    }
 
     (void)have_str;
     return false; /* 未知命令：kind 保持 CONTROL_NONE */

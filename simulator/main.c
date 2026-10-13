@@ -162,6 +162,7 @@ int main(int argc, char **argv)
     int fh = -1, fm = 0, fs = 0;
     int status_state = -1; /* --status N：设置五态链路状态（用于安全区/文案验证） */
     float speed_kmh = 0.0f;
+    int rot_deg = 0;              /* LVGL 软件旋转角度（0/90/180/270）*/
     int nofix = 0;
     int driver_state = UI_DRIVER_AUTO;
     int gesture_test = 0;
@@ -175,6 +176,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--ms") && i + 1 < argc) run_ms = (Uint32)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--page") && i + 1 < argc) start_page = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--speed") && i + 1 < argc) speed_kmh = (float)atof(argv[++i]);
+        /* --rot N：启用 LVGL 软件旋转（0/90/180/270），用于验证旋转正确性与布局 */
+        else if (!strcmp(argv[i], "--rot") && i + 1 < argc) rot_deg = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--nofix")) nofix = 1;
         else if (!strcmp(argv[i], "--status") && i + 1 < argc) status_state = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--driver") && i + 1 < argc) driver_state = atoi(argv[++i]);
@@ -240,6 +243,20 @@ int main(int argc, char **argv)
     disp_drv.ver_res = SIM_H;
     disp_drv.flush_cb = flush_cb;
     disp_drv.draw_buf = &g_draw_buf;
+    /*
+     * 软件旋转（与真机固件同一份 LVGL 代码）：
+     *   真机固件已把 sw_rotate 常开，这里保持一致，便于在 PC 上验证
+     *   旋转后的画面是否正确（真机无法回读面板内容）。
+     *   注意：与 full_refresh / direct_mode 不兼容，本模拟器为 partial 模式。
+     */
+    disp_drv.sw_rotate = 1;
+    switch (rot_deg) {
+        case 90:  disp_drv.rotated = LV_DISP_ROT_90;  break;
+        case 180: disp_drv.rotated = LV_DISP_ROT_180; break;
+        case 270: disp_drv.rotated = LV_DISP_ROT_270; break;
+        default:  disp_drv.rotated = LV_DISP_ROT_NONE; break;
+    }
+    if (rot_deg != 0) printf("已启用软件旋转: %d°\n", rot_deg);
     lv_disp_drv_register(&disp_drv);
 
     lv_indev_drv_t indev_drv;
