@@ -16,9 +16,32 @@ struct ContentView: View {
     /// 协议见 docs/ble.md 的「表盘列表上报」。
     private var deviceFaces: [DeviceFace] { session.ble.faces.faces }
 
-    /// 选择器里只列**已启用**的表盘 —— 隐藏的表盘在仪表上滑动时会被跳过，
-    /// 列进来会让用户以为能切过去。
-    private var selectableFaces: [DeviceFace] { deviceFaces.filter { $0.enabled } }
+    /// 设备实际存在的分组（通常 3 个：时钟 / 速度表 / 导航）
+    private var groups: [String] { session.ble.faces.grouped.map { $0.group } }
+
+    /// **有效分组**：派生值，不靠 onChange 去"同步"。
+    ///
+    /// 之前把 selectedGroup 当独立状态、在 onChange 里跟上报对齐，结果
+    /// 上报到达时选中值仍是空串 → 表盘列表**空白**（界面看起来像坏了）。
+    /// 改为派生：选中值无效（空 / 设备改版后消失）就退回第一个分组，
+    /// 单一数据源，不存在"两份状态对不上"的可能。
+    private var effectiveGroup: String {
+        if !selectedGroup.isEmpty && groups.contains(selectedGroup) { return selectedGroup }
+        // 首次打开时优先显示**当前表盘所在的分组** —— 否则默认停在第一个分组，
+        // 而当前表盘在别的分组里，用户会看不到 ✓ 标记、以为"没有当前表盘"。
+        if let cur = deviceFaces.first(where: { $0.id == session.ble.faces.currentId }) {
+            return cur.group
+        }
+        return groups.first ?? ""
+    }
+
+    /// **只列当前分组**的表盘 —— 这是界面层级的关键：
+    /// 一级是分组，二级才是组内表盘，不要把所有表盘平铺在一起。
+    private var facesInSelectedGroup: [DeviceFace] {
+        let g = effectiveGroup
+        guard !g.isEmpty else { return [] }
+        return deviceFaces.filter { $0.group == g }
+    }
     /// 屏幕方向选项（度）—— 只列 90 的整数倍，与固件 control.c 的严格校验一致。
     /// 仪表侧走 LVGL 软件旋转（本屏为圆形，旋转无长宽比副作用），
     /// 并会持久化到 NVS，重启后保持。
@@ -26,6 +49,8 @@ struct ContentView: View {
     @State private var selectedRotation = 0
 
     @State private var selectedFace = 2
+    /// 当前选中的**分组**（不是表盘）。分组来自设备上报。
+    @State private var selectedGroup = ""
     @State private var brightness: Double = 200
     @State private var screenOn = true
     /// 防止 onAppear 重复触发自动连接（SwiftUI 可能多次调用）
@@ -77,55 +102,11 @@ struct ContentView: View {
                     row("定位数据时间", timeText(session.lastLocationTime))
                 }
 
-                Section("仪表控制") {
-                    if selectableFaces.isEmpty {
-                        Text(session.ble.facesReady
-                             ? "设备未上报可用的表盘"
-                             : "表盘列表读取中…（连接仪表后自动获取）")
-                            .font(.footnote).foregroundColor(.secondary)
-                    } else {
-                        Picker("表盘", selection: $selectedFace) {
-                            ForEach(selectableFaces, id: \.id) { f in
-                                Text(FaceDisplay.faceTitle(name: f.name,
-                                                           fallbackLabel: f.label)).tag(f.id)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .onChange(of: selectedFace) { _, newValue in
-                            _ = session.ble.setFace(newValue)
-                        }
-                    }
-
-                    // 表盘分组与启用/隐藏（设备上报 → 按分组展示 → 开关写回设备）
-                    // .id 供演示模式自动滚动定位（仅 Debug，见 body 末尾）
-                    if !deviceFaces.isEmpty {
-                        Color.clear.frame(height: 0).id("faceGroupsAnchor")
-                        ForEach(session.ble.faces.grouped, id: \.group) { grp in
-                            Section {
-                                ForEach(grp.faces) { f in
-                                    Toggle(isOn: Binding(
-                                        get: { f.enabled },
-                                        set: { on in _ = session.ble.setFaceEnabled(f.id, on) }
-                                    )) {
-                                        Text(FaceDisplay.faceTitle(name: f.name,
-                                                                   fallbackLabel: f.label))
-                                    }
-                                }
-                            } header: {
-                                Text(FaceDisplay.groupTitle(grp.group))
-                            } footer: {
-                                if session.ble.faces.enabledCount <= 1 {
-                                    Text("至少保留一个表盘，最后一个无法隐藏。")
-                                }
-                            }
-                        }
-                    } else if session.ble.isConnected {
-                        Section("表盘分组") {
-                            Text("尚未读到设备的表盘列表").font(.footnote)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-
+                // ── 全局显示设置 ────────────────────────────────────
+                // 旋转 / 亮度 / 息屏都是**整机**行为，对所有表盘生效，
+                // 不属于某个表盘 —— 因此独立成节，不要放进「表盘」里，
+                // 否则会让人以为"只影响当前那个表盘"。
+                Section {
                     Picker("屏幕方向", selection: $selectedRotation) {
                         ForEach(rotations, id: \.self) { deg in
                             Text("\(deg)°").tag(deg)
@@ -149,9 +130,84 @@ struct ContentView: View {
                         .onChange(of: screenOn) { _, on in
                             _ = session.ble.setScreen(on: on)
                         }
+                } header: {
+                    Text("屏幕显示")
+                } footer: {
+                    Text("对所有表盘生效，不是单个表盘的设置。")
+                }
 
-                    if let notice = session.ble.lastNotice {
-                        Text(notice).font(.footnote).foregroundColor(.secondary)
+                // ── 表盘：先选分组，再看该分组内的表盘 ──────────────
+                //
+                // 层级：分组（时钟/速度表/导航…）→ 组内表盘
+                // 分组来自设备上报的 group 字段，只列出设备实际有的分组。
+                Section {
+                    if deviceFaces.isEmpty {
+                        Text(session.ble.isConnected
+                             ? "尚未读到设备的表盘列表"
+                             : "表盘列表读取中…（连接仪表后自动获取）")
+                            .font(.footnote).foregroundColor(.secondary)
+                    } else {
+                        Color.clear.frame(height: 0).id("faceGroupsAnchor")
+
+                        // 一级：分组（设备实际有的，通常 3 个）
+                        Picker("分组", selection: Binding(
+                            get: { effectiveGroup },
+                            set: { selectedGroup = $0 }
+                        )) {
+                            ForEach(groups, id: \.self) { g in
+                                Text(FaceDisplay.groupTitle(g)).tag(g)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        // 二级：**只列出当前分组**的表盘
+                        ForEach(facesInSelectedGroup) { f in
+                            HStack {
+                                Button {
+                                    selectedFace = f.id
+                                    _ = session.ble.setFace(f.id)
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: f.id == selectedFace
+                                              ? "checkmark.circle.fill" : "circle")
+                                            .foregroundColor(f.id == selectedFace
+                                                             ? .accentColor : .secondary)
+                                        Text(FaceDisplay.faceTitle(name: f.name,
+                                                                   fallbackLabel: f.label))
+                                            .foregroundColor(.primary)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+
+                                Spacer()
+
+                                Toggle("", isOn: Binding(
+                                    get: { f.enabled },
+                                    set: { on in _ = session.ble.setFaceEnabled(f.id, on) }
+                                ))
+                                .labelsHidden()
+                                .accessibilityLabel("显示\(FaceDisplay.faceTitle(name: f.name, fallbackLabel: f.label))")
+                            }
+                        }
+
+                        if let notice = session.ble.lastNotice {
+                            Text(notice).font(.footnote).foregroundColor(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("表盘")
+                } footer: {
+                    if !deviceFaces.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("点名称切换到该表盘（✓ 为当前）；开关控制是否出现在滑动序列中。")
+                            if session.ble.faces.enabledCount <= 1 {
+                                Text("至少保留一个表盘，最后一个无法隐藏。")
+                            }
+                            if session.ble.faces.truncated {
+                                Text("设备上报的列表不完整，部分开关可能显示不准。")
+                                    .foregroundColor(.orange)
+                            }
+                        }
                     }
                 }
 
@@ -200,6 +256,15 @@ struct ContentView: View {
                 }
             }
             #endif
+            // 设备上报变化时校正本地选择：
+            //   - 选中的分组没了（设备改版）→ 退回第一个分组
+            //   - 当前表盘以**设备上报的 cur 为准**（设备可能因隐藏而自动切换过）
+            // 当前表盘以**设备上报的 cur 为准**：设备可能因隐藏而自动切换过，
+            // 若只信本地状态，勾选标记就会指向一个已经不是当前的表盘。
+            // （分组选中态是派生值，不需要在这里同步。）
+            .onChange(of: session.ble.faces.currentId) { _, cur in
+                if cur >= 0 { selectedFace = cur }
+            }
             }
         }
         /*

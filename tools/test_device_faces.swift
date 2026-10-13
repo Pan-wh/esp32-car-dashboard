@@ -167,6 +167,27 @@ func testPartialFieldTolerance() {
     }
 }
 
+func testCurrentFace() {
+    print("--- 当前表盘（cur）---")
+    let json = """
+    {"t":"faces","v":1,"count":3,"mask":7,"cur":2,"faces":[\
+    {"id":0,"name":"analog","label":"Analog","group":"clock","on":1},\
+    {"id":1,"name":"digital","label":"Digital","group":"clock","on":1},\
+    {"id":2,"name":"speed","label":"Speed","group":"speed","on":1}]}
+    """
+    guard let r = DeviceFaceParser.parse(Data(json.utf8)) else {
+        check(false, "解析失败"); return
+    }
+    check(r.currentId == 2, "应解析出 cur=2，实际 \(r.currentId)")
+    // 缺 cur 时为 -1（未知），界面不应标错
+    let noCur = "{\"t\":\"faces\",\"faces\":[{\"id\":0,\"name\":\"a\",\"group\":\"clock\"}]}"
+    if let r2 = DeviceFaceParser.parse(Data(noCur.utf8)) {
+        check(r2.currentId == -1, "缺 cur 应为 -1（未知）")
+    } else {
+        check(false, "应能解析")
+    }
+}
+
 @main
 struct TestDeviceFaces {
     static func main() {
@@ -179,6 +200,7 @@ struct TestDeviceFaces {
         testTruncated()
         testRejectsBadInput()
         testPartialFieldTolerance()
+        testCurrentFace()
         print("结果: \(gPass) 通过, \(gFail) 失败")
         exit(gFail == 0 ? 0 : 1)
     }

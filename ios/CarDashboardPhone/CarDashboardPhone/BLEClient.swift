@@ -161,14 +161,15 @@ final class BLEClient: NSObject, ObservableObject {
     #if DEBUG
     /// 载入演示数据（与固件 face_report_build 的输出同形状）
     func loadDemoFaces() {
+        // 与真机实际上报**完全一致**（3 个分组、5 个表盘），
+        // 这样截图能代表用户实际会看到的样子。
         let json = """
-        {"t":"faces","v":1,"count":5,"mask":31,"faces":[\
+        {"t":"faces","v":1,"count":5,"mask":31,"cur":2,"faces":[\
         {"id":0,"name":"analog","label":"Analog","group":"clock","on":1},\
         {"id":1,"name":"digital","label":"Digital","group":"clock","on":1},\
         {"id":2,"name":"speed","label":"Speed","group":"speed","on":1},\
         {"id":3,"name":"color","label":"Color","group":"clock","on":1},\
-        {"id":4,"name":"nav","label":"Nav","group":"nav","on":1},\
-        {"id":9,"name":"weather","label":"Weather (未收录)","group":"weather","on":1}]}
+        {"id":4,"name":"nav","label":"Nav","group":"nav","on":1}]}
         """
         if let r = DeviceFaceParser.parse(Data(json.utf8)) {
             faces = r

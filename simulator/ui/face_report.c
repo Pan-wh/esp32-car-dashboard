@@ -21,6 +21,14 @@ typedef struct {
     bool overflow;
 } sb_t;
 
+/** 当前表盘 id（由 face_report_set_current 设置；-1 表示未知）*/
+static int s_current = -1;
+
+void face_report_set_current(int face_id)
+{
+    s_current = face_id;
+}
+
 static void sb_init(sb_t *sb, char *buf, size_t cap)
 {
     sb->buf = buf;
@@ -114,13 +122,20 @@ int face_report_build(char *buf, size_t cap)
 
     const int n = ui_face_count();
     const uint32_t mask = ui_face_mask();
+    /*
+     * 当前表盘由调用方通过 face_report_set_current() 告知。
+     * 不直接依赖 ui_pages（那会把 ui_face 的纯注册表逻辑拖进页面层依赖），
+     * 也便于单测构造任意"当前"值。
+     */
+    const int current = s_current;
 
     /* ---- 先算"完整"报告需要多少，决定是否需要截断 ---- */
     char probe[FACE_REPORT_BUF_SIZE];
     sb_t full;
     sb_init(&full, probe, sizeof(probe));
-    sb_printf(&full, "{\"t\":\"faces\",\"v\":1,\"count\":%d,\"mask\":%u,\"faces\":[", n,
-              (unsigned)mask);
+    sb_printf(&full,
+              "{\"t\":\"faces\",\"v\":1,\"count\":%d,\"mask\":%u,\"cur\":%d,\"faces\":[",
+              n, (unsigned)mask, current);
     for (int i = 0; i < n; i++) {
         const ui_face_desc_t *d = ui_face_get(i);
         if (d == NULL) continue;
@@ -147,8 +162,9 @@ int face_report_build(char *buf, size_t cap)
     /* ---- 需要截断：逐条加，直到超过载荷上限 ---- */
     sb_t sb;
     sb_init(&sb, buf, cap);
-    sb_printf(&sb, "{\"t\":\"faces\",\"v\":1,\"count\":%d,\"mask\":%u,\"truncated\":1,\"faces\":[",
-              n, (unsigned)mask);
+    sb_printf(&sb,
+              "{\"t\":\"faces\",\"v\":1,\"count\":%d,\"mask\":%u,\"cur\":%d,\"truncated\":1,\"faces\":[",
+              n, (unsigned)mask, current);
 
     bool first = true;
     for (int i = 0; i < n; i++) {
