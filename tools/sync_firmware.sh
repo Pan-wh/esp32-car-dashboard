@@ -1,5 +1,5 @@
 #!/bin/sh
-# 把共享源码（模拟器 ui/ 目录，含 NMEA 解析）同步到固件工程目录。
+# 把共享源码（simulator/ui/）同步到固件工程目录。
 #
 # 为什么用同步而不是直接引用：
 #   Arduino 只编译 sketch 目录（含其子目录）里的源码，无法引用工程外的 .c 文件；
@@ -23,19 +23,31 @@ for f in "$SRC"/*.c "$SRC"/*.h; do
   [ -e "$DST/$base" ] && rm -f "$DST/$base"
 done
 
-# 复制共享源码（排除模拟器专用文件）
+# 复制共享源码
 for f in "$SRC"/*.c "$SRC"/*.h; do
+  cp "$f" "$DST/$(basename "$f")"
+done
+
+# 清理**孤儿产物**：曾经同步过、但源目录已删除的文件。
+# ⚠️ 真实踩坑：`font_num_dial_38.c` 在源目录删除后，固件目录里的副本仍留着
+#    （它被 .gitignore 忽略，git status 看不到），成为无人引用的死文件。
+#    此处按"固件目录里的共享层文件必须能在源目录找到同名文件"来判定孤儿。
+for f in "$DST"/ui_*.c "$DST"/ui_*.h "$DST"/font_*.c "$DST"/control.c "$DST"/control.h \
+         "$DST"/telemetry.c "$DST"/telemetry.h; do
+  [ -e "$f" ] || continue
   base=$(basename "$f")
-  case "$base" in
-    ui_driver_images.c) ;;                 # 图像资源，需要
-    *) ;;
-  esac
-  cp "$f" "$DST/$base"
+  if [ ! -e "$SRC/$base" ]; then
+    rm -f "$f"
+    echo "  [清理孤儿] $base（源目录已无此文件）"
+  fi
 done
 
 echo "已同步到 $DST："
 ls -1 "$DST" | grep -E '^(ui_|font_|control\.|telemetry\.)' | sed 's/^/  /'
 echo
-echo "接下来（在仓库根目录运行）："
-echo "  arduino-cli compile --fqbn \"esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB\" \\"
-echo "    --libraries reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/libraries firmware/dashboard"
+echo "接下来（在仓库根目录运行；PSRAM=opi 与 QSPI 分块参数均必需，见 docs/development-guide.md）："
+echo "  arduino-cli compile \\"
+echo "    --fqbn \"esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi\" \\"
+echo "    --build-property \"compiler.cpp.extra_flags=-DESP32QSPI_MAX_PIXELS_AT_ONCE=4096\" \\"
+echo "    --libraries reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/libraries \\"
+echo "    firmware/dashboard"
