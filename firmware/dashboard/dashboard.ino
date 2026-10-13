@@ -73,6 +73,11 @@ static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
     LCD_CS /* CS */, LCD_SCLK /* SCK */, LCD_SDIO0 /* SDIO0 */, LCD_SDIO1 /* SDIO1 */,
     LCD_SDIO2 /* SDIO2 */, LCD_SDIO3 /* SDIO3 */);
 
+/* QSPI 时钟（Hz）：默认 40MHz；滑页性能实验提高到 80MHz，可改回 40000000 */
+#ifndef QSPI_SPEED_HZ
+#define QSPI_SPEED_HZ 80000000
+#endif
+
 static Arduino_CO5300 *gfx = new Arduino_CO5300(
     bus, LCD_RESET /* RST */, 0 /* rotation */, LCD_WIDTH /* width */, LCD_HEIGHT /* height */,
     6, 0, 0, 0);
@@ -253,10 +258,16 @@ static bool display_init(void)
 {
   Wire.begin(IIC_SDA, IIC_SCL);
 
-  if (!gfx->begin()) {
-    Serial.println("[显示] gfx->begin() 失败");
+  /*
+   * QSPI 时钟：官方默认 40MHz（ESP32QSPI_FREQUENCY）。实测滑页时全屏传输
+   * 占单帧约 54ms（≈8MB/s 有效带宽），是全屏重绘的固定成本之一。
+   * 这里显式提高到 80MHz 以便实测对比；若面板出现花屏/噪点，改回 40MHz 即可。
+   */
+  if (!gfx->begin(QSPI_SPEED_HZ)) {
+    Serial.printf("[显示] gfx->begin(%d) 失败\n", (int)QSPI_SPEED_HZ);
     return false;
   }
+  Serial.printf("[显示] QSPI 时钟请求 %d MHz\n", (int)(QSPI_SPEED_HZ / 1000000));
   gfx->fillScreen(RGB565_BLACK);
   gfx->setBrightness(200); /* 后续可做成夜间亮度策略 */
   return true;
