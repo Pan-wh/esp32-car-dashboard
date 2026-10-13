@@ -42,7 +42,7 @@
 #define NUM_RADIUS     177  /* 数字中心半径（38px 字号）*/
 #define NUM_Y_NUDGE    (-2) /* 字体框含降部空间，视觉中心微调 */
 
-LV_FONT_DECLARE(num_dial_38); /* Nunito Bold 38px，表盘数字 0-9 */
+LV_IMG_DECLARE(dial_analog); /* 烘焙好的静态表盘（刻度 + 数字 1-12），见 tools/make_dial_faces.py */
 
 /* 秒针模式：1 = 连续滑动扫秒（20Hz）；0 = 每秒跳动（默认，经典石英表观感）
  * 两种模式都已实现并验证，切换本宏即可（详见 design/wireframes/analog-clock.md 第 6 节） */
@@ -114,24 +114,10 @@ static void meter_draw_cb(lv_event_t *e)
     }
 }
 
-/* 12 个数字沿圆周定位（0° 在 12 点，顺时针） */
-static void create_numerals(lv_obj_t *parent)
-{
-    for (int h = 1; h <= 12; h++) {
-        lv_obj_t *lbl = lv_label_create(parent);
-        lv_obj_set_style_text_font(lbl, &num_dial_38, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(UI_NUM_COLOR), 0);
-
-        char buf[4];
-        snprintf(buf, sizeof(buf), "%d", h);
-        lv_label_set_text(lbl, buf);
-
-        float ang = (float)h * 30.0f * 3.14159265f / 180.0f;
-        int32_t x = (int32_t)lroundf(NUM_RADIUS * sinf(ang));
-        int32_t y = (int32_t)lroundf(-NUM_RADIUS * cosf(ang)) + NUM_Y_NUDGE;
-        lv_obj_align(lbl, LV_ALIGN_CENTER, x, y);
-    }
-}
+/*
+ * 数字 1-12 已烘焙进 dial_analog 图片（原 create_numerals 已移除，
+ * 12 个 lv_label 的绘制开销随之消失；字体 num_dial_38 也不再被引用）。
+ */
 
 /* 中心圆点（连接三针）：白色底 + 橙色内点 */
 static void create_center_dot(lv_obj_t *parent)
@@ -160,7 +146,18 @@ lv_obj_t *ui_analog_create(lv_obj_t *parent)
        整屏不透明填充（434K 像素 × 页数），可显著降低整屏重绘成本 */
     lv_obj_set_style_bg_opa(parent, LV_OPA_TRANSP, 0);
 
-    /* 表盘：lv_meter 负责刻度与指针 */
+    /*
+     * 静态表盘：刻度与数字烘焙成图片（最底层）。
+     * 原先由 lv_meter 逐刻度绘制 + 12 个 lv_label 数字；实测 74 个刻度
+     * 在整屏重绘（滑页）时约值 50ms，改为图片后该成本变成一次图片拷贝。
+     * 外观与设计一致（几何常量与下方常量区相同），且离线超采样渲染更平滑。
+     */
+    lv_obj_t *face = lv_img_create(parent);
+    lv_img_set_src(face, &dial_analog);
+    lv_obj_center(face);
+    lv_obj_clear_flag(face, LV_OBJ_FLAG_CLICKABLE);
+
+    /* 指针：只留三条指针的 lv_meter（无刻度） */
     s_ctx.meter = lv_meter_create(parent);
     lv_obj_remove_style_all(s_ctx.meter); /* 去掉默认底/边框/内边距；刻度与指针自带宽高 */
     lv_obj_set_size(s_ctx.meter, METER_SIZE, METER_SIZE);
@@ -170,15 +167,16 @@ lv_obj_t *ui_analog_create(lv_obj_t *parent)
     /* 指针圆头（见 meter_draw_cb） */
     lv_obj_add_event_cb(s_ctx.meter, meter_draw_cb, LV_EVENT_DRAW_PART_BEGIN, NULL);
 
-    /* 分钟刻度：61 个 → 60 段 × 6°（无标签） */
+    /*
+     * 刻度已烘焙进表盘图片，这里不再添加刻度表（tick 数为 0 → 不绘制）。
+     * 保留 scale 是因为指针必须挂在某个 scale 上。
+     */
     lv_meter_scale_t *sc_min = lv_meter_add_scale(s_ctx.meter);
-    lv_meter_set_scale_ticks(s_ctx.meter, sc_min, 61, 2, TICK_LEN_MIN,
-                             lv_color_hex(UI_TICK_MINOR));
+    lv_meter_set_scale_ticks(s_ctx.meter, sc_min, 0, 0, 0, lv_color_hex(UI_TICK_MINOR));
     lv_meter_set_scale_range(s_ctx.meter, sc_min, 0, SCALE_MAX, 360, 270);
 
-    /* 整点刻度：13 个 → 12 段 × 30°（更长更亮，首尾重叠于 12 点） */
     lv_meter_scale_t *sc_hour = lv_meter_add_scale(s_ctx.meter);
-    lv_meter_set_scale_ticks(s_ctx.meter, sc_hour, 13, 3, TICK_LEN_MAJ,
+    lv_meter_set_scale_ticks(s_ctx.meter, sc_hour, 0, 0, 0,
                              lv_color_hex(UI_TICK_MAJOR));
     lv_meter_set_scale_range(s_ctx.meter, sc_hour, 0, SCALE_MAX, 360, 270);
 
@@ -193,8 +191,7 @@ lv_obj_t *ui_analog_create(lv_obj_t *parent)
                                              lv_color_hex(UI_HAND_SEC),
                                              -(R_EDGE - NEEDLE_SEC));
 
-    /* 数字与中心点（在指针之上） */
-    create_numerals(parent);
+    /* 中心点（在指针之上）；数字已烘焙进表盘图片，无需运行时创建 */
     create_center_dot(parent);
 
     /* 初始化指针位置并启动刷新定时器 */
