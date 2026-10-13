@@ -182,11 +182,39 @@ ESP32：nav_parse → ui_nav（只做显示）
 
 ### 3.2 第二步：申请高德 Web 服务 Key
 
-1. 注册 / 登录 <https://lbs.amap.com/>，完成**个人开发者认证**
-   （认证类型区别见 <https://lbs.amap.com/faq/account/certification/39670>）。
-2. 控制台 → **应用管理** → 创建应用 → **添加 Key**。
-3. **服务平台必须选「Web 服务」**（服务端调用用；不要选 Web 端/JS API）。
-4. ⚠️ 一个 Key 只用于一个应用（协议 §4.5）。
+> 官方步骤页：<https://lbs.amap.com/api/webservice/create-project-and-key>
+> （以下为 2026-03-30 版页面内容，控制台 UI 可能微调）
+
+**四步**：
+
+| # | 操作 | 链接 / 位置 |
+|---|------|------------|
+| 1 | 注册 / 登录开发者账号 | <https://console.amap.com/dev/id> |
+| 2 | 完成**个人开发者认证** | <https://console.amap.com/dev/user/permission> |
+| 3 | 【应用管理】→ 右上角【创建新应用】，填表单 | <https://console.amap.com/dev/key> |
+| 4 | 在我的应用中选该应用 → 【添加 Key】→ **服务平台选「Web 服务」** | 同上 |
+
+创建成功后即可在应用列表里看到 Key。
+
+**四个关键点（做错会浪费很多时间）**：
+
+1. ⚠️ **服务平台必须选「Web 服务」**。
+   选成「Web 端(JS API)」或「iOS 平台」会得到与该用途不匹配的 Key，
+   调用时高德返回 `10009`（Key 与绑定平台不匹配）或 `10001`。
+   本项目的网关是**服务端调用**，所以必须是「Web 服务」。
+2. ⚠️ **必须先完成开发者认证**。协议 §4.8 要求认证后才能使用；
+   未认证或复审未通过会被限制。
+3. ⚠️ **一个 Key 只用于一个应用**（协议 §4.5）。
+   不要把同一个 Key 同时用于本项目和其他项目。
+4. 🔒 **Key 等同密码**，不要提交到 Git、不要写进 App、不要贴到聊天/issue。
+   本项目只从环境变量读取（见 §3.3 与 [gateway/README.md](../gateway/README.md)）。
+
+**认证类型**：以「个人研究学习」为目的认证为**个人认证开发者**即可
+（协议 §3.1）；法人/组织需按 §3.2 购买技术服务许可。
+认证类型区别见 <https://lbs.amap.com/faq/account/certification/39670>。
+
+**配额**：具体免费额度与 QPS 限制会调整，**以控制台与
+<https://lbs.amap.com/upgrade#price> 当时的说明为准**（本文不写死数字）。
 
 > **待核实**：免费配额的具体数值与 QPS 限制会调整，请以
 > <https://lbs.amap.com/upgrade#price> 当时的说明为准。
