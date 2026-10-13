@@ -146,6 +146,15 @@ static int s_page_seen = -1; /* loop 中持续记录，便于取 before */
 static volatile bool s_tp_pressed = false;  /* 最新采样：是否按下 */
 static volatile int16_t s_tp_x = 0, s_tp_y = 0;
 static volatile bool s_tp_press_latch = false; /* 自上次 LVGL 读取后发生过按下 */
+/* flick（快速划动）判定：100Hz 采样能拿到完整轨迹，见 ui_pages_flick 注释 */
+static volatile int8_t s_tp_flick = 0;      /* +1 下一页 / -1 上一页 / 0 无 */
+static volatile bool s_tp_settle = false;   /* 抬起但未达 flick：按最近页吸附 */
+static int16_t s_tp_start_x = 0, s_tp_start_y = 0;
+static uint32_t s_tp_start_ms = 0;
+/* 诊断：采样器共看到多少次「按下→抬起」、其中多少次判定为 flick */
+static volatile uint16_t s_tp_release_cnt = 0, s_tp_flick_cnt = 0;
+static volatile int16_t s_last_dx = 0, s_last_dy = 0;
+static volatile uint32_t s_last_dt = 0;
 static portMUX_TYPE s_tp_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static void tlog_add(int16_t x, int16_t y, bool pressed)
@@ -248,8 +257,15 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
 static void touch_sample_cb(void *)
 {
   uint8_t n = touch.getPoint(touch_x, touch_y, touch.getSupportTouchPoint());
+  bool was = s_tp_pressed;
+
   portENTER_CRITICAL(&s_tp_mux);
   if (n > 0) {
+    if (!was) { /* 按下瞬间：记录起点，用于 flick 判定 */
+      s_tp_start_x = touch_x[0];
+      s_tp_start_y = touch_y[0];
+      s_tp_start_ms = millis();
+    }
     s_tp_pressed = true;
     s_tp_x = touch_x[0];
     s_tp_y = touch_y[0];
@@ -257,6 +273,33 @@ static void touch_sample_cb(void *)
   }
   else {
     s_tp_pressed = false;
+    if (was) {
+      /*
+       * 抬起瞬间：判定是否快速划动。
+       * 阈值：时长 < 600ms、水平位移 > 50px、且明显偏水平（水平 > 1.2×垂直）。
+       * 命中则置 flick，由主循环消费（LVGL 调用必须回到主循环做）。
+       */
+      int dx = (int)s_tp_x - (int)s_tp_start_x;
+      int dy = (int)s_tp_y - (int)s_tp_start_y;
+      uint32_t dt = millis() - s_tp_start_ms;
+      int adx = dx < 0 ? -dx : dx;
+      int ady = dy < 0 ? -dy : dy;
+      s_tp_release_cnt++;
+      s_last_dx = (int16_t)dx;
+      s_last_dy = (int16_t)dy;
+      s_last_dt = dt;
+      if (dt < 600 && adx > 50 && adx > (ady * 12) / 10) {
+        s_tp_flick = (dx < 0) ? 1 : -1; /* 左滑 → 下一页 */
+        s_tp_flick_cnt++;
+        Serial.printf("[触摸] flick dx=%d dy=%d dt=%lu ms\n", (int)dx, (int)dy,
+                      (unsigned long)dt);
+      }
+      else {
+        s_tp_settle = true; /* 缓慢拖拽：按最近页吸附 */
+        Serial.printf("[触摸] 抬起 dx=%d dy=%d dt=%lu ms（未达 flick 阈值→吸附）\n",
+                      (int)dx, (int)dy, (unsigned long)dt);
+      }
+    }
   }
   portEXIT_CRITICAL(&s_tp_mux);
 }
@@ -634,6 +677,9 @@ static void print_touch_log(void)
 {
   Serial.printf("[手势-最近] 方向=%s 目标=%s 页 %d → %d\n", s_last_gest.dir, s_last_gest.target,
                 s_last_gest.page_before, s_last_gest.page_after);
+  Serial.printf("[采样] 抬起 %u 次，其中 flick %u 次；最近 dx=%d dy=%d dt=%lu ms\n",
+                (unsigned)s_tp_release_cnt, (unsigned)s_tp_flick_cnt, (int)s_last_dx,
+                (int)s_last_dy, (unsigned long)s_last_dt);
   Serial.printf("[手势] 计数 LEFT=%u RIGHT=%u TOP=%u BOTTOM=%u 其他=%u\n",
                 (unsigned)s_gest_left, (unsigned)s_gest_right, (unsigned)s_gest_top,
                 (unsigned)s_gest_bottom, (unsigned)s_gest_other);
@@ -1003,6 +1049,22 @@ void loop()
   handle_serial();            /* 串口命令：校时 / 切页 */
   ble_poll();                 /* 取 BLE 遥测 + 校时（无新数据直接返回） */
   ble_update();               /* 五态状态机，每循环驱动速度页 */
+  /* 消费 flick：快速划动直接翻页（100Hz 采样判定，见 touch_sample_cb） */
+  if (s_tp_flick != 0) {
+    int8_t dir = s_tp_flick;
+    s_tp_flick = 0;
+    s_tp_settle = false; /* flick 优先，避免再吸附一次 */
+    int before = (int)ui_pages_current();
+    ui_pages_flick(dir);
+    int after = (int)ui_pages_current();
+    Serial.printf("[翻页] flick dir=%d：页 %d → %d%s\n", (int)dir, before, after,
+                  before == after ? "（已到边界）" : "");
+  }
+  else if (s_tp_settle) {
+    s_tp_settle = false;
+    ui_pages_settle();
+  }
+
   s_page_seen = (int)ui_pages_current(); /* 记录当前页，供手势诊断取 before */
   {
     uint32_t t_render = micros();

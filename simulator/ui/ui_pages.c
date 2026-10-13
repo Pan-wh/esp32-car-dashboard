@@ -133,11 +133,70 @@ void ui_pages_init(void)
     ui_pages_show(UI_PAGE_ANALOG);
 }
 
+void ui_pages_flick(int dir)
+{
+    if (s_cont == NULL || dir == 0) return;
+
+    /*
+     * 注意：这里**不再**检查"容器是否已被原生拖拽带走"。
+     * 实测（2026-10-13 真机日志）用户每次快滑都会把容器拖走几十到几百像素，
+     * 若因此拒绝翻页，就会出现「滑一下要等一会才能再滑」的现象——
+     * 快滑是明确的用户意图，一律按当前页翻一页。
+     */
+    int next = (int)s_current + dir;
+    if (next < 0 || next >= UI_PAGE_COUNT) return; /* 到头不循环 */
+    ui_pages_show((ui_page_t)next);
+}
+
+/* 翻页动画时长（ms）：LVGL 内置吸附按像素速度算，200-400ms 偏钝，这里固定短动画 */
+#define PAGE_ANIM_MS 130
+
+static void page_scroll_anim_cb(void *obj, int32_t v)
+{
+    lv_obj_scroll_to_x((lv_obj_t *)obj, (lv_coord_t)v, LV_ANIM_OFF);
+}
+
+/* 松手后按"最近的页"吸附（缓慢拖拽、未达 flick 阈值时使用） */
+void ui_pages_settle(void)
+{
+    if (s_cont == NULL) return;
+    lv_coord_t x = lv_obj_get_scroll_x(s_cont);
+    int page = (int)((x + LCD_WIDTH / 2) / LCD_WIDTH); /* 四舍五入到最近页 */
+    if (page < 0) page = 0;
+    if (page >= UI_PAGE_COUNT) page = UI_PAGE_COUNT - 1;
+    ui_pages_show((ui_page_t)page);
+}
+
 void ui_pages_show(ui_page_t page)
 {
     if (page < 0 || page >= UI_PAGE_COUNT) page = UI_PAGE_ANALOG;
 
-    lv_obj_scroll_to_view(s_pages[page], s_ready ? LV_ANIM_ON : LV_ANIM_OFF);
+    if (!s_ready || s_cont == NULL) {
+        lv_obj_scroll_to_view(s_pages[page], LV_ANIM_OFF);
+        s_current = page;
+        return;
+    }
+
+    /* 目标位置：第 page 页在容器中的横向偏移 */
+    lv_coord_t target = (lv_coord_t)((int)page * LCD_WIDTH);
+    lv_coord_t from = lv_obj_get_scroll_x(s_cont);
+
+    /*
+     * 先清掉容器上正在跑的滚动动画：LVGL 原生吸附用内部 scroll_x_anim，
+     * 与我们的 page_scroll_anim_cb 是两个不同的 exec_cb，若不清理会同时跑、
+     * 互相抢 scroll_x（表现为抖动或翻不过去）。
+     */
+    lv_anim_del(s_cont, NULL);
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_cont);
+    lv_anim_set_values(&a, from, target);
+    lv_anim_set_time(&a, PAGE_ANIM_MS);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_set_exec_cb(&a, page_scroll_anim_cb);
+    lv_anim_start(&a);
+
     s_current = page;
     s_ready = true;
 }
