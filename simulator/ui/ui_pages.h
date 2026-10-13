@@ -27,6 +27,21 @@ void ui_pages_init(void);
 /* 切换到指定页 */
 void ui_pages_show(ui_page_t page);
 
+/*
+ * 快速划动（flick）翻页：dir = +1 下一页，-1 上一页。
+ *
+ * 为什么需要它：一帧渲染约 110ms，LVGL 的输入读取被拖慢；用户快速一划时
+ * 「按下→移动→抬起」可能只被 LVGL 采到**一个**坐标点，位移量恒为 0，
+ * 于是原生拖拽滚动完全不动（用户实测「滑一页后要等一会才能再滑」）。
+ * 固件侧的 100Hz 触摸采样能拿到完整轨迹，因此由它判定 flick 并直接翻页。
+ *
+ * 若容器已被原生滚动带走（缓慢拖拽的情形），本函数不动作，避免翻两页。
+ */
+void ui_pages_flick(int dir);
+
+/* 松手后按最近页吸附（无 flick 的缓慢拖拽用），同样走 130ms 短动画 */
+void ui_pages_settle(void);
+
 /* 当前页 */
 ui_page_t ui_pages_current(void);
 
