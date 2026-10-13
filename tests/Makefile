@@ -3,14 +3,11 @@ CC      ?= cc
 # UI 回归需要带 Pillow 的解释器；可用 PYTHON=/path/to/python3 make run 覆盖
 PYTHON  ?= python3
 CFLAGS  := -O1 -std=gnu99 -Wall -Wextra -I../simulator/ui
-SRC     := ../simulator/ui/gnss_nmea.c ../simulator/ui/telemetry.c
+SRC     := ../simulator/ui/telemetry.c
 
-TESTS   := test_nmea test_telemetry test_control test_ui_face
+TESTS   := test_telemetry test_control test_ui_face
 
 all: $(TESTS)
-
-test_nmea: test_nmea.c ../simulator/ui/gnss_nmea.c
-	$(CC) $(CFLAGS) -o $@ $^
 
 test_telemetry: test_telemetry.c ../simulator/ui/telemetry.c
 	$(CC) $(CFLAGS) -o $@ $^
@@ -21,8 +18,7 @@ test_control: test_control.c ../simulator/ui/control.c
 test_ui_face: test_ui_face.c ../simulator/ui/ui_face.c
 	$(CC) $(CFLAGS) -o $@ $^
 
-run: test_nmea test_telemetry test_control test_ui_face
-	./test_nmea
+run: test_telemetry test_control test_ui_face
 	./test_telemetry
 	./test_control
 	./test_ui_face
