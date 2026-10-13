@@ -81,5 +81,5 @@ JSON 字段与语义见 `../../docs/ble.md` 与 `TelemetryPacket.swift` 的 Codi
 
 未连接时操作会给出明确提示（`lastNotice`），不会「点了没反应」。
 
-XCUITest 覆盖：`DeviceControlUITests` 验证分区可达、分段控件含 4 个表盘选项、
+XCUITest 覆盖：`DeviceControlUITests` 验证分区可达、分段控件含表盘选项、
 滑块与开关可交互且不崩溃（模拟器无 BLE 外设，故只验证 UI 路径）。

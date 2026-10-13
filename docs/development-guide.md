@@ -49,6 +49,8 @@
 | 我想改 | 改哪个文件 | 备注 |
 |--------|-----------|------|
 | **速度表**外观（指针、表盘、HUD）| `simulator/ui/ui_speed.c` | 手写 520 行 |
+| **导航卡片**（箭头/距离/车速）| `simulator/ui/ui_nav.c` | 手写；箭头用 lv_line 绘制 |
+| 导航**纯逻辑**（动作/状态/距离格式化）| `simulator/ui/nav.c` | 63 项单测，可 PC 运行 |
 | **模拟时钟**（刻度、指针）| `simulator/ui/ui_analog.c` | 手写 208 行 |
 | **数字时钟**（字号、布局）| `simulator/ui/ui_clock.c` | 手写 99 行 |
 | **页面切换**（动画时长、吸附）| `simulator/ui/ui_pages.c` | `PAGE_ANIM_MS` 控制动画 |
@@ -96,7 +98,7 @@ lv_obj_t *ui_myface_create(lv_obj_t *parent)
 
 > 注册表里的回调类型是 `void (*)(void *parent)`（刻意做成 LVGL-free，
 > 便于 `test_ui_face` 在 PC 上单测而不链接 LVGL）。注册时**转型**即可：
-> `(ui_face_build_cb)ui_myface_create`。现有四个表盘都这么写。
+> `(ui_face_build_cb)ui_myface_create`。现有五个表盘都这么写。
 
 **第 2 步**：在 `simulator/ui/ui_pages.c` 的 `ui_pages_init()` 里注册，并在
 `ui_pages.h` 的 `ui_page_t` 枚举加一项（**顺序必须与注册顺序一致**）：
@@ -294,7 +296,8 @@ tools/run_ios_tests.sh                     # 5 项 XCUITest
 
 | 能力 | 验证情况 |
 |------|---------|
-| 四表盘（模拟钟/数字钟/速度表/多彩时钟）| 真机 |
+| 五表盘（模拟钟/数字钟/速度表/多彩时钟/导航卡片）| 真机 |
+| **导航卡片**（阶段1 UI 原型）| 模拟器像素级验证 + 真机；8 种转向动作、距离格式化 63 项单测 |
 | 表盘注册表（新增表盘三步走）| `test_ui_face` 32 项单测 |
 | BLE 远程切表盘 | 真机端到端 |
 | 速度线性斜坡（消除跳针）| 115 项单测含帧率无关性验证 |

@@ -40,6 +40,8 @@ extern "C" {
 #include "ui_face.h"
 #include "ui_pages.h"
 #include "ui_speed.h"
+#include "ui_nav.h"      /* 导航指引卡片（阶段 1：UI 原型） */
+#include "nav.h"         /* 导航状态/动作枚举与文案（纯 C，共用） */
 #include "ui_clock.h"    /* 数字时钟页（时间同步状态标签） */
 #include "ui_timesrc.h"
 #include "telemetry.h"   /* BLE 遥测协议解析（纯 C，模拟器/固件共用） */
@@ -684,6 +686,7 @@ static const char *page_name(int i)
     case UI_PAGE_DIGITAL: return "数字时钟";
     case UI_PAGE_SPEED: return "速度表盘";
     case UI_PAGE_COLOR_CLOCK: return "多彩时钟";
+    case UI_PAGE_NAV: return "导航卡片";
     default: return "未知";
   }
 }
@@ -722,6 +725,8 @@ static void print_help(void)
   Serial.println("       trip [reset]              行程统计：里程/最高速/均速");
   Serial.println("       face [id|next|prev]       查看/切换表盘（不带参数=列出全部）");
   Serial.println("       spd [kmh|reset]           诊断：查询/强制设置速度指针");
+  Serial.println("       nav [st mv dist [spd]]   导航卡片模拟数据（阶段1）：st=0..5 mv=0..7");
+  Serial.println("                                  例: nav 1 2 500 68 → 导航中·左转·500m·68km/h");
   Serial.println("       lvrot [0|1|2|3]          【运行时】LVGL 软件旋转 0/90/180/270°（不带参数=查询）");
   Serial.println("       madctl <hex>              【实验】直写面板 MADCTL(0x36) 验证硬件旋转");
   Serial.println("                                 参考: 00=0° 60=90° C0=180° A0=270°；恢复 madctl 0");
@@ -949,6 +954,49 @@ static void process_command(char *cmd)
       }
       else {
         Serial.println("[旋转] 参数无效，应为 1-2 位十六进制（例: 60）");
+      }
+    }
+  }
+  else if (strncmp(cmd, "nav", 3) == 0) {
+    /*
+     * 【阶段 1 调试命令】用模拟数据驱动导航卡片，验证 UI 而不依赖 iPhone。
+     *
+     * 用法：
+     *   nav                      查询当前值
+     *   nav <state> <maneuver> <dist_m> [speed]
+     *     state    : 0=未开始 1=导航中 2=重规划 3=到达 4=过期 5=无数据
+     *     maneuver : 0=未知 1=直行 2=左转 3=右转 4=掉头 5=靠左 6=靠右 7=到达
+     *     dist_m   : 距离（米）；负数表示无效
+     *     speed    : 可选，当前车速 km/h
+     * 例：nav 1 2 500 68   → 导航中·左转·500m·68km/h
+     */
+    const char *arg = cmd + 3;
+    while (*arg == ' ') arg++;
+
+    if (*arg == '\0') {
+      Serial.printf("[导航] 状态=%d(%s) 动作=%d(%s) 距离=%d 车速=%.0f(%s)\n",
+                    ui_nav_get_state(), nav_state_name((nav_state_t)ui_nav_get_state()),
+                    ui_nav_get_maneuver(), nav_maneuver_name((nav_maneuver_t)ui_nav_get_maneuver()),
+                    ui_nav_get_distance(), (double)ui_nav_get_speed(),
+                    ui_nav_get_speed_valid() ? "有效" : "无效");
+    }
+    else {
+      int st = -1, mv = -1, dist = 0;
+      float spd = -1.0f;
+      int n = sscanf(arg, "%d %d %d %f", &st, &mv, &dist, &spd);
+      if (n < 3) {
+        Serial.println("[导航] 用法: nav <state> <maneuver> <dist_m> [speed]");
+        Serial.println("       例: nav 1 2 500 68  （导航中·左转·500m·68km/h）");
+      }
+      else {
+        ui_nav_set_state(st);
+        ui_nav_set_maneuver(mv);
+        ui_nav_set_distance(dist);
+        if (n >= 4) ui_nav_set_speed(spd, true);
+        /* 切到导航表盘，便于直接观察 */
+        ui_pages_set_face(UI_PAGE_NAV);
+        Serial.printf("[导航] 已设置 状态=%d 动作=%d 距离=%d%s\n", st, mv, dist,
+                      (n >= 4) ? " 含车速" : "");
       }
     }
   }

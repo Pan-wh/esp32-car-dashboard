@@ -33,12 +33,20 @@ simulator/screenshot.bmp
 simulator/shots/
 
 # 固件目录中的共享源码副本（由 tools/sync_firmware.sh 从 simulator/ui/ 同步生成）
+#
+# ⚠️ sync_firmware.sh 会复制 simulator/ui/ 下的**所有** .c/.h，
+#    因此每新增一个共享层模块，必须同时在此登记（否则会被误提交）。
+#    已踩坑：新增 nav.c/nav.h 时漏登记（原规则只含 ui_* 前缀）。
 firmware/dashboard/ui_*.c
 firmware/dashboard/ui_*.h
 firmware/dashboard/gnss_*.c
 firmware/dashboard/gnss_*.h
 firmware/dashboard/telemetry.c
 firmware/dashboard/telemetry.h
+firmware/dashboard/control.c
+firmware/dashboard/control.h
+firmware/dashboard/nav.c
+firmware/dashboard/nav.h
 firmware/dashboard/font_*.c
 
 # 字体管线中间产物与 Python 库（tools/make_fonts.sh 可重建）
