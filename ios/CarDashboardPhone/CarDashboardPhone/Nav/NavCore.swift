@@ -216,6 +216,32 @@ public struct NavRoute: Sendable {
         guard index >= 0 && index < stepRanges.count else { return 0 }
         return stepRanges[index].start
     }
+
+    /// 取"沿路线行驶 `distanceM` 米处"的位置（线性插值到所在折线段内）。
+    ///
+    /// 用途：模拟行车（tools/nav_sim）、以及将来画"已走过/未走过"的路线着色。
+    /// 越界会被钳制到路线首/尾，不返回 nil（调用方通常是"按进度取点"）。
+    public func pointAt(distanceM d: Double) -> GeoPoint? {
+        guard polyline.count >= 1 else { return nil }
+        if polyline.count == 1 { return polyline[0] }
+
+        let clamped = min(max(0, d), totalDistanceM)
+
+        // 找到 clamped 落在哪一段（cumulativeM 单调递增）
+        var i = 0
+        while i < cumulativeM.count - 2 && cumulativeM[i + 1] < clamped { i += 1 }
+
+        let segStart = cumulativeM[i]
+        let segEnd = cumulativeM[i + 1]
+        let segLen = segEnd - segStart
+        guard segLen > 1e-9 else { return polyline[i] }
+
+        let t = min(1, max(0, (clamped - segStart) / segLen))
+        let a = polyline[i]
+        let b = polyline[i + 1]
+        return GeoPoint(lon: a.lon + (b.lon - a.lon) * t,
+                        lat: a.lat + (b.lat - a.lat) * t)
+    }
 }
 
 // MARK: - 数学工具

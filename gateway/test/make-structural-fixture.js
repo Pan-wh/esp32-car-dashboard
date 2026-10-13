@@ -30,13 +30,41 @@ const real = JSON.parse(readFileSync(src, 'utf8'));
 /** 合成路名池（循环取用，保证测试可预期） */
 const FAKE_ROADS = ['示例一路', '示例二路', '示例三街', '示例四路', '示例五街', '示例六路'];
 
-/** 合成折线：以固定原点生成的等距点，长度与真实折线点数一致 */
-function fakePolyline(count, idx) {
+// ─────────────────────────────────────────────────────────────
+// 合成路线：**必须首尾相连**
+//
+// 早期版本每段从各自的原点开始生成折线，导致步骤之间**断开** ——
+// 这样的"路线"不真实，还会让下游（导航核心的投影/垂距）行为异常
+// （实测垂距峰值 195m 而非预期的 80m）。合成数据同样要满足
+// "是一条能开的路"这一基本约束。
+//
+// 做法：维护一个游标与航向，逐点前进；每段走完后航向略作偏转，
+// 并把该段的几何长度回填到 `distance`，保证距离与几何自洽。
+// ─────────────────────────────────────────────────────────────
+const METERS_PER_DEG_LAT = 111320;
+let cursor = { lon: 120.0, lat: 30.0 };
+let headingDeg = 45; // 0=北，90=东
+
+function metersPerDegLon(lat) {
+  return METERS_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180);
+}
+
+/** 生成一段折线（点数 = count），段落总长约 targetLen 米；**从 cursor 起** */
+function fakePolyline(count, targetLen) {
   const parts = [];
+  const segLen = count > 1 ? targetLen / (count - 1) : 0;
   for (let i = 0; i < count; i++) {
-    const lon = 120.0 + (idx * 0.001) + i * 0.00005;
-    const lat = 30.0 + (idx * 0.001) + i * 0.00003;
-    parts.push(`${lon.toFixed(6)},${lat.toFixed(6)}`);
+    parts.push(`${cursor.lon.toFixed(6)},${cursor.lat.toFixed(6)}`);
+    if (i === count - 1) break;
+    // 轻微左右偏转，使路线不是一条直线（但保持平滑可导）
+    headingDeg += i % 2 === 0 ? 3 : -2;
+    const rad = (headingDeg * Math.PI) / 180;
+    const dNorth = segLen * Math.cos(rad);
+    const dEast = segLen * Math.sin(rad);
+    cursor = {
+      lat: cursor.lat + dNorth / METERS_PER_DEG_LAT,
+      lon: cursor.lon + dEast / metersPerDegLon(cursor.lat),
+    };
   }
   return parts.join(';');
 }
@@ -47,7 +75,9 @@ function scrubStep(step, idx) {
   for (const [k, v] of Object.entries(step)) {
     if (k === 'polyline') {
       const n = typeof v === 'string' ? v.split(';').filter(Boolean).length : 0;
-      out[k] = fakePolyline(n, idx);
+      // 目标长度沿用原距离量级（100/110/…），保证测试期望稳定
+      const targetLen = 100 + idx * 10;
+      out[k] = fakePolyline(n, targetLen);
     } else if (k === 'road') {
       out[k] = v ? FAKE_ROADS[idx % FAKE_ROADS.length] : '';
     } else if (k === 'instruction') {
@@ -79,8 +109,9 @@ for (const path of out.route?.paths ?? []) {
   path.duration = String(600);
 }
 if (out.route) {
+  // 起终点与首尾折线保持一致（避免"起终点与路线对不上"这种不真实数据）
   out.route.origin = '120.000000,30.000000';
-  out.route.destination = '120.010000,30.010000';
+  out.route.destination = `${cursor.lon.toFixed(6)},${cursor.lat.toFixed(6)}`;
 }
 
 out._comment = [

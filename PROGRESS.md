@@ -21,7 +21,8 @@
 | [`docs/ble.md`](docs/ble.md) | BLE 协议细节（GATT、JSON 字段）|
 | [`docs/decisions.md`](docs/decisions.md) | 设计决策（含已被取代的决策，保留历史）|
 | [`docs/nav-backend.md`](docs/nav-backend.md) | 导航数据源/网关：**引用归属、部署、维护、合规**（阶段 3）|
-| [`gateway/README.md`](gateway/README.md) | 导航网关（已实现）：接口、环境变量、接真实 Key 后必做的核对 |
+| [`gateway/README.md`](gateway/README.md) | 导航网关（已实现）：接口、环境变量、真实响应核实结果 |
+| [`tools/nav_sim/README.md`](tools/nav_sim/README.md) | **Mac 侧「模拟手机」**：不需 iPhone 即可驱动真机验证全链路 |
 | [`docs/hardware.md`](docs/hardware.md) | 硬件规格与引脚 |
 | [`docs/setup-macos.md`](docs/setup-macos.md) | 开发环境搭建 |
 | [`docs/ui-guidelines.md`](docs/ui-guidelines.md) | UI 规范与遗留设计选项 |
@@ -203,13 +204,14 @@ ESP32-S3 (dashboard.ino)
 | `test_nav` | 63 | 导航卡片纯逻辑（动作/状态/距离格式化）|
 | `test_nav_parse` | 72 | 导航消息解析（分流/容错/向前兼容）|
 | `test_img_indexed` | 28 | 索引图解码（调色板字节序/16位截断/边界/越界）|
-| `test_nav_core` (Swift) | 106 | iOS 导航核心（投影/偏航/到达/过期）+ 坐标跨语言一致性 |
+| `test_nav_core` (Swift) | 115 | iOS 导航核心 + 坐标跨语言一致性 |
+| `test_nav_sim` (Swift) | 25 | Mac 模拟器（行车推进/法向偏航/消息序列）|
 | `gateway` (Node) | 58 | 导航网关（含真实响应结构回归，全离线）|
 | `test_ios_logic` | 32 | iOS 侧纯逻辑（Swift）|
-| **单测小计** | **582** | `cd tests && make run` |
+| **单测小计** | **616** | `cd tests && make run` |
 | `ui_regression.py` | 33 | UI 像素级回归 |
 | XCUITest | 5 | 会话/遥测计数/设备控制/链路诊断/BLE 状态 |
-| **自动化总计** | **620** | |
+| **自动化总计** | **654** | |
 
 **真机验证**（iPhone 12 / iOS 27）：§9 矩阵 **12/12 通过**，DoD **8/8 达成**。
 
@@ -230,7 +232,7 @@ ESP32-S3 (dashboard.ino)
 | 中 | flick 手势的旋转坐标补偿（90°/270° 下滑动失效、翻页退化成慢拖拽）| 补丁已备好且映射已逐点验证（与 `lv_indev.c` 公式 **9676 点全部一致**）；**仓库内尚未应用**（整体编译待并行改动落地后补跑）。见清单 §3 | 小 |
 | **高** | 面板 MADCTL 硬件旋转（`madctl 60/C0/A0`）| **仍未实测**：库从不使用 MV(0x20) 位。⚠️ 取值与微雪 IDF BSP `bsp_display_rotation_set()` 完全一致，但该函数在厂商仓库内**无任何调用者** → 厂商同样未验证。若有效可去掉软件旋转的每帧开销与拆块（**必须同步改触摸映射**）| 小（实验）|
 | 低 | UI 设计定稿：状态标签与指针重叠 | 5 个候选方案见 [`ui-guidelines.md`](docs/ui-guidelines.md) | 小 |
-| 中 | 导航**阶段 3**（进行中）| ✅ 网关已实现（[gateway/](gateway/README.md)）；✅ **导航核心已实现**（`ios/.../Nav/NavCore.swift` + `Coords.swift`，106 项测试）。⬜ 待做：偏航重算流程、App 接入、真机联调 | 大 |
+| 中 | 导航**阶段 3**（进行中）| ✅ 网关（含真实 Key 联调）；✅ 导航核心（115 项测试）；✅ **Mac 模拟器已打通全链路**（[nav_sim](tools/nav_sim/README.md)，真机实测）。⬜ 待做：**偏航重算流程**、App 接入（需 iPhone）| 大 |
 | 低 | 行程统计上屏 | 数据已有（`trip` 串口命令可查），仅需 UI 呈现 | 小 |
 
 ---
