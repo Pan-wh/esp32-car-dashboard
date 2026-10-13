@@ -2,7 +2,7 @@
 
 ## 1. 项目目标
 
-我正在使用微雪 **Waveshare ESP32-S3-Touch-AMOLED-1.75-G**
+我正在使用微雪 **Waveshare ESP32-S3-Touch-AMOLED-1.75**（**无 GNSS 版本**）
 开发一款车载辅助显示设备。请你作为本项目的嵌入式开发助手，协助我完成需求拆分、UI
 设计、代码开发、硬件调试和文档整理。
 
@@ -11,7 +11,13 @@
 
 ## 2. 硬件信息
 
-开发板：Waveshare ESP32-S3-Touch-AMOLED-1.75-G（注意是 **-G 版本**）。
+开发板：Waveshare ESP32-S3-Touch-AMOLED-1.75（**注意：本项目用的不是 `-G`（GPS）版本**）。
+
+> ⚠️ **重要（2026-10-13 更正）**：本文件原先写的是「-G 版本」，与实物不符。
+> 为适配外壳，项目**已弃用 GPS 版本**，板上**没有 LC76G GNSS 模块**。
+> **所有位置/速度/时间数据均来自 iPhone**（Core Location 经 BLE 下发），
+> 仪表侧不做任何定位。看到 GNSS/LC76G 相关内容一律视为**官方 `-G` 版的差异说明**，
+> 不代表本项目硬件。
 
 已知硬件与资源： - MCU：ESP32-S3R8。 - 屏幕：1.75 英寸圆形 QSPI
 AMOLED，466 × 466 分辨率。 - 触摸：电容触摸屏。 - PSRAM：8 MB。 -
@@ -110,7 +116,8 @@ README、Getting Started 和示例代码，不要混用不同版本的配置与�
 优先研究这些官方 Arduino 示例： - `01_HelloWorld`：屏幕基础初始化。 -
 `03_LVGL_PCF85063_simpleTime`：LVGL 与 RTC。 - `04_LVGL_QMI8658_ui`：IMU
 传感器。 - `06_LVGL_Widgets`：LVGL 界面和触摸交互。 -
-`07_LVGL_SD_Test`：microSD 存储。 - `09_LC76G_I2C`：板载 LC76G GNSS。 -
+`07_LVGL_SD_Test`：microSD 存储（**本板有 TF 卡槽，1-bit SDMMC**）。 -
+`09_LC76G_I2C`：官方 `-G` 版的板载 GNSS —— **本项目硬件无此模块，仅供参考，不要照做**。 -
 `10_Touch_CST9217`：触摸诊断。
 
 先让官方示例在本机编译并在真实硬件上运行，再在其基础上增量开发。不要直接重写屏幕、触摸、RTC

@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 #include "control.h"
+#include "nav_parse.h"
 #include "telemetry.h"
 
 /* 初始化 BLE Peripheral 并开始广播；成功返回 true */
@@ -53,5 +54,19 @@ bool ble_telemetry_take_command(control_cmd_t *out);
 
 /* 控制命令统计：成功解析 / 拒绝 */
 void ble_telemetry_command_stats(uint32_t *ok, uint32_t *err);
+
+/*
+ * ---- 导航消息（阶段 2）----
+ *
+ * 与遥测同一特征下行，用 "t":"nav" 区分。
+ * 取用语义与 ble_telemetry_fetch 一致：**取走即清标记**，
+ * 保证主循环只在有新数据时更新 UI（避免高频无效重绘）。
+ *
+ * @return true 表示本次取到一条新导航消息（内容写入 *out）。
+ */
+bool ble_telemetry_take_nav(nav_msg_t *out);
+
+/* 导航消息累计接收数（含被跳过的畸形包另计）*/
+void ble_telemetry_nav_stats(uint32_t *ok);
 
 #endif /* BLE_TELEMETRY_H */
