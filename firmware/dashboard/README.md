@@ -1,24 +1,26 @@
 # firmware/dashboard —— 固件工程
 
-基于微雪官方示例的初始化流程，运行 `simulator/ui/` 里的共享 UI 与 GNSS 解析代码。
+基于微雪官方示例的初始化流程，运行 `simulator/ui/` 里的共享 UI 与遥测解析代码。
 
-## 当前状态（2026-10-10）
+## 当前状态（2026-10-13）
 
 | 项目 | 状态 |
 |------|------|
-| 编译 | ✅ 已通过（arduino-cli + Arduino-ESP32 3.3.10） |
-| **烧录 / 真机运行** | ✅ **2026-10-11 已烧录并运行**（串口心跳、切页、校时均实测） |
-| Flash 占用 | 1,278,544 B（**40%**，应用分区 3 MB） |
-| RAM / 空闲堆 | 空闲堆 **246 KB**（运行中实测） |
-| RTC | ✅ 实测走时正确（串口每秒输出，跨分钟进位正常） |
-| 触摸 | ⏳ 待实测（滑页交互） |
-| GNSS 读取层 | ⏳ 未接入（速度页显示 `NO FIX`，属预期） |
+| 编译 | ✅ 通过（arduino-cli + Arduino-ESP32 3.3.10） |
+| **烧录 / 真机运行** | ✅ 已烧录运行，长稳 30 分钟无重启、堆零漂移 |
+| Flash 占用 | 2,375,619 B（**75%**，应用分区 3 MB） |
+| RAM | 全局 38%，运行空闲堆 ~120 KB |
+| RTC | ✅ 走时正确；支持 BLE UTC 自动校时 |
+| 触摸 | ✅ 100Hz 独立采样 + 按下锁存 + flick 翻页 |
+| 数据源 | ✅ iPhone Core Location 经 BLE（本板**无** GNSS） |
+| 表盘 | ✅ 三表盘，支持 BLE 远程切换 |
+| 设备控制 | ✅ 亮度 / 息屏（BLE Command 特征） |
 
 ## 目录结构与「共享源码」策略
 
 Arduino 只编译 sketch 目录内的源码，无法直接引用工程外的文件，因此：
 
-- **唯一源码**：`simulator/ui/`（UI 页面、字体、图片、NMEA 解析、时间源）
+- **唯一源码**：`simulator/ui/`（UI 页面、字体、图片、遥测解析、设备控制、表盘注册表）
 - **同步**：`tools/sync_firmware.sh` 复制到本目录（已在 `.gitignore` 中忽略，避免两份代码漂移）
 
 ```bash
@@ -73,32 +75,45 @@ Serial → 显示（Wire + gfx->begin + 亮度） → 触摸（CST9217 @0x5A）
    轮询更可靠；代价是每帧一次 I2C 读（~33 Hz，可接受）。
 3. **RTC 通过 `ui_timesrc_set_provider()` 注入**：UI 页面不关心时间来源；
    RTC 不可用时返回全 0，界面显示无效状态，**不伪造时间**。
-4. **GNSS 尚未接入**：`ui_speed_set_fix(false, 0)` 使速度页显示 `NO FIX`（正确降级表现）。
+4. **数据源为 BLE**：无遥测时 `ui_speed_set_fix(false, 0)` 使速度指针归零并显示链路态（正确降级，不显示旧值）。
 
 ## 串口命令（开发便利）
 
-连上 115200 串口后可直接输入命令（CDC 模式，见下方 FQBN 说明）：
+连上 115200 串口后可直接输入命令（CDC 模式，见下方 FQBN 说明）。
+**完整命令速查见仓库根 [`PROGRESS.md`](../../PROGRESS.md) 第十一节。**
 
-| 命令 | 作用 |
-|------|------|
-| `help` | 显示帮助 |
-| `time` | 显示 RTC 当前时间 |
-| `set YYYY-MM-DD HH:MM:SS` | **手动校准 RTC**（例：`set 2026-10-11 16:11:22`） |
-| `pages` | 列出页面与当前页 |
-| `page N` | 切到第 N 页（0=模拟时钟 1=数字时钟 2=速度表盘） |
+常用：`ble`（BLE 状态）、`face`（切表盘）、`spd`（诊断速度指针）、
+`trip`（行程）、`bright` / `screen`（亮度/息屏）、`time` / `set`（RTC 校时）。
 
 **RTC 上电兜底**：若 RTC 时间早于固件编译时间（说明从未校准或电池耗尽），
-自动用**编译时刻**初始化并在串口打印；之后可用上面的 `set` 命令或 GNSS UTC 校准。
+自动用**编译时刻**初始化并在串口打印；之后可用上面的 `set` 命令或 **BLE 下发的 UTC**（`ts_utc_ms`）校准。
 
 > 实测记录（2026-10-11）：烧录前 RTC 为官方示例写死的 `2024-09-24 11:09`；
 > 本固件启动后被兜底逻辑修正为编译时刻（2026-10-11），再用 `set` 精确校准到
 > `2026-10-11 16:11:22`，复查 2 秒后为 16:11:24 ✓
 
-## 待办（板卡到货后）
+## 当前状态
 
-1. 按官方 `09_LC76G_I2C` 的 I2C 协议实现 LC76G 读取层（0x50 写 / 0x54 读，先读长度再读数据块），
-   复用 `gnss_nmea.c` 解析 —— 见 `docs/gnss.md`；
-2. 首次上电验证：屏幕显示、触摸响应、RTC 走时；逐项记录串口日志；
-3. 先跑通官方 `01_HelloWorld` → `03_LVGL_PCF85063_simpleTime` → `09_LC76G_I2C`，
-   再烧本工程（`AI_CONTEXT.md` 里程碑 1 的验收顺序）；
-4. 野外实测定速：冷启动首次定位时间、速度跟随延迟、断定位恢复（里程碑 3）。
+板子已到货并完成全部验证（详见仓库根 [`PROGRESS.md`](../../PROGRESS.md)）：
+
+- **数据源**：iPhone Core Location 经 BLE 下发（本板**无** LC76G GNSS，GNSS 代码已删除）
+- **表盘**：模拟时钟 / 数字时钟 / 速度表，支持 BLE 远程切换
+- **控制**：亮度、息屏/亮屏（BLE Command 特征 `7D2A0004`）
+- **HUD**：航向 + 行程统计（里程/最高速/均速）
+- **性能**：滑页单帧 90–113ms（QSPI 全屏传输 43ms 为硬件下限）
+- **占用**：Flash 75%，RAM 38%
+
+### 构建注意
+
+```bash
+arduino-cli compile \
+  --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
+  --build-property "compiler.cpp.extra_flags=-DESP32QSPI_MAX_PIXELS_AT_ONCE=4096" \
+  --libraries ../../reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/libraries \
+  --upload -p /dev/cu.usbmodem101 .
+```
+
+- `PSRAM=opi` **必需**（S3R8 八线 PSRAM，全帧绘制缓冲用）
+- `-DESP32QSPI_MAX_PIXELS_AT_ONCE=4096` 为滑页性能优化，不可省
+- 跨文件改动后**不要复用 `--build-path`**（可能漏编译，已踩坑）
+

@@ -6,7 +6,12 @@
 ## 项目状态
 
 **当前：数据源为 iPhone Core Location + BLE（本机无 LC76G GNSS）。**
-改造任务书见 `AI_TASK_IPHONE_BLE_DASHBOARD.md`，协议见 `docs/ble.md`，测试记录见 `docs/test-results.md`。
+
+> 📌 **先看 [`PROGRESS.md`](PROGRESS.md)** —— 项目进度总览（单一事实来源）：
+> 做到哪一步、还差什么、已知问题、构建命令、串口命令速查。
+
+改造任务书见 [`AI_TASK_IPHONE_BLE_DASHBOARD.md`](AI_TASK_IPHONE_BLE_DASHBOARD.md)，
+协议见 [`docs/ble.md`](docs/ble.md)，测试记录见 [`docs/test-results.md`](docs/test-results.md)。
 
 - [x] 目录结构与文档骨架
 - [x] macOS 开发环境配置（Arduino IDE 2.3.10 + Arduino-ESP32 Core 3.3.10，见 `docs/setup-macos.md`）
@@ -17,17 +22,20 @@
 - [x] 页面切换：左右**滑动**分页（滚动容器 + 吸附，真机通过）
 - [x] 官方示例 01_HelloWorld / 03_LVGL_PCF85063_simpleTime 烧录验证（**真机通过**）
 - [x] 速度表盘 V5（驾驶员三态 + 白底 + 速度渐变，像素级验证）
+- [x] 滑页性能优化：单帧 243ms → **90-113ms**（烘焙表盘 + QSPI 调优 + 字体去抗锯齿）
+- [x] 静态表盘烘焙成图片（刻度/数字离线渲染，运行时只留指针）
 - [x] **阶段1 BLE 最小验证**（真机+macOS 联调）：广播 `CarDashboard`、接收并**跨 MTU 重组**解析 JSON、
       线程安全、数据过期置无效
 - [x] **阶段2 时间同步**：BLE `ts_utc_ms` → 系统时钟 + PCF85063 RTC（UTC+8），屏幕 `TIME SYNC→SYNCED`
 - [x] **阶段3 iPhone 前台 App**：`ios/CarDashboardPhone/`（SwiftUI + Core Location + Core Bluetooth）；
-      已生成 `.xcodeproj`，**对 iOS 26.5 SDK/Swift 6.3 编译+链接通过**（模拟器版与设备版）；未真机运行
+      已生成 `.xcodeproj`；**已在 iPhone 12（iOS 27）真机安装运行**，BLE 连接与遥测链路验证通过
 - [x] **阶段4 后台代码**：`requestBackground()`（始终授权 + 后台定位，`#if os(iOS)` 门控）；未实机验证
 - [x] **阶段5（部分）**：速度页五态 `BT OFF / WAIT GPS / NO FIX / STALE / LIVE`（真机逐态实测）；
       固件连续运行 21min+ 无崩溃、空闲堆平稳
-- [ ] **真机运行 iPhone App**（需 Xcode 下载 iOS 平台组件 + 签名 + 连接 iPhone SE 3）
-- [ ] 后台 / 锁屏 / CarPlay / 30min 整链路验收（任务书 §9，需实机驾驶，见 `docs/test-results.md`）
-- [x] GNSS NMEA 解析器与 44 项单测（本机无 GPS 模块，作为**休眠资产**保留，当前非活动数据源）
+- [x] **真机运行 iPhone App**（iPhone 12 / iOS 27，签名与安装通过）
+- [ ] 后台 / 锁屏 / 30min 整链路验收（任务书 §9，需实机驾驶，见 `docs/test-results.md`）
+- [x] 设备控制（亮度/息屏）+ 可更换表盘系统（BLE 端到端验证通过）
+- [x] 航向显示 + 行程统计（里程/最高速/均速）
 
 ## 目录结构
 
