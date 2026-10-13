@@ -9,6 +9,10 @@
 
 > 📌 **先看 [`PROGRESS.md`](PROGRESS.md)** —— 项目进度总览（单一事实来源）：
 > 做到哪一步、还差什么、已知问题、构建命令、串口命令速查。
+>
+> 🛠 **要改代码？看 [`docs/development-guide.md`](docs/development-guide.md)** ——
+> 「只改 UI / 新增表盘 / 改 App / 改协议」分别该动哪些文件，
+> 以及**已验证可行的能力清单**（可放心复用）。
 
 改造任务书见 [`AI_TASK_IPHONE_BLE_DASHBOARD.md`](AI_TASK_IPHONE_BLE_DASHBOARD.md)，
 协议见 [`docs/ble.md`](docs/ble.md)，测试记录见 [`docs/test-results.md`](docs/test-results.md)。

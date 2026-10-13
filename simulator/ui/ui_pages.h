@@ -19,7 +19,7 @@ extern "C" {
 typedef enum {
     UI_PAGE_ANALOG = 0, /* 模拟指针时钟 */
     UI_PAGE_DIGITAL,    /* 数字时钟（iPhone 息屏风格） */
-    UI_PAGE_SPEED,      /* 速度表盘（GNSS） */
+    UI_PAGE_SPEED,      /* 速度表盘（数据源：iPhone BLE 遥测）*/
     UI_PAGE_COUNT
 } ui_page_t;
 

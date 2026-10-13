@@ -11,6 +11,7 @@
 | 文件 | 职责 |
 |------|------|
 | [`PROGRESS.md`](PROGRESS.md)（本文）| **项目进度总览**：做到哪、还差什么、构建与串口速查 |
+| [`docs/development-guide.md`](docs/development-guide.md) | **开发指引**：「我要改 X，该动哪里」+ 已验证能力清单 |
 | [`docs/test-results.md`](docs/test-results.md) | **测试台账**（单一事实来源）：§9 矩阵 12 项、DoD 8 项、复测指引 |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | 排障记录：按主题索引，含根因分析与踩坑 |
 | [`docs/architecture.md`](docs/architecture.md) | 系统架构、模块划分、共享代码层 |
