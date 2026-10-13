@@ -342,6 +342,58 @@ static void lvgl_tick_cb(void *arg)
   lv_tick_inc(EXAMPLE_LVGL_TICK_PERIOD_MS);
 }
 
+/* ---------------- 设备控制（BLE 下行：亮度 / 息屏）---------------- */
+
+static uint8_t s_brightness = 200;   /* 当前亮度（0-255）*/
+static bool s_screen_off = false;    /* 息屏状态 */
+#define BRIGHTNESS_DEFAULT 200
+
+/* 应用亮度（带限幅；0 视为最低可见亮度，见 control_clamp_brightness） */
+static void apply_brightness(uint8_t v)
+{
+  s_brightness = v;
+  gfx->setBrightness(v);
+}
+
+static void apply_screen(bool off)
+{
+  if (off == s_screen_off) return;
+  s_screen_off = off;
+  if (off) {
+    gfx->displayOff();
+  }
+  else {
+    gfx->displayOn();
+    gfx->setBrightness(s_brightness); /* 唤醒后恢复亮度 */
+  }
+}
+
+/* 消费一条 BLE 下行控制命令（主循环调用，BLE 回调只暂存） */
+static void control_poll(void)
+{
+  control_cmd_t cmd;
+  if (!ble_telemetry_take_command(&cmd)) return;
+
+  switch (cmd.kind) {
+    case CONTROL_BRIGHTNESS: {
+      uint8_t v = control_clamp_brightness(cmd.value);
+      apply_brightness(v);
+      Serial.printf("[控制] 亮度 → %u\n", (unsigned)v);
+      break;
+    }
+    case CONTROL_SCREEN:
+      apply_screen(cmd.value == 0);
+      Serial.printf("[控制] %s\n", cmd.value == 0 ? "息屏" : "亮屏");
+      break;
+    case CONTROL_FACE:
+      /* 表盘切换（功能③）：当前尚无多表盘，先记录请求 */
+      Serial.printf("[控制] 请求切换表盘 id=%d（暂未实现多表盘）\n", (int)cmd.value);
+      break;
+    default:
+      break;
+  }
+}
+
 static bool display_init(void)
 {
   Wire.begin(IIC_SDA, IIC_SCL);
@@ -550,6 +602,8 @@ static void print_help(void)
   Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
   Serial.println("       bufmode [psram|internal]  查看/切换绘制缓冲（滑动性能 A/B 对比）");
+  Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
+  Serial.println("       screen on|off             亮屏 / 息屏");
   Serial.println("       rot 0|1|2|3              屏幕内容旋转（0=0° 1=90° 2=180° 3=270°）");
   Serial.println("       mem                      显示 LVGL/ESP 内存情况");
   Serial.println("       dump                     打印当前屏幕的元素树（排查元素缺失）");
@@ -608,6 +662,12 @@ static void print_ble(void)
   static const char *sn[] = { "BT OFF", "WAIT GPS", "NO FIX", "STALE", "LIVE" };
   int si = (s_last_status >= 0 && s_last_status <= UI_STATUS_OK) ? (int)s_last_status : 0;
   Serial.printf("   链路状态=%s\n", sn[si]);
+  {
+    uint32_t cok = 0, cerr = 0;
+    ble_telemetry_command_stats(&cok, &cerr);
+    Serial.printf("   控制命令=成功 %u / 拒绝 %u   亮度=%u 息屏=%s\n", (unsigned)cok,
+                  (unsigned)cerr, (unsigned)s_brightness, s_screen_off ? "是" : "否");
+  }
   Serial.printf("   本次启动复位原因=%s(码 %d)，已运行 %lu s\n", s_reset_reason,
                 s_reset_reason_code, (unsigned long)(millis() / 1000));
   Serial.printf("   平滑速度=%.1f km/h（原始 %.1f）\n",
@@ -712,6 +772,33 @@ static void process_command(char *cmd)
   }
   else if (strcmp(cmd, "scan") == 0) {
     print_scan();
+  }
+  else if (strncmp(cmd, "bright", 6) == 0) {
+    int v = atoi(cmd + 6);
+    if (v <= 0) {
+      Serial.printf("[控制] 当前亮度 %u，息屏=%s\n", (unsigned)s_brightness,
+                    s_screen_off ? "是" : "否");
+      Serial.println("       用法：bright <0-255>");
+    }
+    else {
+      apply_brightness(control_clamp_brightness(v));
+      Serial.printf("[控制] 亮度 → %u\n", (unsigned)s_brightness);
+    }
+  }
+  else if (strncmp(cmd, "screen", 6) == 0) {
+    const char *arg = cmd + 6;
+    if (strncmp(arg, " off", 4) == 0) {
+      apply_screen(true);
+      Serial.println("[控制] 息屏（发送 screen on 恢复）");
+    }
+    else if (strncmp(arg, " on", 3) == 0) {
+      apply_screen(false);
+      Serial.println("[控制] 亮屏");
+    }
+    else {
+      Serial.printf("[控制] 息屏=%s 亮度=%u（用法：screen on|off）\n",
+                    s_screen_off ? "是" : "否", (unsigned)s_brightness);
+    }
   }
   else if (strncmp(cmd, "bufmode", 7) == 0) {
     const char *arg = cmd + 7;
@@ -1047,6 +1134,7 @@ void loop()
 {
   s_loop_cnt++;                /* 性能：循环速率 */
   handle_serial();            /* 串口命令：校时 / 切页 */
+  control_poll();             /* BLE 下行控制：亮度 / 息屏 */
   ble_poll();                 /* 取 BLE 遥测 + 校时（无新数据直接返回） */
   ble_update();               /* 五态状态机，每循环驱动速度页 */
   /* 消费 flick：快速划动直接翻页（100Hz 采样判定，见 touch_sample_cb） */

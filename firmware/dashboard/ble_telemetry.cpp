@@ -5,6 +5,8 @@
  */
 #include "ble_telemetry.h"
 
+#include "control.h"
+
 #include <Arduino.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -18,6 +20,7 @@
 #define SERVICE_UUID        "7D2A0001-8F4A-4B7C-9D21-5E6A3B8C1000"
 #define TELEMETRY_CHAR_UUID "7D2A0002-8F4A-4B7C-9D21-5E6A3B8C1000"
 #define STATUS_CHAR_UUID    "7D2A0003-8F4A-4B7C-9D21-5E6A3B8C1000"
+#define COMMAND_CHAR_UUID   "7D2A0004-8F4A-4B7C-9D21-5E6A3B8C1000" /* 下行控制（亮度/息屏/表盘）*/
 
 #define PROTOCOL_VERSION 1
 #define ASM_BUF_MAX 512 /* 重组缓冲上限：JSON 包不得超过，超限丢弃 */
@@ -38,6 +41,8 @@ static uint32_t s_ok = 0;
 static uint32_t s_parse_err = 0;
 
 static BLECharacteristic *s_status = NULL;
+static portMUX_TYPE s_cmd_mux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint32_t s_cmd_ok = 0, s_cmd_err = 0;
 
 /* ---- JSON 重组（MTU 可能小于包长，一次消息会被拆成多个 write） ---- */
 static char s_asm[ASM_BUF_MAX];
@@ -86,6 +91,38 @@ static void handle_chunk(const char *data, size_t n)
         s_asm_len = 0;
     }
 }
+
+/* ---------------- 下行控制命令 ---------------- */
+
+static control_cmd_t s_pending_cmd = { CONTROL_NONE, 0 };
+static bool s_have_cmd = false;
+
+class CommandCallbacks : public BLECharacteristicCallbacks {
+public:
+    void onWrite(BLECharacteristic *c) override
+    {
+        String v = c->getValue();
+        unsigned n = v.length();
+        if (n == 0) return;
+
+        control_cmd_t cmd;
+        if (control_parse(v.c_str(), n, &cmd) && cmd.kind != CONTROL_NONE) {
+            /*
+             * 只在此处解析并暂存；硬件副作用（setBrightness / displayOff）
+             * 必须回到主循环执行——BLE 回调运行在 Bluedroid 任务里，
+             * 不能碰显示驱动（与遥测回调同一约定）。
+             */
+            portENTER_CRITICAL(&s_cmd_mux);
+            s_pending_cmd = cmd;
+            s_have_cmd = true;
+            portEXIT_CRITICAL(&s_cmd_mux);
+            s_cmd_ok++;
+        }
+        else {
+            s_cmd_err++;
+        }
+    }
+};
 
 /* ---------------- BLE 回调 ---------------- */
 
@@ -151,6 +188,11 @@ bool ble_telemetry_begin(void)
         s_status->setValue("CarDashboard v0");  /* 出厂状态 */
     }
 
+    BLECharacteristic *cmdc = svc->createCharacteristic(COMMAND_CHAR_UUID,
+                                                        BLECharacteristic::PROPERTY_WRITE);
+    if (cmdc == NULL) return false;
+    cmdc->setCallbacks(new CommandCallbacks());
+
     svc->start();
 
     BLEAdvertising *adv = BLEDevice::getAdvertising();
@@ -205,6 +247,27 @@ void ble_telemetry_stats(uint32_t *rx_bytes, uint32_t *ok, uint32_t *parse_err)
     if (rx_bytes != NULL) *rx_bytes = s_rx_bytes;
     if (ok != NULL) *ok = s_ok;
     if (parse_err != NULL) *parse_err = s_parse_err;
+}
+
+bool ble_telemetry_take_command(control_cmd_t *out)
+{
+    if (out == NULL) return false;
+
+    bool got = false;
+    portENTER_CRITICAL(&s_cmd_mux);
+    if (s_have_cmd) {
+        *out = s_pending_cmd;
+        s_have_cmd = false;
+        got = true;
+    }
+    portEXIT_CRITICAL(&s_cmd_mux);
+    return got;
+}
+
+void ble_telemetry_command_stats(uint32_t *ok, uint32_t *err)
+{
+    if (ok) *ok = s_cmd_ok;
+    if (err) *err = s_cmd_err;
 }
 
 void ble_telemetry_set_status(const char *status)

@@ -5,7 +5,7 @@ PYTHON  ?= python3
 CFLAGS  := -O1 -std=gnu99 -Wall -Wextra -I../simulator/ui
 SRC     := ../simulator/ui/gnss_nmea.c ../simulator/ui/telemetry.c
 
-TESTS   := test_nmea test_telemetry
+TESTS   := test_nmea test_telemetry test_control
 
 all: $(TESTS)
 
@@ -15,9 +15,13 @@ test_nmea: test_nmea.c ../simulator/ui/gnss_nmea.c
 test_telemetry: test_telemetry.c ../simulator/ui/telemetry.c
 	$(CC) $(CFLAGS) -o $@ $^
 
-run: test_nmea test_telemetry
+test_control: test_control.c ../simulator/ui/control.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+run: test_nmea test_telemetry test_control
 	./test_nmea
 	./test_telemetry
+	./test_control
 	@echo "--- iOS 侧纯逻辑（无需 iOS 运行时）---"
 	@swift ../tools/test_ios_logic.swift
 	@echo "--- UI 像素级回归（需已构建 simulator/dashboard_sim）---"
