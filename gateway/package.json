@@ -8,8 +8,8 @@
     "node": ">=18"
   },
   "scripts": {
-    "start": "node src/server.js",
+    "start": "node --env-file-if-exists=.env src/server.js",
     "test": "node --test \"test/**/*.test.js\"",
-    "probe": "node bin/probe.js"
+    "probe": "node --env-file-if-exists=.env bin/probe.js"
   }
 }
