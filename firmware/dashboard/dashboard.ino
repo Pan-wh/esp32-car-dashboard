@@ -540,6 +540,8 @@ static void restore_face_state(void)
 static void publish_faces_report(void)
 {
   static char buf[FACE_REPORT_BUF_SIZE];
+  /* 告知上报模块"当前是哪个表盘"，App 据此标注选中态 */
+  face_report_set_current(ui_pages_current_face());
   int len = face_report_build(buf, sizeof(buf));
   if (len <= 0) {
     Serial.printf("[表盘] 上报生成失败（len=%d）\n", len);

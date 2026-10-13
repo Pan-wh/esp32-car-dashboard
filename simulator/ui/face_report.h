@@ -14,7 +14,7 @@
  * ## 载荷格式
  *
  * ```json
- * {"t":"faces","v":1,"count":5,"mask":31,
+ * {"t":"faces","v":1,"count":5,"mask":31,"cur":1,
  *  "faces":[{"id":0,"name":"analog","label":"Analog","group":"clock","on":1}, ...]}
  * ```
  *
@@ -24,6 +24,8 @@
  *   - `group` ：模块分组 ASCII 名（App 据此分组并本地化分组标题）
  *   - `on`    ：1 启用 / 0 隐藏（滑动时跳过的表盘）
  *   - `mask`  ：启用位掩码（bit i = face id i），便于快速比对
+ *   - `cur`   ：**当前正在显示**的表盘 id。App 用它标注"正在用哪个"，
+ *               避免界面上的选中态与设备实际状态不一致
  *
  * ## 截断
  *
@@ -55,6 +57,12 @@ extern "C" {
  * 超过此长度的表盘会被省略，并置 `"truncated":1`。
  */
 #define FACE_REPORT_MAX_PAYLOAD 480
+
+/**
+ * 设置"当前表盘 id"（会随下次上报带出，字段名 cur）。
+ * 传入负数表示未知。不设置时默认 -1。
+ */
+void face_report_set_current(int face_id);
 
 /**
  * 生成表盘列表 JSON。

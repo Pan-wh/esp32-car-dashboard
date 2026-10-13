@@ -40,6 +40,9 @@ struct DeviceFaceReport: Equatable {
     /// 设备因载荷上限截断了列表 —— App 应提示"列表不完整"，
     /// 而不是把缺失的表盘当成"不存在"（那会让开关状态显示错误）。
     var truncated: Bool = false
+    /// **当前正在显示**的表盘 id（对应设备的 `cur` 字段；-1 = 未知）。
+    /// 界面据此标注"正在用哪个"，避免选中态与设备实际状态不一致。
+    var currentId: Int = -1
 
     /// 按分组聚合，保持设备给出的顺序（分组首次出现的先后）
     var grouped: [(group: String, faces: [DeviceFace])] {
@@ -91,6 +94,7 @@ enum DeviceFaceParser {
         var report = DeviceFaceReport()
         report.faces = faces.sorted { $0.id < $1.id } // 按 id 排序即注册顺序
         report.truncated = (root["truncated"] as? Int) == 1
+        report.currentId = (root["cur"] as? Int) ?? -1
         return report
     }
 }

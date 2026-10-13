@@ -23,6 +23,9 @@ static int g_pass, g_fail;
         }                                                                      \
     } while (0)
 
+/* 本文件用的简单断言（CHECK 宏已覆盖大部分；这个用于纯条件） */
+#define check_true(cond, msg) CHECK(cond, "%s", msg)
+
 /* 按固件真实顺序注册 5 个表盘（与 ui_pages.c 一致） */
 static void D(void *p) { (void)p; }
 
@@ -81,6 +84,15 @@ int main(void)
         CHECK(p != NULL, "第 %d 项应为 id=%d name=%s", i, i, want_order[i]);
         if (p) cursor = p + strlen(needle);
     }
+
+    printf("=== 当前表盘（cur）===\n");
+    /* 未设置时为 -1 */
+    check_true(strstr(buf, "\"cur\":-1") != NULL, "未设置时应为 -1");
+    /* 设置后应带出，App 据此标注"正在用哪个" */
+    face_report_set_current(2);
+    len = face_report_build(buf, sizeof(buf));
+    CHECK(len > 0 && strstr(buf, "\"cur\":2") != NULL, "设置后应上报 cur=2");
+    face_report_set_current(-1);
 
     printf("=== 分组 ===\n");
     CHECK(strstr(buf, "\"group\":\"clock\"") != NULL, "时钟组应为 clock");
