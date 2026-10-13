@@ -72,6 +72,33 @@ bool telemetry_parse(const char *json, size_t len, telemetry_msg_t *out);
 float telemetry_speed_kmh(const telemetry_msg_t *m);
 
 /*
+ * ---- 行程统计（功能④：里程 / 均速 / 最高速）----
+ *
+ * 由固件按固定周期调用 step 累积；纯逻辑放在共享层以便单测。
+ * 仅在 valid（速度有效且未过期）时累积里程，避免「失效时把旧速度当里程」。
+ */
+typedef struct {
+    double distance_km; /* 累计里程 */
+    float max_kmh;      /* 最高速度 */
+    double sum_kmh_ms;  /* 用于均速：速度×时间的积分 */
+    uint32_t time_ms;   /* 有效行驶时长 */
+} telemetry_trip_t;
+
+/* 清零 */
+void telemetry_trip_reset(telemetry_trip_t *t);
+
+/*
+ * 累积一步。
+ * @param speed_kmh 当前速度（km/h）
+ * @param valid     数据是否有效（无效则本步不计入）
+ * @param dt_ms     距上一步的毫秒数
+ */
+void telemetry_trip_step(telemetry_trip_t *t, float speed_kmh, bool valid, uint32_t dt_ms);
+
+/* 平均速度（按有效行驶时长加权；无有效时长返回 0） */
+float telemetry_trip_avg_kmh(const telemetry_trip_t *t);
+
+/*
  * 数据龄哨兵（与固件 ble_telemetry.h 的 BLE_AGE_UNKNOWN 对齐，集中定义避免两端漂移）
  */
 #define TELEMETRY_AGE_NEVER   (UINT32_MAX)     /* 从未收到过 */

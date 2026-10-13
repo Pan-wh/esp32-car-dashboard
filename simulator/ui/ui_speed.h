@@ -48,6 +48,12 @@ void ui_speed_set_driver_state(int state);
 void ui_speed_set_heading(int deg);
 
 /*
+ * 行程数据（功能④）：里程与最高速，显示在 V5 速度页底部（指针扫不到的区域）。
+ * 里程为 0 时不显示，避免空状态占据视觉。
+ */
+void ui_speed_set_trip(float distance_km, float max_kmh);
+
+/*
  * 数据链路状态（AI_TASK §6.4 五态）：驱动速度页顶部状态标签。
  * 与 ui_speed_set_fix()（控制指针/数字）正交：fix 管数值有效，status 管链路态。
  */

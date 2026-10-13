@@ -280,6 +280,45 @@ int main(void)
     test_smoothing();
     test_link_state();
 
+    /* ---------------- 行程统计（功能④）---------------- */
+    printf("=== 行程统计 ===\n");
+    {
+        telemetry_trip_t t;
+        telemetry_trip_reset(&t);
+        CHECK(t.distance_km == 0.0 && t.max_kmh == 0.0f && telemetry_trip_avg_kmh(&t) == 0.0f,
+              "复位后全零（均速无有效时长时为 0）");
+
+        /* 60 km/h 跑 1 分钟 → 1 km */
+        telemetry_trip_step(&t, 60.0f, true, 60000);
+        CHECK_NEAR(t.distance_km, 1.0, 1e-6, "60km/h × 60s = 1km");
+        CHECK_NEAR(telemetry_trip_avg_kmh(&t), 60.0, 1e-3, "均速 60");
+        CHECK(t.max_kmh == 60.0f, "最高速 60");
+
+        /* 再以 120 km/h 跑 30 秒 → 累计 2 km，最高 120 */
+        telemetry_trip_step(&t, 120.0f, true, 30000);
+        CHECK_NEAR(t.distance_km, 2.0, 1e-6, "累计 2km");
+        CHECK_NEAR(t.max_kmh, 120.0, 1e-3, "最高速更新为 120");
+        CHECK_NEAR(telemetry_trip_avg_kmh(&t), 80.0, 1e-3, "加权均速 (60*60+120*30)/90 = 80");
+
+        /* 无效数据不计入（关键原则：失效时不能把旧速度当里程） */
+        double before = t.distance_km;
+        telemetry_trip_step(&t, 999.0f, false, 60000);
+        CHECK_NEAR(t.distance_km, before, 1e-9, "无效步不计入里程");
+        CHECK(t.max_kmh == 120.0f, "无效步不影响最高速");
+
+        /* 负速度忽略 */
+        telemetry_trip_step(&t, -5.0f, true, 1000);
+        CHECK_NEAR(t.distance_km, before, 1e-9, "负速度忽略");
+
+        /* dt=0 忽略 */
+        telemetry_trip_step(&t, 50.0f, true, 0);
+        CHECK_NEAR(t.distance_km, before, 1e-9, "dt=0 忽略");
+
+        /* 复位 */
+        telemetry_trip_reset(&t);
+        CHECK(t.distance_km == 0.0 && t.max_kmh == 0.0f && t.time_ms == 0, "复位清空");
+    }
+
     printf("结果: %d 通过, %d 失败\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

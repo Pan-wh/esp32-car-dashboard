@@ -180,6 +180,12 @@ static telemetry_msg_t s_tel;
 static bool s_tel_valid = false; /* 最新一包是否有可用速度/定位 */
 static bool s_had_data = false;  /* 是否收到过任意遥测（区分 WAIT LOC 与 STALE） */
 static ui_speed_status_t s_last_status = UI_STATUS_CONNECTING;
+
+/* 行程统计（功能④）：主循环按周期累积；纯逻辑在 telemetry.c（已单测） */
+static telemetry_trip_t s_trip;
+static uint32_t s_trip_last_ms = 0;
+#define TRIP_STEP_MS 200 /* 每 200ms 累积一步 */
+
 static uint32_t s_implausible = 0; /* 被丢弃的不合理包计数（§7） */
 static telemetry_smooth_t s_smooth;  /* 速度平滑（§5.4，限制滞后、失效即重置） */
 static const char *s_reset_reason = "未知"; /* 本次启动的复位原因（启动时记录） */
@@ -604,6 +610,7 @@ static void print_help(void)
   Serial.println("       bufmode [psram|internal]  查看/切换绘制缓冲（滑动性能 A/B 对比）");
   Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
   Serial.println("       screen on|off             亮屏 / 息屏");
+  Serial.println("       trip [reset]              行程统计：里程/最高速/均速");
   Serial.println("       rot 0|1|2|3              屏幕内容旋转（0=0° 1=90° 2=180° 3=270°）");
   Serial.println("       mem                      显示 LVGL/ESP 内存情况");
   Serial.println("       dump                     打印当前屏幕的元素树（排查元素缺失）");
@@ -772,6 +779,21 @@ static void process_command(char *cmd)
   }
   else if (strcmp(cmd, "scan") == 0) {
     print_scan();
+  }
+  else if (strncmp(cmd, "trip", 4) == 0) {
+    const char *arg = cmd + 4;
+    if (strncmp(arg, " reset", 6) == 0) {
+      telemetry_trip_reset(&s_trip);
+      ui_speed_set_trip(0.0f, 0.0f);
+      Serial.println("[行程] 已清零");
+    }
+    else {
+      Serial.printf("[行程] 里程 %.2f km，最高 %.0f km/h，均速 %.0f km/h（有效 %lu s）\n",
+                    s_trip.distance_km, (double)s_trip.max_kmh,
+                    (double)telemetry_trip_avg_kmh(&s_trip),
+                    (unsigned long)(s_trip.time_ms / 1000));
+      Serial.println("       用法：trip | trip reset");
+    }
   }
   else if (strncmp(cmd, "bright", 6) == 0) {
     int v = atoi(cmd + 6);
@@ -981,6 +1003,8 @@ void setup()
    * 初始状态：无遥测 → 速度页显示无效（NO FIX / --），指针归零。
    * 收到有效 BLE 遥测后由 ble_poll 驱动。
    */
+  telemetry_trip_reset(&s_trip);
+  s_trip_last_ms = millis();
   ui_speed_set_fix(false, 0);
   ui_speed_set_status(UI_STATUS_CONNECTING); /* 初始 BT OFF */
   ui_clock_set_time_synced(false); /* 初始 TIME SYNC，BLE 校时后转 SYNCED */
@@ -1135,6 +1159,19 @@ void loop()
   s_loop_cnt++;                /* 性能：循环速率 */
   handle_serial();            /* 串口命令：校时 / 切页 */
   control_poll();             /* BLE 下行控制：亮度 / 息屏 */
+
+  /* 行程统计（功能④）：仅在链路 LIVE 且速度有效时累积，失效不计入 */
+  {
+    uint32_t now_trip = millis();
+    uint32_t dt_trip = now_trip - s_trip_last_ms;
+    if (dt_trip >= TRIP_STEP_MS) {
+      s_trip_last_ms = now_trip;
+      bool ok = (s_last_status == UI_STATUS_OK) && telemetry_plausible(&s_tel) &&
+                telemetry_speed_kmh(&s_tel) >= 0.0f;
+      telemetry_trip_step(&s_trip, telemetry_speed_kmh(&s_tel), ok, dt_trip);
+      ui_speed_set_trip((float)s_trip.distance_km, s_trip.max_kmh);
+    }
+  }
   ble_poll();                 /* 取 BLE 遥测 + 校时（无新数据直接返回） */
   ble_update();               /* 五态状态机，每循环驱动速度页 */
   /* 消费 flick：快速划动直接翻页（100Hz 采样判定，见 touch_sample_cb） */
