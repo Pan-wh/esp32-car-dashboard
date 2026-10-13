@@ -116,7 +116,7 @@ static void meter_draw_cb(lv_event_t *e)
 
 /*
  * 数字 1-12 已烘焙进 dial_analog 图片（原 create_numerals 已移除，
- * 12 个 lv_label 的绘制开销随之消失；字体 num_dial_38 也不再被引用）。
+ * 12 个 lv_label 的绘制开销随之消失；字体 num_dial_38 已随之删除）。
  */
 
 /* 中心圆点（连接三针）：白色底 + 橙色内点 */

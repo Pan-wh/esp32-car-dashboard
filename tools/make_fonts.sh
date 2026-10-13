@@ -64,12 +64,15 @@ fi
 
 # ---- 4) 生成 LVGL 字模 C 文件 ----
 cd simulator
+# 138px 大号时钟字体用 bpp=1（**不做抗锯齿**）：实测滑页（整屏重绘）时
+# 4bpp 抗锯齿需要逐像素混合，是数字时钟页的主要绘制成本之一；
+# 138px 字号足够大，去掉抗锯齿后边缘差异仅 2% 像素（>40 灰阶），而字模体积
+# 从 194KB 降到 51KB。详见 docs/troubleshooting.md 滑页优化记录。
 npx --yes lv_font_conv --font "../$SRC/inter-el-sub.ttf" \
-  --size 138 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h \
+  --size 138 --bpp 1 --format lvgl --no-compress --lv-include lvgl.h \
   -r 0x20-0x3A --lv-font-name clock_iphone_138 -o ui/font_clock_iphone_138.c
-npx --yes lv_font_conv --font "../$SRC/nunito-num-sub.ttf" \
-  --size 38 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h \
-  -r 0x30-0x39 --lv-font-name num_dial_38 -o ui/font_num_dial_38.c
+# 注：表盘数字 1-12 已烘焙进 dial_analog 图片（tools/make_dial_faces.py），
+# font_num_dial_38 不再需要，故此处不再生成（Nunito 子集仍保留给其他用途）。
 npx --yes lv_font_conv --font "../$SRC/noto-date-sub.ttf" \
   --size 26 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h \
   --symbols "0123456789月日星期一二三四五六 ·" --lv-font-name date_cjk_26 -o ui/font_date_cjk_26.c
