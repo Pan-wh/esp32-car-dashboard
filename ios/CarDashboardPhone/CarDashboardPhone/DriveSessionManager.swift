@@ -93,4 +93,24 @@ final class DriveSessionManager: ObservableObject {
         sentCount += 1
         lastLocationTime = location.lastLocation?.timestamp
     }
+
+    /*
+     * 发送节奏说明（真机长稳数据驱动）：
+     *
+     * 定时器固定 2Hz 触发（sendInterval = 0.5s），但**发送是否发生**取决于
+     * makePacket() 是否有新鲜位置。iOS 的定位回调频率受信号影响，室内实测
+     * 约 1.2–1.4Hz → 实际发送速率也随之降到 1.2–1.4Hz。
+     *
+     * 这曾导致仪表出现**瞬态 STALE**：若某次定位回调延迟，1.2Hz 下累计
+     * 3 个周期（2.5s）无包就会触及仪表的 2.5s 超时阈值。
+     *
+     * 采用「固定定时器 + 新鲜度校验」而非"每个定位回调都立刻发"是有意为之：
+     *   - 避免定位回调突发（iOS 补发多个缓存点）时瞬时刷屏；
+     *   - 位置超 3s 陈旧则不发（§6.3 不得用旧值冒充当前值）。
+     *
+     * 仪表侧的应对：2.5s 阈值 + 数据龄单调增长提示，属于正确的降级表现。
+     * 如需进一步减少瞬态 STALE，应优先提高 iOS 定位回调频率
+     * （desiredAccuracy 已为 BestForNavigation，distanceFilter 已为 None，
+     *  故只能依赖信号质量；室外/行驶中会自然恢复到 ≈2Hz）。
+     */
 }

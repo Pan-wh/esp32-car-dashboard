@@ -201,6 +201,7 @@ static uint32_t s_trip_last_ms = 0;
 
 static uint32_t s_implausible = 0; /* 被丢弃的不合理包计数（§7） */
 static telemetry_ramp_t s_ramp;      /* 速度线性斜坡（#2：按时间匀速逼近目标，消除跳针）*/
+static telemetry_debounce_t s_deb;   /* 状态显示防抖（抑制瞬态 STALE 闪烁）*/
 static const char *s_reset_reason = "未知"; /* 本次启动的复位原因（启动时记录） */
 static int s_reset_reason_code = -1;        /* esp_reset_reason() 原始值 */
 
@@ -1084,6 +1085,7 @@ void setup()
    */
   telemetry_trip_reset(&s_trip);
   telemetry_ramp_reset(&s_ramp);
+  telemetry_debounce_reset(&s_deb);
   s_trip_last_ms = millis();
   ui_speed_set_fix(false, 0);
   ui_speed_set_status(UI_STATUS_CONNECTING); /* 初始 BT OFF */
@@ -1219,12 +1221,26 @@ static void ble_update(void)
   telemetry_link_t link = telemetry_link_state(ble_telemetry_connected(), s_had_data,
                                                ble_telemetry_age_ms(), s_tel_valid,
                                                BLE_STALE_MS, (telemetry_link_t)s_last_status);
-  ui_speed_status_t st = (link == LINK_HOLD) ? s_last_status : (ui_speed_status_t)link;
 
-  ui_speed_set_status(st);
-  s_last_status = st;
+  /*
+   * ⚠️ 两个状态**必须分开**（安全优先原则）：
+   *
+   *   link_raw —— 未经防抖的真实判定，用于**指针与数据有效性**决策：
+   *               数据一过期就归零，绝不因防抖而用旧值冒充当前车速（§6.3）。
+   *   link_disp —— 加了防抖、**仅用于屏幕状态标签**：
+   *               室内静止时 iOS 定位降到约 1.25Hz，偶发延迟会擦到 2.5s
+   *               阈值，标签闪一下 STALE（真机长稳实测）；防抖消除该闪烁，
+   *               而真实断流仍在连续 3 次判定后照常上报 STALE。
+   */
+  telemetry_link_t link_raw = (link == LINK_HOLD) ? (telemetry_link_t)s_last_status : link;
+  telemetry_link_t link_disp = telemetry_debounce_apply(&s_deb, link_raw);
+  if (link_disp == LINK_HOLD) link_disp = (telemetry_link_t)s_last_status;
 
-  if (st == UI_STATUS_OK) {
+  ui_speed_status_t st_disp = (ui_speed_status_t)link_disp;
+  ui_speed_set_status(st_disp);
+  s_last_status = st_disp;
+
+  if (link_raw == LINK_OK) {
     bool speed_ok = s_tel.speed_valid && s_tel.speed_mps >= 0.0f;
     ui_speed_set_fix(true, 0);
     if (speed_ok) {

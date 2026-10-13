@@ -158,6 +158,34 @@ typedef enum {
 } telemetry_link_t;
 
 /*
+ * ---- 链路状态防抖（消除瞬态 STALE 闪烁）----
+ *
+ * 背景（真机长稳实测）：室内静止时 iOS 会把定位更新降到约 1.25Hz
+ * （设备不动时的省电策略，非缺陷）。此时若某次回调略延迟，累计 2.5s
+ * 无包就会触及超时阈值 → 状态标签瞬间闪一下 STALE 又回到 LIVE，
+ * 用户可见"状态偶尔跳变"。
+ *
+ * 设计原则（安全优先，只对**显示**加防抖）：
+ *   - STALE 需**连续 N 次**判定才真正切换（抑制抖动闪烁）；
+ *   - 恢复到 LIVE 等"好消息"**立即生效**（不能延迟告知已恢复）；
+ *   - **指针行为不受防抖影响**——数据过期仍按规则归零，
+ *     绝不用旧值冒充当前车速（§6.3）。
+ */
+#define TELEMETRY_STALE_DEBOUNCE_N 3 /* 连续 3 次判定（约 3 个采样周期）才切 STALE */
+
+typedef struct {
+    int stale_streak; /* 连续判定为 STALE 的次数 */
+} telemetry_debounce_t;
+
+void telemetry_debounce_reset(telemetry_debounce_t *d);
+
+/*
+ * 对状态机输出做防抖。raw 为 telemetry_link_state() 的原始判定，
+ * 返回应当**显示**的状态。指针/数据有效性判断请直接使用 raw，不要用本函数结果。
+ */
+telemetry_link_t telemetry_debounce_apply(telemetry_debounce_t *d, telemetry_link_t raw);
+
+/*
  * 计算当前链路状态。
  *   connected   : BLE 是否已连接
  *   had_data    : 是否收到过任意遥测
