@@ -44,8 +44,7 @@ bool ui_img_inflate(lv_img_dsc_t *dsc, void *out_buf, size_t out_bytes)
     return true;
 }
 
-int ui_img_inflate_all(lv_img_dsc_t *const *imgs, const char *const *names,
-                       int n, void *(*alloc)(size_t))
+int ui_img_inflate_all(lv_img_dsc_t *const *imgs, int n, void *(*alloc)(size_t))
 {
     if (imgs == NULL || alloc == NULL || n <= 0) return 0;
 

@@ -285,7 +285,7 @@ int main(int argc, char **argv)
     {
         lv_img_dsc_t *imgs[] = { &dial_analog, &dial_speed,
                                  &driver_normal, &driver_spirited, &driver_speeding };
-        ui_img_inflate_all(imgs, NULL, 5, malloc);
+        ui_img_inflate_all(imgs, 5, malloc);
     }
 
     ui_pages_init();
@@ -312,8 +312,6 @@ int main(int argc, char **argv)
             }
         }
     }
-
-    /* NMEA 日志回放：无硬件时验证「NMEA → 解析 → UI」整条链路 */
 
     Uint32 deadline = run_ms ? SDL_GetTicks() + run_ms : 0;
     Uint32 last_tick = SDL_GetTicks();
@@ -442,8 +440,6 @@ int main(int argc, char **argv)
                 }
             }
         }
-
-        /* NMEA 回放推进（每帧检查，按时间倍速喂语句） */
 
         lv_timer_handler();
 

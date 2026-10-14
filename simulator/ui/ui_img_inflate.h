@@ -64,13 +64,14 @@ size_t ui_img_inflate_size(const lv_img_dsc_t *dsc);
  * 单张失败不影响其它图：分配不到就保持索引图（功能不受影响，只是绘制变慢）。
  *
  * @param imgs  图像描述符数组
- * @param names 与 imgs 对应的名字（仅用于日志，可为 NULL）
  * @param n     数量
  * @param alloc 分配函数；返回 NULL 表示分配失败
  * @return 成功充气的张数
+ *
+ * 注：早期还有一个 `names` 参数自称"仅用于日志"，但**两个调用处都传 NULL、
+ *     函数体也从未使用**，属死参数，已删除。
  */
-int ui_img_inflate_all(lv_img_dsc_t *const *imgs, const char *const *names,
-                       int n, void *(*alloc)(size_t));
+int ui_img_inflate_all(lv_img_dsc_t *const *imgs, int n, void *(*alloc)(size_t));
 
 /*
  * 把已充气的 RGB565 图片左上角底色原地改为 LVGL 色键并启用透明。
