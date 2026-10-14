@@ -185,11 +185,10 @@ screen /dev/cu.usbmodem101 115200
 | `help` | 全部命令 |
 | `ble` | BLE 连接/遥测/控制统计 + 复位原因 |
 | `face [id\|next\|prev]` | 查看/切换表盘 |
-| `spd [值\|reset]` | 诊断：查询/强制设置速度指针 |
 | `trip [reset]` | 行程统计 |
 | `bright <0-255>` / `screen on\|off` | 亮度 / 息屏 |
+| `lvrot [0\|1\|2\|3]` | 临时切换正式旋转策略（不写入 NVS）|
 | `mem` | 内存情况 |
-| `touch` | 触摸采样诊断 |
 | `dump` | 打印屏幕元素树 |
 
 ### 1.8 上板冒烟检查（烧录后必做）

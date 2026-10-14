@@ -169,7 +169,7 @@ cd simulator && make -j8
 # 2) UI 像素级回归（10 项，改 UI 必跑）
 python3 tools/ui_regression.py
 
-# 3) 全部单测（207 项，确认没碰坏逻辑）
+# 3) 全部单测（确认没碰坏逻辑）
 cd tests && make run PYTHON=<python路径>
 
 # 4) 同步到固件 + 编译（确保真机可用）
@@ -251,7 +251,7 @@ UI_STATUS_OK          /* LIVE     */
 |------|------|
 | `cd simulator && make -j8` | ✅ |
 | `python3 tools/ui_regression.py` | ✅ 10 项 |
-| `cd tests && make run` | ✅ 207 项 |
+| `cd tests && make run` | ✅ 全部通过 |
 | `tools/sync_firmware.sh` | ✅ |
 | 固件编译 | ✅ Flash __% |
 | 截图预览 | （附截图路径或描述）|

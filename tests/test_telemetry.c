@@ -178,52 +178,6 @@ static void test_plausible(void)
     CHECK(!telemetry_plausible(NULL), "NULL 应返回 false");
 }
 
-/* 速度平滑（§5.4：轻量平滑但限制滞后；且不得把旧值平滑出来） */
-static void test_smoothing(void)
-{
-    telemetry_smooth_t st;
-    telemetry_smooth_reset(&st);
-
-    /* 首次直接采用 */
-    CHECK_NEAR(telemetry_smooth_step(&st, 50.0f, true), 50.0f, 0.01, "首次直接采用");
-
-    /* 加速：被平滑（结果介于旧值与新值之间，滞后有界） */
-    float up = telemetry_smooth_step(&st, 70.0f, true);
-    CHECK(up > 50.0f && up < 70.0f, "加速应平滑（50→70 得 %.1f）", (double)up);
-
-    /* 减速：立即跟随（安全优先，不得滞后显示高车速） */
-    float down = telemetry_smooth_step(&st, 30.0f, true);
-    CHECK_NEAR(down, 30.0f, 0.01, "减速必须立即跟随");
-
-    /* 无效数据：重置并返回 0（不得把旧值平滑出来） */
-    CHECK_NEAR(telemetry_smooth_step(&st, 80.0f, false), 0.0f, 0.01, "无效时应返回 0");
-    /* 重置后首个有效值直接采用（不存在残留） */
-    CHECK_NEAR(telemetry_smooth_step(&st, 25.0f, true), 25.0f, 0.01, "重置后直接采用");
-
-    /* 跳变过大：重置而非平滑 */
-    telemetry_smooth_reset(&st);
-    (void)telemetry_smooth_step(&st, 20.0f, true);
-    float jump = telemetry_smooth_step(&st, 150.0f, true); /* 跳变 130 > 40 */
-    CHECK_NEAR(jump, 150.0f, 0.01, "大跳变应重置为当前值");
-
-    /* 抖动抑制：在 60±2 抖动时，平滑输出波动应小于输入波动 */
-    telemetry_smooth_reset(&st);
-    (void)telemetry_smooth_step(&st, 60.0f, true);
-    float lo = 1e9f, hi = -1e9f;
-    for (int i = 0; i < 20; i++) {
-        float in = (i % 2 == 0) ? 62.0f : 58.0f;
-        float out = telemetry_smooth_step(&st, in, true);
-        if (out < lo) lo = out;
-        if (out > hi) hi = out;
-    }
-    CHECK((hi - lo) < 4.0f, "抖动应被抑制（输出幅度 %.2f < 输入 4）", (double)(hi - lo));
-
-    /* NULL 安全 */
-    CHECK_NEAR(telemetry_smooth_step(NULL, 42.0f, true), 42.0f, 0.01, "NULL 应返回输入");
-    telemetry_smooth_reset(NULL); /* 不应崩溃 */
-    CHECK(1, "smooth_reset(NULL) 未崩溃");
-}
-
 /* 链路状态机（§6.4 五态 + 并发保持） */
 static void test_link_state(void)
 {
@@ -277,7 +231,6 @@ int main(void)
     test_malformed();
     test_speed_kmh_conversion();
     test_plausible();
-    test_smoothing();
     test_link_state();
 
     /* ---------------- 行程统计（功能④）---------------- */

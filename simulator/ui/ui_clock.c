@@ -47,6 +47,22 @@ void ui_clock_set_time(int hour, int minute, int mon, int mday, int wday)
     static const char *WD[] = { "日", "一", "二", "三", "四", "五", "六" };
     char buf[40];
 
+    /*
+     * ⚠️ wday 必须做边界检查 —— 这是一个已发生的**崩溃点**（Core 1 LoadProhibited）。
+     *
+     * 来源链：rtc_time_provider() 把 PCF85063 的星期寄存器**原样**填进 tm_wday
+     * （out->tm_wday = dt.getWeek()）。该寄存器若返回 7 或更大（未初始化 /
+     * 写坏 / I2C 读错），WD[wday] 就会越界取出**野指针**，交给 snprintf 的 %s
+     * 即触发 LoadProhibited 崩溃，表现为设备随机重启。
+     *
+     * 实测 backtrace（2026-10-14）：
+     *   ui_clock_set_time (ui_clock.c:54) ← clock_tick_cb (ui_clock.c:63)
+     *   ← snprintf ← _svfprintf_r，EXCVADDR = 0xffcfff6f
+     *
+     * 因此这里**绝不能**直接索引，越界一律按周日处理。
+     */
+    if (wday < 0 || wday > 6) wday = 0;
+
     /* 无前导零，如 9:41（iPhone 息屏样式） */
     snprintf(buf, sizeof(buf), "%d:%02d", hour, minute);
     lv_label_set_text(s_label_time, buf);
@@ -58,7 +74,8 @@ void ui_clock_set_time(int hour, int minute, int mon, int mday, int wday)
 static void clock_tick_cb(lv_timer_t *timer)
 {
     (void)timer;
-    struct tm lt;
+    /* 必须清零：时间源万一没填满，未初始化的字段会变成栈垃圾 */
+    struct tm lt = {0};
     ui_timesrc_now(&lt);
     ui_clock_set_time(lt.tm_hour, lt.tm_min, lt.tm_mon, lt.tm_mday, lt.tm_wday);
 }
