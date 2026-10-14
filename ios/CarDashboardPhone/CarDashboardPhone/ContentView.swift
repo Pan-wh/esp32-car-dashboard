@@ -207,9 +207,13 @@ struct ContentView: View {
             .onChange(of: selectedRotation) { _, deg in
                 _ = session.ble.setRotation(deg)
             }
-            // 备注（用户要求写在这里）：说明 90°/270° 为何与另两个角度不同。
-            // 早期固件在 90°/270° 下确实会撕裂 —— 现已改走面板硬件旋转解决。
-            Text("90° / 270° 走面板硬件旋转，不会撕裂；0° / 180° 走 LVGL 软件旋转（实测最丝滑）。若仪表固件停留在旧版本，90° / 270° 仍会出现画面撕裂，请更新固件。")
+            // 备注（用户要求写在这里）：说明 90°/270° 为何与另两个角度走不同机制。
+            //
+            // 措辞依据**固件当前实际行为**（dashboard.ino 的 set_display_rotation）：
+            //   const bool hw = (deg == 90 || deg == 270);
+            // 即只有 90°/270° 走面板硬件旋转，0°/180° 仍走 LVGL。
+            // ⚠️ 不要写"若固件是旧版本会撕裂"这类话 —— 固件已修复，那样只会让人误解。
+            Text("90° / 270° 由面板硬件完成旋转（MADCTL），不会撕裂；0° / 180° 由 LVGL 完成，渲染开销最低。方向保存在仪表中，重启后保持。")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
