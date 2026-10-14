@@ -72,6 +72,13 @@ size_t ui_img_inflate_size(const lv_img_dsc_t *dsc);
 int ui_img_inflate_all(lv_img_dsc_t *const *imgs, const char *const *names,
                        int n, void *(*alloc)(size_t));
 
+/*
+ * 把已充气的 RGB565 图片左上角底色原地改为 LVGL 色键并启用透明。
+ * 适合驾驶员这类“纯色背景 + 前景”的图片：不增加 Flash/PSRAM，也不改前景像素。
+ * 未充气的索引图不会修改并返回 false。
+ */
+bool ui_img_make_bg_transparent(lv_img_dsc_t *dsc);
+
 #ifdef __cplusplus
 }
 #endif

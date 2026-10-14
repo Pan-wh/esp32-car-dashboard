@@ -1,8 +1,15 @@
 /**
  * ui_speed.h —— 速度表盘页
  *
- * 数据来源：目前为模拟值（GNSS 模块未接入）。接入后由 GNSS 模块调用
- * ui_speed_set_speed() / ui_speed_set_fix() 驱动，页面代码不用改。
+ * 数据来源：iPhone Core Location 经 BLE 下发（本板**无 GNSS**），
+ * 由固件调用 ui_speed_set_speed() / ui_speed_set_fix() 驱动。
+ *
+ * 设计：**单一「驾驶员表盘」**（外圈刻度 + 指针 + 中央驾驶员插画 + 底部数字）。
+ * 驾驶员的疲惫/专注/激动表情随车速变化。
+ *
+ * ⚠️ 早期曾有 V1–V4 四个候选变体与运行时 `--variant` 切换，
+ *    定稿后已**全部移除**（`ui_speed_set_variant` 亦已不存在）。
+ *    若在旧文档/脚本里看到 `--variant`，那是过期的。
  */
 #ifndef UI_SPEED_H
 #define UI_SPEED_H
@@ -14,10 +21,6 @@
 extern "C" {
 #endif
 
-
-/* 设计变体数量（选型用；定稿后保留选定的一种）
- * 0=V1 数字+外环弧, 1=V2 指针表, 2=V3 超大数字+底部弧带, 3=V4 分段条,
- * 4=V5 驾驶员表盘（外圈刻度 + 指针 + 中央插画 + 底部辅助信息） */
 
 /* 驾驶员插画状态 */
 #define UI_DRIVER_AUTO     (-1) /* 按速度自动 */
@@ -39,12 +42,11 @@ void ui_speed_set_fix(bool valid, int sats);
 /* 驾驶员插画状态（UI_DRIVER_AUTO 表示按速度自动切换） */
 void ui_speed_set_driver_state(int state);
 
-/* 设置航向（度，0=正北顺时针）；GNSS 接入前为模拟值 */
+/* 设置航向（度，0=正北顺时针）；保留数据接口，当前极简表盘不显示。 */
 void ui_speed_set_heading(int deg);
 
 /*
- * 行程数据（功能④）：里程与最高速，显示在 V5 速度页底部（指针扫不到的区域）。
- * 里程为 0 时不显示，避免空状态占据视觉。
+ * 行程数据（功能④）：保留统计接口，当前极简表盘不显示。
  */
 void ui_speed_set_trip(float distance_km, float max_kmh);
 

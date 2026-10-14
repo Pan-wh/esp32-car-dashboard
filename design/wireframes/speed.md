@@ -1,14 +1,19 @@
-# 设计稿：速度表盘页（4 个变体选型）
+# 设计稿：速度表盘页（**已定稿：驾驶员表盘**）
+
+> 📌 **状态（2026-10-14）**：已定稿为 **V5「驾驶员表盘」**（外圈刻度 + 指针 +
+> 中央驾驶员插画 + 底部数字），并已**上机烧录验证**。
+> 早期用于选型的 **V1–V4 与运行时 `--variant` 切换已全部移除**；
+> 本文的变体章节保留作为**设计决策的历史记录**，其中的 `--variant` 命令
+> **已不可用**（看到即视为过期）。
 
 > 按 AI_CONTEXT.md 第 8 节交付要求编写。
-> 状态：**4 个变体均已用真实 LVGL 代码实现并在模拟器渲染验证**；待用户选定后定稿。
-> 数据来源：GNSS（LC76G）未接入，当前由 `--speed` 模拟；接入后由 GNSS 模块调用
-> `ui_speed_set_speed()` / `ui_speed_set_fix()` 驱动。
+> 数据来源：**iPhone Core Location 经 BLE 下发**（本板无 GNSS），由固件调用
+> `ui_speed_set_speed()` / `ui_speed_set_fix()` 驱动。离屏预览可用 `--speed` 模拟。
 
 ## 1. 页面用途与核心信息
 
 驾驶中**一眼读取当前车速（km/h）**，其次判断**定位是否可信**。
-因此：速度数字必须最大、最醒目；GNSS 状态弱化但可辨；无定位时必须明确显示"无效"，
+因此：速度必须一眼可读（指针 + 刻度 + 数字三者配合）；链路状态弱化但可辨；无定位时必须明确显示"无效"，
 **绝不显示伪造速度**（对应 AI_CONTEXT 第 3 阶段要求）。
 
 ## 2. 四个变体的布局（均 466×466 圆屏）
@@ -109,7 +114,7 @@ python3 tools/make_images.py      # 按 STATE_FILES 映射转换三张素材
 生成命令：
 
 ```bash
-./dashboard_sim --offscreen --ms 900 --page 2 --variant 4 --speed 60 --time 14:32:00 --shot out.bmp
+./dashboard_sim --offscreen --ms 900 --page 2 --speed 60 --time 14:32:00 --shot out.bmp
 ```
 
 
@@ -118,7 +123,7 @@ python3 tools/make_images.py      # 按 STATE_FILES 映射转换三张素材
 |------|------|------|
 | 主 | 速度数字 | Inter Bold 150px，白 `#F5F5F7` |
 | 次 | 单位 km/h | Inter Medium 26px，中灰 `#8A919E` |
-| 次 | GNSS 状态 | Inter Medium 26px，中灰（无效时转暗灰 `#26262A`） |
+| 次 | 链路/定位状态 | Inter Medium 26px，中灰（无效时转暗灰 `#26262A`） |
 | 装饰 | 进度/指针/刻度 | 强调蓝 `#0A84FF`；轨道 `#26262A`；刻度浅灰 `#C8C8CE` / `#5A5A5F` |
 | 底 | 背景 | 纯黑 `#000000`（OLED 省电） |
 
@@ -154,7 +159,7 @@ python3 tools/make_images.py      # 按 STATE_FILES 映射转换三张素材
 
 ## 7. 真机验证方法
 
-1. `ui/` 并入固件，GNSS 模块解析 LC76G 的 NMEA（RMC/GGA）后调用
+1. 固件收到 iPhone 遥测后调用
    `ui_speed_set_speed()` / `ui_speed_set_fix()`。
 2. 检查项：1.75" 屏上 150px 数字的可读距离；蓝 `#0A84FF` 在强光下对比度；
    `--` 无效状态是否一眼可辨（避免误读为 0）。
@@ -176,15 +181,16 @@ python3 tools/make_images.py      # 按 STATE_FILES 映射转换三张素材
 
 ## 预览图
 
-- 四变体对比：`simulator/shots/speed_variants.png`
+- ~~四变体对比：`simulator/shots/speed_variants.png`~~（变体机制已移除，仅存历史）
 - 无定位状态：`simulator/shots/speed_nofix.png`
 
 生成命令：
 
 ```bash
 cd simulator
-./dashboard_sim --offscreen --ms 900 --page 2 --variant N --speed 88 --shot out.bmp
-./dashboard_sim --offscreen --ms 900 --page 2 --variant 0 --nofix --shot out.bmp
+# 注：--variant 已移除；下面两条命令现在等价（都渲染定稿的驾驶员表盘）
+./dashboard_sim --offscreen --ms 900 --page 2 --speed 88 --shot out.bmp
+./dashboard_sim --offscreen --ms 900 --page 2 --nofix --shot out.bmp
 ```
 
 ## 实现位置

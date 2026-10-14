@@ -67,3 +67,29 @@ int ui_img_inflate_all(lv_img_dsc_t *const *imgs, const char *const *names,
     }
     return ok;
 }
+
+bool ui_img_make_bg_transparent(lv_img_dsc_t *dsc)
+{
+    if (dsc == NULL || dsc->data == NULL) return false;
+    if (dsc->header.cf == LV_IMG_CF_TRUE_COLOR_CHROMA_KEYED) return true;
+    if (dsc->header.cf != LV_IMG_CF_TRUE_COLOR) return false;
+    if (dsc->header.w <= 0 || dsc->header.h <= 0) return false;
+
+    size_t pixels_n = (size_t)dsc->header.w * (size_t)dsc->header.h;
+    uint16_t *pixels = (uint16_t *)(uintptr_t)dsc->data;
+    /*
+     * ⚠️ **假设左上角像素就是背景色**（"纯色背景 + 前景"的图成立）。
+     * 已核实当前三张驾驶员图：四角同色（纯白），白色占 23.7% 且环绕前景。
+     * **换图时必须确认这一点** —— 若左上角落在前景上，下面就会把前景
+     * 某个颜色整片抠成透明（表现为人物出现空洞）。
+     */
+    const uint16_t bg = pixels[0];
+    const lv_color_t key_color = LV_COLOR_CHROMA_KEY;
+    const uint16_t key = key_color.full;
+
+    for (size_t i = 0; i < pixels_n; i++) {
+        if (pixels[i] == bg) pixels[i] = key;
+    }
+    dsc->header.cf = LV_IMG_CF_TRUE_COLOR_CHROMA_KEYED;
+    return true;
+}
