@@ -109,7 +109,39 @@ static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
 #define QSPI_SPEED_HZ 80000000
 #endif
 
-static Arduino_CO5300 *gfx = new Arduino_CO5300(
+/*
+ * ── 可运行时设置地址偏移的 CO5300 ──────────────────────────────
+ *
+ * 为什么需要子类：本面板需要 6 像素地址偏移，而
+ * `Arduino_TFT::setRotation()` 只提供 4 组**写死**的偏移组合
+ * （本工程构造参数下只有 (6,0) / (0,0) / (0,6) 三种），
+ * 硬件旋转下正确的那一组可能不在其中，且 `_xStart` 是 `uint8_t`（只能加、不能减）。
+ * 基类成员是 `protected`，子类可访问 → 由此开放任意偏移，标定从此只需几秒。
+ */
+class DashboardCO5300 : public Arduino_CO5300 {
+public:
+  DashboardCO5300(Arduino_DataBus *b, int8_t rst, uint8_t r, int16_t w, int16_t h,
+                  uint8_t c1, uint8_t r1, uint8_t c2, uint8_t r2)
+      : Arduino_CO5300(b, rst, r, w, h, c1, r1, c2, r2) {}
+
+  /** 设置地址窗口偏移；-1 表示保持当前值 */
+  void setGap(int xo, int yo)
+  {
+    if (xo >= 0) _xStart = (uint8_t)xo;
+    if (yo >= 0) _yStart = (uint8_t)yo;
+    _currentX = -1; /* 强制下一帧重设 CASET/PASET */
+    _currentY = -1;
+  }
+  int gapX(void) const { return (int)_xStart; }
+  int gapY(void) const { return (int)_yStart; }
+};
+
+/*
+ * 构造参数末尾 4 个是 col_offset1 / row_offset1 / col_offset2 / row_offset2。
+ * 官方 BSP 的做法是 `esp_lcd_panel_set_gap(panel, 0x06, 0)` —— **固定 (6, 0)**，
+ * 旋转时只改 MADCTL、不动 gap。本工程照此对齐：(6, 0, 0, 0)。
+ */
+static DashboardCO5300 *gfx = new DashboardCO5300(
     bus, LCD_RESET /* RST */, 0 /* rotation */, LCD_WIDTH /* width */, LCD_HEIGHT /* height */,
     6, 0, 0, 0);
 
@@ -179,6 +211,8 @@ static bool te_wait_rise(uint32_t timeout_us)
 #define TOUCHROT_PREF_KEY "trot"  /* 触摸坐标变换档位，见 touch_apply_rot() */
 static uint8_t s_hw_rot = 0;
 static uint8_t s_touch_rot = 0;
+static int8_t s_gap_x = 0; /* 硬件旋转下的地址偏移（现场标定）*/
+static int8_t s_gap_y = 6;
 
 
 static lv_disp_draw_buf_t draw_buf;
@@ -687,12 +721,34 @@ static void set_display_rotation(int deg, bool persist)
   const bool hw = (deg == 90 || deg == 270);
   if (hw) {
     const uint8_t mad = (deg == 270) ? 0x60 : 0xA0;
+    const uint8_t librot = (deg == 270) ? 3 : 1;
+
+    /*
+     * ⚠️ **必须先调库的 setRotation()**，再覆盖 MADCTL —— 顺序不能反。
+     *
+     * 本面板需要 6 像素地址偏移（构造参数 col_offset1=6）。
+     * `Arduino_TFT::setRotation()` 会按角度把偏移重新分配到正确的轴：
+     *     0°    → _xStart = COL_OFFSET1 = 6, _yStart = 0
+     *     case3 → _xStart = ROW_OFFSET2 = 0, _yStart = COL_OFFSET1 = 6   ← 偏移移到 y 轴
+     * 若只写 MADCTL 而不调它，偏移会留在 x 轴上，而面板寻址轴已变 →
+     * **边缘出现一条几像素宽的窄带被切**（真机已复现）。
+     *
+     * 但库的 setRotation() 也会写它自己的 MADCTL（且它的位定义与标准不同），
+     * 所以必须**在它之后再覆盖**成我们要的硬件旋转值。
+     */
+    gfx->setRotation(librot);
+    bus->beginWrite();
+    bus->writeC8D8(0x36, mad); /* 覆盖 MADCTL */
+    bus->endWrite();
+
     s_touch_rot = (deg == 270) ? 3 : 1; /* 270° 已现场标定；90° 按镜像推得，未逐一标定 */
+    /*
+     * 硬件旋转下的地址偏移：由 gap 命令实测标定。
+     * 当前值来自现场标定（见 docs/rotation-tearing-fieldtest.md）。
+     */
+    gfx->setGap(s_gap_x, s_gap_y);
     lv_disp_set_rotation(NULL, LV_DISP_ROT_NONE); /* 必须清零，否则与硬件旋转叠加 */
     s_display_rot = 0;
-    bus->beginWrite();
-    bus->writeC8D8(0x36, mad);
-    bus->endWrite();
     s_hw_rot = mad;
     lv_obj_invalidate(lv_scr_act());
   }
@@ -1111,6 +1167,8 @@ static void print_help(void)
   Serial.println("       te sync [on|off]          开关「等 V-blank 再写」（撕裂抑制，可 A/B）");
   Serial.println("       hwrot [0|60|A0|C0]        硬件旋转（持久化；90/270° 必须用它才不撕裂）");
   Serial.println("       touchrot [0-3]            触摸坐标变换档位（硬件旋转下标定用）");
+  Serial.println("       edges                     四边彩线标定（再执行一次清除）");
+  Serial.println("       gap [x y]                 直接设置面板地址偏移（标定用）");
   Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
   Serial.println("       screen on|off             亮屏 / 息屏");
   Serial.println("       trip [reset]              行程统计：里程/最高速/均速");
@@ -1449,6 +1507,94 @@ static void process_command(char *cmd)
       }
       else {
         Serial.println("[触摸] 取值 0-3");
+      }
+    }
+  }
+  else if (strncmp(cmd, "gap", 3) == 0) {
+    /*
+     * 【标定】直接设置面板地址窗口偏移（绕过库的写死组合）。
+     *   gap              查看
+     *   gap <x> <y>      设置（-1 = 保持原值）
+     * 配合 edges 画的四边彩线，一眼就能判断哪个值让四条边都齐全。
+     */
+    const char *arg = cmd + 3;
+    while (*arg == ' ') arg++;
+    int xo = -1, yo = -1;
+    if (*arg == '\0' || sscanf(arg, "%d %d", &xo, &yo) < 1) {
+      Serial.printf("[旋转] 地址偏移 gap = (%d, %d)%s", gfx->gapX(), gfx->gapY(), "\n");
+    }
+    else {
+      gfx->setGap(xo, yo);
+      lv_obj_invalidate(lv_scr_act());
+      Serial.printf("[旋转] 地址偏移 -> (%d, %d)%s", gfx->gapX(), gfx->gapY(), "\n");
+    }
+  }
+
+  else if (strcmp(cmd, "edges") == 0) {
+    /*
+     * 【一次性标定】在**逻辑画面**的四条边各画一条 3px 彩线：
+     *     上=绿(y=0)  下=黄(y=H-1)  左=红(x=0)  右=蓝(x=W-1)
+     * 拍照后即可精确看出：每条逻辑边落在屏幕何处、被切掉多少像素、
+     * 以及是哪个轴发生了偏移 —— 比反复盲试偏移高效得多。
+     * 再执行一次 edges 即清除。
+     */
+    static lv_obj_t *s_edge[4] = {NULL, NULL, NULL, NULL};
+    if (s_edge[0] != NULL) {
+      for (int i = 0; i < 4; i++) {
+        if (s_edge[i]) lv_obj_del(s_edge[i]);
+        s_edge[i] = NULL;
+      }
+      Serial.println("[标定] 边线已清除");
+    }
+    else {
+      const lv_color_t col[4] = {lv_color_hex(0x00FF00), lv_color_hex(0xFFFF00),
+                                 lv_color_hex(0xFF0000), lv_color_hex(0x0000FF)};
+      const int16_t X[4] = {0, 0, 0, LCD_WIDTH - 3};
+      const int16_t Y[4] = {0, LCD_HEIGHT - 3, 0, 0};
+      const int16_t W[4] = {LCD_WIDTH, LCD_WIDTH, 3, 3};
+      const int16_t H[4] = {3, 3, LCD_HEIGHT, LCD_HEIGHT};
+      const char *nm[4] = {"上(绿)", "下(黄)", "左(红)", "右(蓝)"};
+      for (int i = 0; i < 4; i++) {
+        s_edge[i] = lv_obj_create(lv_scr_act());
+        lv_obj_remove_style_all(s_edge[i]);
+        lv_obj_set_pos(s_edge[i], X[i], Y[i]);
+        lv_obj_set_size(s_edge[i], W[i], H[i]);
+        lv_obj_set_style_bg_color(s_edge[i], col[i], 0);
+        lv_obj_set_style_bg_opa(s_edge[i], LV_OPA_COVER, 0);
+        lv_obj_clear_flag(s_edge[i], LV_OBJ_FLAG_SCROLLABLE);
+      }
+      Serial.printf("[标定] 已画四条边线（3px）：%s=%s / %s=%s / %s=%s / %s=%s%s",
+                    nm[0], "y0", nm[1], "yH-1", nm[2], "x0", nm[3], "xW-1", "\n");
+    }
+  }
+  else if (strncmp(cmd, "librot", 6) == 0) {
+    /*
+     * 【现场标定】切换**库的**旋转索引（0-3），再重写当前 MADCTL。
+     *
+     * 为什么要它：本面板需要 6px 地址偏移，而 `Arduino_TFT::setRotation()`
+     * 按索引把偏移分配到不同轴：
+     *     0 → (_xStart=6, _yStart=0)   1 → (0,0)   2 → (0,0)   3 → (0,6)
+     * 硬件旋转下正确的轴向需实测确定，此命令免去反复烧录。
+     */
+    const char *arg = cmd + 6;
+    while (*arg == ' ') arg++;
+    if (*arg == '\0') {
+      Serial.printf("[旋转] 库旋转索引标定：用法 librot 0|1|2|3（再重写 MADCTL=0x%02X）\n",
+                    (unsigned)s_hw_rot);
+    }
+    else {
+      int v = atoi(arg);
+      if (v >= 0 && v <= 3) {
+        gfx->setRotation((uint8_t)v); /* 库会设置 _xStart/_yStart */
+        bus->beginWrite();
+        bus->writeC8D8(0x36, s_hw_rot ? s_hw_rot : 0x00); /* 再覆盖 MADCTL */
+        bus->endWrite();
+        lv_obj_invalidate(lv_scr_act());
+        Serial.printf("[旋转] 库旋转索引 -> %d，MADCTL 重写为 0x%02X%s", v,
+                      (unsigned)(s_hw_rot ? s_hw_rot : 0x00), "\n");
+      }
+      else {
+        Serial.println("[旋转] librot 取值 0-3");
       }
     }
   }
