@@ -1,0 +1,144 @@
+{
+  "label": "hw-rotation-clean",
+  "timestamp": "2026-10-14 11:36:29",
+  "duration_s": 90,
+  "hz": 2.0,
+  "uptime_start": 369,
+  "uptime_end": 463,
+  "uptime_delta": 94,
+  "reset_reason": "USB",
+  "samples_run": 18,
+  "samples_render": 17,
+  "loop_per_s": {
+    "min": 119,
+    "max": 184,
+    "p50": 178
+  },
+  "redraw_per_s": {
+    "min": 5,
+    "max": 37,
+    "p50": 7
+  },
+  "render_max_ms": {
+    "min": 23,
+    "p50": 24,
+    "p90": 67,
+    "max": 68
+  },
+  "duty_pct": {
+    "p50": 9,
+    "max": 38
+  },
+  "qspi_max_ms": {
+    "p50": 7,
+    "max": 19
+  },
+  "spikes_gt80": 0,
+  "spikes_gt100": 0,
+  "spikes_gt150": 0,
+  "per_window": [
+    {
+      "render_max_ms": 31,
+      "duty_pct": 7,
+      "qspi_sum_ms": 107,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 23,
+      "duty_pct": 14,
+      "qspi_sum_ms": 212,
+      "qspi_max_ms": 6
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 20,
+      "qspi_sum_ms": 326,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 67,
+      "duty_pct": 12,
+      "qspi_sum_ms": 183,
+      "qspi_max_ms": 19
+    },
+    {
+      "render_max_ms": 67,
+      "duty_pct": 11,
+      "qspi_sum_ms": 174,
+      "qspi_max_ms": 19
+    },
+    {
+      "render_max_ms": 28,
+      "duty_pct": 30,
+      "qspi_sum_ms": 466,
+      "qspi_max_ms": 8
+    },
+    {
+      "render_max_ms": 68,
+      "duty_pct": 38,
+      "qspi_sum_ms": 602,
+      "qspi_max_ms": 19
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 10,
+      "qspi_sum_ms": 161,
+      "qspi_max_ms": 6
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 10,
+      "qspi_sum_ms": 162,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 25,
+      "duty_pct": 8,
+      "qspi_sum_ms": 118,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 9,
+      "qspi_sum_ms": 146,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 9,
+      "qspi_sum_ms": 153,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 23,
+      "duty_pct": 9,
+      "qspi_sum_ms": 146,
+      "qspi_max_ms": 6
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 9,
+      "qspi_sum_ms": 148,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 26,
+      "duty_pct": 9,
+      "qspi_sum_ms": 144,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 10,
+      "qspi_sum_ms": 166,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 9,
+      "qspi_sum_ms": 140,
+      "qspi_max_ms": 7
+    }
+  ],
+  "credible": true
+}
