@@ -154,6 +154,33 @@ static bool te_wait_rise(uint32_t timeout_us)
   return true;
 }
 
+/* ══════════════ 旋转：软件 vs 硬件 ══════════════
+ *
+ * 实测结论（2026-10-14，见 docs/rotation-tearing-fieldtest.md §5.5）：
+ *
+ *   LVGL 软件旋转：
+ *     0°  / 180° —— 路径便宜（180° 只是原地首尾反转），**实测不撕裂**
+ *     90° / 270° —— 需 4 向旋转，渲染涨到 25–33 ms，
+ *                   超过面板一帧 16.78 ms → **撕裂**
+ *   面板硬件旋转（MADCTL 0x36）：
+ *     由面板自己完成，**LVGL 零开销** —— 实测 270° 不撕裂、无 1000ms 尖刺
+ *
+ * 所以 90°/270° 走硬件旋转。**这是本机唯一能消除 90°/270° 撕裂的办法**
+ * （TE 对齐无效：它只能对齐写入起点，不能缩短渲染耗时）。
+ *
+ * ⚠️ MADCTL 是**寄存器写入，NVS 记不住**，复位/掉电即丢失 →
+ *    必须持久化并在启动时重放，否则一重启方向就跳回默认（已踩过）。
+ *
+ * ⚠️ 硬件旋转时 LVGL **必须**不旋转，否则两者叠加。
+ *    同时把 s_display_rot 置 0，使 flick_delta_to_logical() 自然变成空操作
+ *    （它按 driver->rotated 判断）—— 触摸坐标改在采样处变换，两处不会打架。
+ */
+#define HWROT_PREF_KEY "hwrot"    /* MADCTL 值，0 = 不用硬件旋转 */
+#define TOUCHROT_PREF_KEY "trot"  /* 触摸坐标变换档位，见 touch_apply_rot() */
+static uint8_t s_hw_rot = 0;
+static uint8_t s_touch_rot = 0;
+
+
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t buf[LCD_WIDTH * LCD_HEIGHT / 10]; /* 与官方示例相同的缓冲大小 */
 
@@ -396,14 +423,17 @@ static void touch_sample_cb(void *)
 
   portENTER_CRITICAL(&s_tp_mux);
   if (n > 0) {
+      /* 面板原生坐标 → 显示坐标（硬件旋转时两者相差一个旋转）*/
+      int16_t tx = touch_x[0], ty = touch_y[0];
+      touch_apply_rot(&tx, &ty);
     if (!was) { /* 按下瞬间：记录起点，用于 flick 判定 */
-      s_tp_start_x = touch_x[0];
-      s_tp_start_y = touch_y[0];
+      s_tp_start_x = tx;
+      s_tp_start_y = ty;
       s_tp_start_ms = millis();
     }
     s_tp_pressed = true;
-    s_tp_x = touch_x[0];
-    s_tp_y = touch_y[0];
+    s_tp_x = tx;
+    s_tp_y = ty;
     s_tp_press_latch = true; /* 记录「期间按下过」 */
   }
   else {
@@ -639,17 +669,57 @@ static void publish_faces_report(void)
 static void set_display_rotation(int deg, bool persist)
 {
   deg = ((deg % 360) + 360) % 360;
-  lv_disp_set_rotation(NULL, rot_deg_to_enum(deg));
-  s_display_rot = deg;
+
+  /*
+   * ★ 机制选择：让「视觉角度」成为**唯一真相来源**，由这里推导实现方式。
+   *
+   *   90° / 270° → 面板硬件旋转（MADCTL）：LVGL 零开销，实测**不撕裂**
+   *   0°  / 180° → LVGL 软件旋转：路径便宜，实测**不撕裂**且最丝滑
+   *
+   * 为什么不能在 90°/270° 用软件旋转：LVGL 这两个角度要做 4 向旋转，
+   * 渲染涨到 25–33 ms，超过面板一帧 16.78 ms → **撕裂**（真机反复确认）。
+   * 详见 docs/rotation-tearing-fieldtest.md §5.5。
+   *
+   * 触摸：硬件旋转下 LVGL 自己不做旋转，所以坐标必须我们变换；
+   *      0°/180° 走软件旋转时 LVGL 的 indev 会自动逆变换，无需处理。
+   *      档位 3 是现场标定出来的（270° 下触摸完全跟手）。
+   */
+  const bool hw = (deg == 90 || deg == 270);
+  if (hw) {
+    const uint8_t mad = (deg == 270) ? 0x60 : 0xA0;
+    s_touch_rot = (deg == 270) ? 3 : 1; /* 270° 已现场标定；90° 按镜像推得，未逐一标定 */
+    lv_disp_set_rotation(NULL, LV_DISP_ROT_NONE); /* 必须清零，否则与硬件旋转叠加 */
+    s_display_rot = 0;
+    bus->beginWrite();
+    bus->writeC8D8(0x36, mad);
+    bus->endWrite();
+    s_hw_rot = mad;
+    lv_obj_invalidate(lv_scr_act());
+  }
+  else {
+    if (s_hw_rot != 0) {
+      bus->beginWrite();
+      bus->writeC8D8(0x36, 0x00); /* 关掉硬件旋转 */
+      bus->endWrite();
+      s_hw_rot = 0;
+      lv_obj_invalidate(lv_scr_act());
+    }
+    s_touch_rot = 0;
+    lv_disp_set_rotation(NULL, rot_deg_to_enum(deg));
+    s_display_rot = deg;
+  }
 
   if (persist) {
     Preferences prefs;
     if (prefs.begin(ROT_PREF_NS, false)) {
       prefs.putInt(ROT_PREF_KEY, deg);
+      prefs.putUChar(TOUCHROT_PREF_KEY, s_touch_rot);
       prefs.end();
     }
   }
-  Serial.printf("[旋转] 屏幕方向 -> %d°%s\n", deg, persist ? "（已存 NVS）" : "（未持久化）");
+  Serial.printf("[旋转] 屏幕方向 -> %d°（%s）%s\n", deg,
+                hw ? "面板硬件旋转" : "LVGL 软件旋转",
+                persist ? "（已存 NVS）" : "（未持久化）");
 }
 
 /** 启动时恢复上次保存的方向；无记录则用编译期默认 DISPLAY_ROT */
@@ -667,6 +737,64 @@ static void restore_display_rotation(void)
   Serial.printf("[旋转] 启动恢复方向 = %d°（来源：%s）\n", s_display_rot,
                 from_nvs ? "NVS（上次用户设置）" : "编译期默认 DISPLAY_ROT");
 }
+
+/** 只写 MADCTL 寄存器并整屏重绘（不做持久化）*/
+static void apply_madctl(uint8_t v)
+{
+  bus->beginWrite();
+  bus->writeC8D8(0x36, v);
+  bus->endWrite();
+  s_hw_rot = v;
+  lv_obj_invalidate(lv_scr_act()); /* 触发整屏重绘，否则残留旧方向画面 */
+}
+
+/**
+ * 触摸坐标变换（面板原生 → 显示坐标）。
+ *
+ * 面板的 MADCTL 会把**画面**旋转，但 CST9217 的触摸坐标固定在**物理面板**上，
+ * 两者相差一个旋转。所以在采样处就变换成显示坐标 —— 这样 LVGL 的 indev 与
+ * flick 手势判定**都自动正确**，不必各自打补丁。
+ *
+ * @param x,y 原地变换
+ */
+static void touch_apply_rot(int16_t *x, int16_t *y)
+{
+  if (s_touch_rot == 0) return;
+  const int16_t W = LCD_WIDTH - 1, H = LCD_HEIGHT - 1;
+  const int16_t ix = *x, iy = *y;
+  switch (s_touch_rot) {
+    case 1: *x = (int16_t)(H - iy); *y = ix; break;                 /* 顺时针 90° */
+    case 2: *x = (int16_t)(W - ix); *y = (int16_t)(H - iy); break;  /* 180° */
+    case 3: *x = iy; *y = (int16_t)(W - ix); break;                 /* 逆时针 90°（= 顺时针 270°）*/
+    default: break;
+  }
+}
+
+/**
+ * 设置并（可选）持久化硬件旋转。
+ * @param v       MADCTL 值；0 = 关闭硬件旋转（回到 LVGL 软件旋转）
+ * @param persist 是否写 NVS
+ */
+static void set_hw_rotation(uint8_t v, bool persist)
+{
+  apply_madctl(v);
+  if (v != 0) {
+    /* 硬件旋转生效时，LVGL 必须不旋转，否则叠加成错误方向 */
+    lv_disp_set_rotation(NULL, LV_DISP_ROT_NONE);
+    s_display_rot = 0;
+  }
+  if (persist) {
+    Preferences prefs;
+    if (prefs.begin(ROT_PREF_NS, false)) {
+      prefs.putUChar(HWROT_PREF_KEY, v);
+      prefs.putUChar(TOUCHROT_PREF_KEY, s_touch_rot);
+      prefs.end();
+    }
+  }
+  Serial.printf("[旋转] 硬件旋转 MADCTL=0x%02X，触摸变换档=%u%s\n", (unsigned)v,
+                (unsigned)s_touch_rot, persist ? "（已存 NVS）" : "（未持久化）");
+}
+
 
 static void control_poll(void)
 {
@@ -981,6 +1109,8 @@ static void print_help(void)
   Serial.println("       bufmode [psram|internal]  查看/切换绘制缓冲（滑动性能 A/B 对比）");
   Serial.println("       te [on|off]               撕裂同步：使能并实测 TE 引脚（GPIO13）翻转");
   Serial.println("       te sync [on|off]          开关「等 V-blank 再写」（撕裂抑制，可 A/B）");
+  Serial.println("       hwrot [0|60|A0|C0]        硬件旋转（持久化；90/270° 必须用它才不撕裂）");
+  Serial.println("       touchrot [0-3]            触摸坐标变换档位（硬件旋转下标定用）");
   Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
   Serial.println("       screen on|off             亮屏 / 息屏");
   Serial.println("       trip [reset]              行程统计：里程/最高速/均速");
@@ -1261,6 +1391,64 @@ static void process_command(char *cmd)
       }
       else {
         Serial.println("[TE] ❌ 未检测到翻转 —— 该引脚未输出 TE（或需先使能 0x35）");
+      }
+    }
+  }
+  else if (strncmp(cmd, "hwrot", 5) == 0) {
+    /*
+     * 硬件旋转（推荐用法，**会持久化**）。
+     *
+     *   hwrot           查看当前设置
+     *   hwrot 0         关闭硬件旋转（回到 LVGL 软件旋转）
+     *   hwrot 60        启用 MADCTL=0x60（实测：USB 口朝下、不撕裂）
+     *   hwrot A0        启用 MADCTL=0xA0
+     *
+     * 与 `madctl` 的区别：**madctl 是实验命令、不持久化**；
+     * hwrot 写 NVS，并在启动时自动重放（MADCTL 是寄存器，复位即丢）。
+     * 启用时会自动把 LVGL 旋转清零，避免两者叠加。
+     */
+    const char *arg = cmd + 5;
+    while (*arg == ' ') arg++;
+    if (*arg == ' ') {
+      Serial.printf("[旋转] 硬件旋转 MADCTL=0x%02X（%s），触摸变换档=%u\n", (unsigned)s_hw_rot,
+                    s_hw_rot ? "已启用" : "未启用", (unsigned)s_touch_rot);
+      Serial.println("       用法: hwrot 0 | hwrot 60 | hwrot A0 | hwrot C0（会存 NVS）");
+    }
+    else {
+      unsigned int v = 0;
+      if (sscanf(arg, "%x", &v) == 1 && v <= 0xFF) {
+        set_hw_rotation((uint8_t)v, true);
+      }
+      else {
+        Serial.println("[旋转] 无效值，例: hwrot 60");
+      }
+    }
+  }
+  else if (strncmp(cmd, "touchrot", 8) == 0) {
+    /*
+     * 触摸坐标变换档位（硬件旋转必需，否则触摸错位）。
+     *   0 = 不变换   1 = 顺时针 90°   2 = 180°   3 = 逆时针 90°
+     * 现场标定：逐个试，哪个档位下触摸跟手就是它。
+     */
+    const char *arg = cmd + 8;
+    while (*arg == ' ') arg++;
+    if (*arg == ' ') {
+      Serial.printf("[触摸] 变换档=%u（0=不变换 1=顺时针90° 2=180° 3=逆时针90°）\n",
+                    (unsigned)s_touch_rot);
+    }
+    else {
+      int v = atoi(arg);
+      if (v >= 0 && v <= 3) {
+        s_touch_rot = (uint8_t)v;
+        Preferences prefs;
+        if (prefs.begin(ROT_PREF_NS, false)) {
+          prefs.putUChar(TOUCHROT_PREF_KEY, s_touch_rot);
+          prefs.end();
+        }
+        Serial.printf("[触摸] 变换档 -> %d（已存 NVS）\n", v);
+      }
+      else {
+        Serial.println("[触摸] 取值 0-3");
       }
     }
   }
