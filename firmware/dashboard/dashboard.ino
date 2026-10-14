@@ -21,6 +21,7 @@
  *   未连接 / 无定位 / 数据过期时，速度页显示无效状态（不伪造旧值）。
  */
 #include <Arduino.h>
+#include <nvs.h>
 #include <Preferences.h>   /* NVS：持久化屏幕方向等用户设置 */
 #include <esp_heap_caps.h> /* PSRAM 分配 */
 #include <Wire.h>
@@ -135,6 +136,61 @@ static uint8_t s_touch_rot = 0;
  */
 static bool s_dbg_force = false;
 static inline bool dbg_on(void) { return s_dbg_force || (bool)Serial; }
+
+/*
+ * ── 中断间隔诊断（区分"中断被关"与"任务被抢占"）────────────────────
+ *
+ * 主循环偶发停滞约 1 秒（实测 lv_timer_handler 单次耗时 1003~1035ms）。
+ * 两种可能必须区分开，否则会修错地方：
+ *   A) **全局中断被关闭**（flash 写入 / cache 禁用）→ 连硬件中断也停
+ *   B) **主循环任务被更高优先级任务抢占** → 中断照常，只是任务拿不到 CPU
+ *
+ * 做法：1kHz 硬件定时器中断只做"打时间戳"，记录相邻两次中断的最大间隔。
+ *   - 该间隔 ≈ 1 秒 → 情况 A（中断被关）
+ *   - 该间隔很小    → 情况 B（任务被抢占）
+ */
+/*
+ * ── 主循环分阶段计时（定位"~1 秒停滞"落在哪一段）──────────────────
+ *
+ * 已知：停滞时硬件中断间隔最大仅 0us（中断正常），且提高 loop 优先级会显著恶化
+ * → 是**阻塞等待**而非被抢占。那就必须测出"哪一段调用阻塞了"。
+ */
+enum { PH_SERIAL = 0, PH_CONTROL, PH_FACE, PH_RAMP, PH_TRIP, PH_POLL, PH_TOUCH, PH_RENDER, PH_N };
+static const char *const PH_NAME[PH_N] = { "串口", "BLE控制", "表盘检测", "斜坡",
+                                           "行程", "BLE轮询", "触摸", "渲染" };
+static uint32_t s_ph_max_us[PH_N] = { 0 };
+static uint32_t s_ph_t0 = 0;
+static inline void ph_begin(void) { s_ph_t0 = micros(); }
+static inline void ph_end(int i)
+{
+  uint32_t d = micros() - s_ph_t0;
+  if (d > s_ph_max_us[i]) s_ph_max_us[i] = d;
+}
+
+/*
+ * 单次 lv_timer_handler() 里的 flush 次数。
+ * 停滞时若该值极大（几十上百），说明是"一次调用内反复重绘"
+ * （渲染循环 / 对象自失效），而非某一次写入慢 —— 这与
+ * "中断正常 + QSPI 单次仅 7ms"的观测吻合。
+ */
+static uint32_t s_flush_in_call = 0;
+static uint32_t s_flush_per_call_max = 0;
+
+static volatile uint32_t s_isr_gap_us_max = 0;
+static volatile uint32_t s_isr_cnt = 0;
+static uint32_t s_isr_last_us = 0;
+
+static void IRAM_ATTR isr_gap_cb(void)
+{
+  uint32_t now = micros();
+  if (s_isr_last_us != 0) {
+    uint32_t gap = now - s_isr_last_us;
+    /* 只统计异常间隔，避免常态抖动把最大值抬高 */
+    if (gap > 2000 && gap > s_isr_gap_us_max) s_isr_gap_us_max = gap;
+  }
+  s_isr_last_us = now;
+  s_isr_cnt++;
+}
 
 #define PANEL_NATIVE_GAP_X 6
 #define PANEL_NATIVE_GAP_Y 0
@@ -306,6 +362,7 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
 {
   uint32_t t_flush = micros();
   s_flush_cnt++;
+  s_flush_in_call++;
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
   {
@@ -333,6 +390,7 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
  * 且能持续上报位置 —— LVGL 的手势（滑页）需要按住期间的连续坐标）。
  */
 /* 100Hz 触摸采样（esp_timer 回调，独立于主循环/渲染） */
+static esp_timer_handle_t s_tp_timer = NULL; /* 供 `tp` 命令停/起，用于定位 I2C 锁竞争 */
 static void touch_sample_cb(void *)
 {
   uint8_t n = touch.getPoint(touch_x, touch_y, touch.getSupportTouchPoint());
@@ -921,9 +979,8 @@ static void lvgl_init(void)
   {
     const esp_timer_create_args_t tp_args = { .callback = &touch_sample_cb,
                                              .name = "tp_sample" };
-    esp_timer_handle_t tp_timer = NULL;
-    if (esp_timer_create(&tp_args, &tp_timer) == ESP_OK) {
-      esp_timer_start_periodic(tp_timer, 10000); /* 10ms = 100Hz（1MHz 时基 → 微秒） */
+    if (esp_timer_create(&tp_args, &s_tp_timer) == ESP_OK) {
+      esp_timer_start_periodic(s_tp_timer, 10000); /* 10ms = 100Hz（1MHz 时基 → 微秒） */
     }
   }
 
@@ -1113,7 +1170,85 @@ static void print_dump(void)
 
 static void process_command(char *cmd)
 {
-  if (strncmp(cmd, "verbose", 7) == 0) {
+  if (strcmp(cmd, "nvs") == 0) {
+    /*
+     * 【诊断】NVS 分区用量与 GC 统计。
+     * 动机：停滞时"中断正常但 lv_timer_handler 耗时 1 秒、且 flush 次数不变"，
+     * 指向 flash 操作（cache 被禁用会让所有走 cache 的访问停顿），
+     * 而 NVS 垃圾回收正是"约 1 秒"量级。若 NVS 接近写满，GC 会频繁触发。
+     */
+    nvs_stats_t st;
+    esp_err_t e1 = nvs_get_stats(NULL, &st);
+    if (e1 != ESP_OK) {
+      Serial.printf("[NVS] 取统计失败: %d\n", (int)e1);
+    }
+    else {
+      Serial.printf("[NVS] 命名空间 %u｜已用条目 %u｜空闲条目 %u｜可用条目 %u｜总条目 %u\n",
+                    (unsigned)st.namespace_count, (unsigned)st.used_entries,
+                    (unsigned)st.free_entries, (unsigned)st.available_entries,
+                    (unsigned)st.total_entries);
+    }
+  }
+  else if (strncmp(cmd, "bufmode", 7) == 0) {
+    /*
+     * 【诊断】切换 LVGL 绘制缓冲：psram（全帧）/ internal（1/10 屏）。
+     *
+     * 用途：验证"~1 秒停滞"是否来自 **PSRAM 带宽争抢**。
+     * 全帧缓冲下，flush 的逐像素搬移要从 PSRAM 读 → 与 BLE 栈争带宽；
+     * 内部缓冲则把读写都放在内部 RAM（代价是脏区大时 LVGL 要切更多块）。
+     */
+    const char *arg = cmd + 7;
+    while (*arg == ' ') arg++;
+    lv_disp_t *d = lv_disp_get_default();
+    if (d == NULL || d->driver == NULL) {
+      Serial.println("[显示] 显示驱动未就绪");
+    }
+    else if (strncmp(arg, "internal", 8) == 0) {
+      d->driver->draw_buf = &draw_buf;
+      s_buf_psram_active = false;
+      lv_obj_invalidate(lv_scr_act());
+      Serial.println("[显示] 缓冲 -> 内部 RAM（1/10 屏）");
+    }
+    else if (strncmp(arg, "psram", 5) == 0) {
+      if (s_buf_psram == NULL) {
+        Serial.println("[显示] PSRAM 缓冲不可用");
+      }
+      else {
+        d->driver->draw_buf = &s_draw_buf_psram;
+        s_buf_psram_active = true;
+        lv_obj_invalidate(lv_scr_act());
+        Serial.println("[显示] 缓冲 -> PSRAM 全帧");
+      }
+    }
+    else {
+      Serial.printf("[显示] 缓冲 = %s\n", s_buf_psram_active ? "PSRAM全帧" : "内部1/10");
+    }
+  }
+  else if (strncmp(cmd, "tp", 2) == 0) {
+    /*
+     * 【诊断】停/起 100Hz 触摸采样。
+     * 用途：定位"~1 秒停滞"是否来自 I2C 锁竞争
+     * （触摸采样在 esp_timer 回调里做 I2C，主循环读 RTC 用同一条总线）。
+     */
+    const char *arg = cmd + 2;
+    while (*arg == ' ') arg++;
+    if (s_tp_timer == NULL) {
+      Serial.println("[触摸] 采样定时器未创建");
+    }
+    else if (strncmp(arg, "off", 3) == 0) {
+      esp_timer_stop(s_tp_timer);
+      Serial.println("[触摸] 采样已停（仅用于诊断，触摸将无响应）");
+    }
+    else if (strncmp(arg, "on", 2) == 0) {
+      esp_timer_start_periodic(s_tp_timer, 10000);
+      Serial.println("[触摸] 采样已恢复 100Hz");
+    }
+    else {
+      Serial.printf("[触摸] 采样=%s\n",
+                    esp_timer_is_active(s_tp_timer) ? "运行中(100Hz)" : "已停止");
+    }
+  }
+  else if (strncmp(cmd, "verbose", 7) == 0) {
     /* 调试输出闸门的手动开关（默认随 USB 主机连接状态自动判定） */
     const char *arg = cmd + 7;
     while (*arg == ' ') arg++;
@@ -1409,6 +1544,31 @@ void setup()
   /* 时间来源：RTC（失败时界面会显示无效应有的样子） */
   ui_timesrc_set_provider(rtc_time_provider);
 
+  /*
+   * ⚠️ 实测记录：**不要提高 loop 任务的优先级**。
+   *
+   * 曾把 loop 从默认优先级 1 提到 3，想解决"~1 秒停滞"
+   * （停滞窗口里渲染最大 1003~1035ms，而同时段硬件中断间隔最大仅 0us，
+   *   说明中断正常、不是 flash/cache 关中断）。
+   *
+   * 结果**显著恶化**：停滞从"约每 100 秒 1 次"变成"每 14 秒 1 次"
+   * （79 个窗口里 28 次）。单纯的"被饿死"提优先级只会改善、绝不会恶化，
+   * 故这是**优先级反转**的特征 —— 主循环在等一个由更低优先级任务持有的锁，
+   * 提优先级后持有者反而拿不到 CPU 去释放，于是等到约 1 秒的超时。
+   *
+   * 结论：保持默认优先级，转而去查"主循环持有哪些锁/资源"。
+   */
+
+  /* 中断间隔诊断：1kHz，仅打时间戳（见 s_isr_gap_us_max 的说明） */
+  {
+    /* Arduino-ESP32 3.x 的定时器 API：timerBegin(频率Hz)，tick 即 1/频率 秒 */
+    hw_timer_t *t = timerBegin(1000); /* 1kHz → 每 tick = 1ms */
+    if (t != NULL) {
+      timerAttachInterrupt(t, &isr_gap_cb);
+      timerAlarm(t, 1, true, 0); /* 每 1 个 tick 触发一次 = 1kHz */
+    }
+  }
+
   /* 烘焙图充气：必须在 ui_pages_init() 之前 —— 表盘构建时会 lv_img_set_src
    * 引用这些 dsc，提前改好可避免"先引用旧格式、后改写"的隐患。 */
   inflate_baked_images();
@@ -1680,14 +1840,19 @@ static void ble_update(void)
 void loop()
 {
   s_loop_cnt++;                /* 性能：循环速率 */
+  ph_begin();
   handle_serial();            /* 串口命令：校时 / 切页 */
+  ph_end(PH_SERIAL);
+  ph_begin();
   control_poll();             /* BLE 下行控制：亮度 / 息屏 / 表盘 */
+  ph_end(PH_CONTROL);
 
   /*
    * 表盘变化检测：**滑动、串口命令、BLE 命令**都会改变当前表盘，
    * 与其在每处分别持久化（容易漏），不如在循环里统一比对一次。
    * 这样"断电记忆"对所有切换途径都生效。
    */
+  ph_begin();
   {
     int cur = ui_pages_current_face();
     if (cur != s_last_face) {
@@ -1702,8 +1867,10 @@ void loop()
       publish_faces_report();
     }
   }
+  ph_end(PH_FACE);
 
   /* 速度指针斜坡推进（#2）：按实际经过时间匀速逼近目标，与帧率无关 */
+  ph_begin();
   {
     static uint32_t last_ramp_ms = 0;
     uint32_t now_r = millis();
@@ -1714,8 +1881,10 @@ void loop()
       ui_speed_set_speed(shown);
     }
   }
+  ph_end(PH_RAMP);
 
   /* 行程统计（功能④）：仅在链路 LIVE 且速度有效时累积，失效不计入 */
+  ph_begin();
   {
     uint32_t now_trip = millis();
     uint32_t dt_trip = now_trip - s_trip_last_ms;
@@ -1727,8 +1896,12 @@ void loop()
       ui_speed_set_trip((float)s_trip.distance_km, s_trip.max_kmh);
     }
   }
+  ph_end(PH_TRIP);
+  ph_begin();
   ble_poll();                 /* 取 BLE 遥测 + 校时（无新数据直接返回） */
   ble_update();               /* 五态状态机，每循环驱动速度页 */
+  ph_end(PH_POLL);
+  ph_begin();
   /* 消费 flick：快速划动直接翻页（100Hz 采样判定，见 touch_sample_cb） */
   if (s_tp_flick != 0) {
     int8_t dir = s_tp_flick;
@@ -1744,14 +1917,19 @@ void loop()
     s_tp_settle = false;
     ui_pages_settle();
   }
+  ph_end(PH_TOUCH);
 
   {
+    ph_begin();
     uint32_t t_render = micros();
+    s_flush_in_call = 0;
     lv_timer_handler();
+    if (s_flush_in_call > s_flush_per_call_max) s_flush_per_call_max = s_flush_in_call;
     uint32_t dt = micros() - t_render;
     if (dt > s_render_us_max) s_render_us_max = dt;
     s_render_us_sum += dt;
   }
+  ph_end(PH_RENDER);
   delay(5);
 
   /* 心跳日志：每 5 秒打印运行状态 + 重绘/循环速率（性能回归监测）*/
@@ -1784,6 +1962,21 @@ void loop()
                     (unsigned long)s_flush_area_max,
                     (unsigned)(s_flush_area_max * 100UL / 217156UL),
                     (unsigned long)s_flush_area_sum);
+      /*
+       * 中断间隔：这是判断"停滞根因"的关键指标。
+       * 若该值也接近 1 秒 → 全局中断被关闭（flash/cache 路径）；
+       * 若该值很小而渲染最大仍是 1 秒 → 中断正常，是任务被抢占。
+       */
+      Serial.printf("       中断间隔最大 %lu us（中断次数 %lu）\n",
+                    (unsigned long)s_isr_gap_us_max, (unsigned long)s_isr_cnt);
+      /* 各阶段最大耗时：停滞时看哪一段数值爆掉，即可锁定阻塞点 */
+      Serial.printf("       单次渲染内 flush 次数 max=%lu\n",
+                    (unsigned long)s_flush_per_call_max);
+      Serial.printf("       阶段max(ms):");
+      for (int i = 0; i < PH_N; i++) {
+        Serial.printf(" %s=%lu", PH_NAME[i], (unsigned long)(s_ph_max_us[i] / 1000));
+      }
+      Serial.println();
     }
     {
       uint32_t dtp = micros() - t_print0;
@@ -1799,6 +1992,9 @@ void loop()
     s_flush_us_max = 0;
     s_flush_area_max = 0;
     s_flush_area_sum = 0;
+    s_isr_gap_us_max = 0;
+    s_flush_per_call_max = 0;
+    for (int i = 0; i < PH_N; i++) s_ph_max_us[i] = 0;
     last_flush = f;
     last_loop = l;
   }
