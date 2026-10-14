@@ -71,6 +71,9 @@ struct ContentView: View {
     @State private var navCandidates: [GeocodeResult] = []
     /// 是否正在查询地名（禁用按钮、显示进度）
     @State private var navLookingUp = false
+    /// 「开始导航」是否**顺带**启动了驾驶（连蓝牙 + 定位 + 遥测）。
+    /// 记住它是为了停止导航时能对称收尾：若驾驶本来是用户自己开的，就不要替他关掉。
+    @State private var navStartedDriving = false
 
     /// 当前选中的**分组**（不是表盘）。分组来自设备上报。
     ///
@@ -210,9 +213,7 @@ struct ContentView: View {
                         // 地名可能命中多个（如"外滩"在多个城市）→ 让用户选
                         ForEach(navCandidates) { c in
                             Button {
-                                navCandidates = []
-                                navDestination = c.name
-                                session.nav.start(destinationWGS84: c.geo)
+                                beginNavigation(destination: c.geo, name: c.name)
                             } label: {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(c.name).font(.subheadline)
@@ -235,7 +236,7 @@ struct ContentView: View {
                 Section {
                     if session.nav.isNavigating {
                         Button(role: .destructive) {
-                            session.nav.stop()
+                            endNavigation()
                         } label: {
                             Label("停止导航", systemImage: "stop.circle")
                         }
@@ -243,12 +244,21 @@ struct ContentView: View {
                         Button {
                             startNavigation()
                         } label: {
-                            Label("开始导航", systemImage: "location.north.line")
+                            Label(navLookingUp ? "查询中…" : "开始导航",
+                                  systemImage: "location.north.line")
                         }
-                        .disabled(!session.bleConnected)
+                        .disabled(navLookingUp)
                     }
+                    /*
+                     * 不要求"先连蓝牙"：点开始导航会**自动**启动驾驶（含连蓝牙 + 定位）。
+                     * 这里只做提示，不拦着用户 —— 拦着他也不知道该去哪儿点。
+                     */
                     if !session.bleConnected {
-                        Text("仪表未连接：请先在「仪表」页连接，导航指引才能下发。")
+                        Text("点「开始导航」会自动连接仪表并开始定位（等同「开始驾驶」）。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if navStartedDriving {
+                        Text("本次驾驶是随「开始导航」一起启动的；点「停止导航」会一并结束。")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
@@ -295,6 +305,32 @@ struct ContentView: View {
         }
     }
 
+    /// 开始导航。
+    ///
+    /// ⚠️ 「开始导航」**等同于「开始驾驶」**：导航需要定位，而定位与 BLE 连接
+    /// 都归驾驶会话管。若用户此刻没在驾驶，这里替他启动（并在停止时对称收尾），
+    /// 否则会出现"点了开始导航却一直等待定位"——用户无从知道还得再去点开始驾驶。
+    private func beginNavigation(destination: GeoPoint, name: String) {
+        navInputError = nil
+        navCandidates = []
+        session.nav.configure(gateway: navGateway, token: navToken)
+        if !session.isDriving {
+            session.startDriving()
+            navStartedDriving = true
+        }
+        navDestination = name
+        session.nav.start(destinationWGS84: destination)
+    }
+
+    /// 停止导航（并列回收尾：只关掉"导航顺手开的"那次驾驶）
+    private func endNavigation() {
+        session.nav.stop()
+        if navStartedDriving {
+            session.stopDriving()
+            navStartedDriving = false
+        }
+    }
+
     /// 解析并开始导航。输入可以是：
     ///   - "纬度,经度"（WGS84）→ 直接开始
     ///   - 中文地名 → 先向网关查坐标；命中 1 个直接开始，多个则列出让用户选
@@ -304,15 +340,13 @@ struct ContentView: View {
             navInputError = "请填写目的地"
             return
         }
-        session.nav.configure(gateway: navGateway, token: navToken)
 
         // 先按"纬度,经度"试解析
         let parts = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         if parts.count == 2, let lat = Double(parts[0]), let lon = Double(parts[1]),
            (-90...90).contains(lat), (-180...180).contains(lon) {
-            navInputError = nil
-            navCandidates = []
-            session.nav.start(destinationWGS84: GeoPoint(lon: lon, lat: lat))
+            beginNavigation(destination: GeoPoint(lon: lon, lat: lat),
+                            name: String(format: "%.5f,%.5f", lat, lon))
             return
         }
 
@@ -320,6 +354,7 @@ struct ContentView: View {
         navInputError = nil
         navCandidates = []
         navLookingUp = true
+        session.nav.configure(gateway: navGateway, token: navToken)
         Task {
             defer { navLookingUp = false }
             do {
@@ -327,8 +362,7 @@ struct ContentView: View {
                 if rs.isEmpty {
                     navInputError = "没找到「\(text)」。换个说法，或直接填「纬度,经度」。"
                 } else if rs.count == 1 {
-                    navDestination = rs[0].name
-                    session.nav.start(destinationWGS84: rs[0].geo)
+                    beginNavigation(destination: rs[0].geo, name: rs[0].name)
                 } else {
                     navCandidates = rs // 多个候选 → 界面列出让用户点选
                 }
