@@ -409,7 +409,50 @@ RATE_LIMIT_PER_MIN=60           # 按自用规模设置
 
 ## 五、后续开发任务
 
-> 用户 2026-10-14 提出，尚未开始。**动手前先读每条的"前置/风险"**。
+> 用户 2026-10-14 提出。**§5.3 地图界面已实现（代码完成、模拟器已验证），
+> 待真机联调**；§5.1 路显仍是待办。
+
+### 5.3 地图导航界面（参考项目那种）✅ 代码完成，待真机验证
+
+**目标**：深色底图 + 灰色路网/建筑 + 白色路线 + 固定车头箭头 + 航向朝上。
+
+**已完成**（2026-10-14）：
+
+| 层 | 内容 |
+|----|------|
+| 网关 | `POST /mapwindow`：OpenFreeMap 矢量瓦片 → MVT 解码 → 按 ±500m 裁剪 → **投影成局部米坐标** → 按预算裁剪。首次 1.68s（下载瓦片），缓存后 **7ms**，窗口约 **2.2KB** |
+| 协议 | `mw`/`mr`/`mb`/`mp`/`me` 五种文本消息（**一条要素一条消息，因此不需要分片层**）+ `nav` 新增 `ox`/`oy`（自车在窗口内的偏移）。见 [ble.md](ble.md) |
+| App | `MapWindowPacket.swift`（解码/投影/编码）、`GatewayClient.fetchMapWindow`、`BLEClient.sendMapMessages`、`NavSession` 节流查询与下发 |
+| 固件 | `nav_map.{h,c}`（接收/累积/原子切换/超时/过期）、`ui_nav_map.{h,c}`（渲染层）、nav 表盘双布局 |
+| 字体 | 新增 `speed_num_64`（地图模式的紧凑距离行）|
+
+**关键设计决定**（详见各处代码注释）：
+
+1. **不分片**：一条道路/建筑/路线各发一条消息，每条 < 185 字节，
+   复用既有"文本消息 + 攒到 `}` 就解析"通路，固件零新增重组逻辑。
+2. **投影在网关做**：设备只拿局部米坐标，**不做任何经纬度/墨卡托运算** ——
+   把复杂度放在有算力的一侧。
+3. **坐标系统一到 GCJ-02**：OSM 是 WGS84、高德路线是 GCJ-02，北京实测差
+   **556 米**（正好一个窗口）。不统一会让底图与路线完全对不上。
+4. **渲染节流**：航向变化 ≥2° 或位移 ≥2m 才重算（速度表盘渲染预算已经很紧）。
+5. **降级策略**：没有地图窗口时，导航指引回到原来的大字卡片，**依然清晰可读**。
+
+**已用模拟器验证**（合成数据，`--map-demo`）：航向 0/45/90/180° 旋转、
+道路等级线宽、建筑轮廓、路线、固定箭头、紧凑布局。
+
+**待真机验证**：
+- 真实数据端到端（手机 → 网关 → BLE → 固件 `map` 命令）
+- 真机渲染性能（模拟器与真机绘制开销不同，见 [perf/README.md](perf/README.md)）
+
+**已知取舍**（可后续改进）：
+- 建筑画的是**轮廓**而非填充块（LVGL 8 无多边形填充；改用 canvas 可以填充，
+  但每帧重绘 466×466 缓冲代价更高）。
+- 道路/建筑数据来自 **OpenFreeMap 矢量瓦片**（免费无 Key；官方允许离线下载
+  ≤3000 瓦片/次、≤50MB、最多 4 并发、需唯一 User-Agent）。
+  若日后要做区域离线包，应改走 **Geofabrik PBF 提取**，
+  **禁止**批量下载 `tile.openstreetmap.org` 瓦片（参考项目踩过的坑）。
+- **署名义务**：界面/关于页须提供 `© OpenStreetMap contributors` 与 ODbL 链接
+  （见 [decisions.md](decisions.md) D-010）。
 
 ### 5.1 路显（路名显示）
 
@@ -451,3 +494,64 @@ RATE_LIMIT_PER_MIN=60           # 按自用规模设置
   地图瓦片若来自高德则**不能落盘**。要做离线地图须换**允许离线**的数据源（如 OSM）。
 - SD 卡是**可插拔**的：所有依赖它的功能都必须能**优雅降级**（拔卡不能崩、不能黑屏）。
 - 挂载要在启动早期完成，且**不能阻塞**（当前实现是失败即放弃，不重试）。
+
+---
+
+## 六、真机联调清单（地图界面）
+
+> 2026-10-15 准备。固件与 App 均已构建通过，**只差烧录与实测**。
+
+### 0) 前置
+
+```bash
+# 1. 烧录固件（设备接回电脑后）
+arduino-cli compile --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
+  --build-property "compiler.cpp.extra_flags=-DESP32QSPI_MAX_PIXELS_AT_ONCE=4096" \
+  --libraries reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/libraries firmware/dashboard
+arduino-cli upload -p /dev/cu.usbmodem101 --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" firmware/dashboard
+
+# 2. 启动网关（手机要能访问，注意是局域网 IP）
+cd gateway && npm start
+curl -s http://<你的Mac IP>:8080/health     # 应返回 {"ok":true,"hasKey":true}
+
+# 3. 安装 App（需设备已解锁）
+cd ios/CarDashboardPhone && xcodegen generate
+xcodebuild -project CarDashboardPhone.xcodeproj -scheme CarDashboardPhone \
+  -configuration Debug -destination 'platform=iOS,id=<设备UDID>' -derivedDataPath /tmp/dd build
+xcrun devicectl device install app --device <设备UDID> /tmp/dd/Build/Products/Debug-iphoneos/CarDashboardPhone.app
+```
+
+### 1) 分层验证（**从下往上，每层确认后再往上**）
+
+| # | 验证什么 | 怎么做 | 期望 |
+|---|---------|-------|------|
+| 1 | **网关** | `curl -X POST http://<IP>:8080/mapwindow -H "authorization: Bearer <token>" -H "content-type: application/json" -d '{"lon":116.3974,"lat":39.9092}'` | 返回 `roads`/`buildings`/`centerGcj`/`crs":"GCJ-02"`；再次请求应 < 100ms（缓存）|
+| 2 | **App 取窗口** | 开始导航后看 Xcode 控制台 | 出现 `[地图] 窗口 #1：道路 24 建筑 16 路线 N 点 → 下发 M 条消息` |
+| 3 | **BLE 送达** | 串口执行 `map` | `消息=… 窗口=…`；窗口 > 0 且 `丢弃=0` |
+| 4 | **固件解析** | 同上的 `map` | 打印道路/建筑/路线点数，与 App 日志一致 |
+| 5 | **自车偏移** | 同上 | `自车偏移=(x,y) 米`（不是"未设置"）|
+| 6 | **渲染** | 切到 nav 表盘，看屏幕 | 深色底图 + 灰路网 + 白路线 + 中心固定箭头；指引压在下半部 |
+
+### 2) 常见问题定位
+
+| 现象 | 先查 |
+|------|------|
+| `map` 显示"无可用窗口" | 网关是否可达（手机与 Mac 同一局域网？）；App 控制台有无取窗口失败日志 |
+| 窗口有但 `丢弃` 在涨 | BLE 写入是否乱序/丢失 —— `sendMapMessages` 必须用 `.withResponse` |
+| 地图偏移一个固定距离 | 坐标系是否统一到 GCJ-02（`crs` 应为 `"GCJ-02"`）|
+| 地图不转 | 遥测 `course_deg` 是否有值（静止/低速时 CoreLocation 不给航向，属正常）|
+| 画面卡顿 | 地图重算是否过于频繁（`map` 里的"地图层重算"次数增长率）；考虑调大 `NAV_MAP_REDRAW_DEG` |
+| 地图不消失 | 窗口过期 60s 是否生效（`nav_map_tick`）；App 停止导航时应立即发 `mw`/`me` 清空 |
+
+### 3) 调参入口
+
+| 想调什么 | 改哪里 |
+|---------|-------|
+| 可见范围（默认 300m）| `simulator/ui/ui_nav_map.h` 的 `NAV_MAP_VIEW_RADIUS_M` |
+| 重算灵敏度 | 同文件的 `NAV_MAP_REDRAW_DEG` / `NAV_MAP_REDRAW_M` |
+| 配色/线宽 | `simulator/ui/ui_nav_map.c` 顶部的 `MAP_COLOR_*` 与 `road_width()` |
+| 窗口半径 | App `NavSession.mapMoveThresholdM` / 网关 `radiusM`（上限 1500）|
+| 路线前视距离 | App `NavSession.routeAheadM`（默认 600m）|
+
+> ⚠️ 改 `simulator/ui/` 下任何文件后**必须先 `tools/sync_firmware.sh`** 再编译固件
+> —— `simulator/ui/` 是唯一真源，固件目录是同步产物。

@@ -71,6 +71,8 @@ run: $(TESTS)
 	fi
 	@echo "--- iOS 侧纯逻辑（无需 iOS 运行时）---"
 	@swift ../tools/test_ios_logic.swift
+	@echo "--- 地图窗口编码（与网关公式交叉验证）---"
+	@swift ../tools/test_map_codec.swift
 	@echo "--- UI 像素级回归（需已构建 simulator/dashboard_sim）---"
 	@if [ ! -x ../simulator/dashboard_sim ]; then \
 		echo "  跳过：未构建 dashboard_sim（cd ../simulator && make）"; \
