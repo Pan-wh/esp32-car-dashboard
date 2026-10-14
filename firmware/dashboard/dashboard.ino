@@ -61,44 +61,12 @@ extern "C" {
  * 屏幕内容旋转（整机安装方向固定，故用固定值）：
  *   0 = 不旋转   1 = 90°   2 = 180°   3 = 270°
  *
- * 实现方式（两条独立路线，可用串口命令实测对比）：
- *   A) LVGL 软件旋转 —— 官方支持，`06_LVGL_Widgets` 即用此法做四向切换。
- *      · 180°：原地首尾反转，**无需临时缓冲**，成本低（draw_buf_rotate_180）
- *      · 90°/270°：转置。本屏是**正方形**，全屏脏区正好走
- *        `draw_buf_rotate_90_sqr()` 的**原地 4 向旋转**（不分配临时缓冲）；
- *        非正方形的小脏区才用 LV_DISP_ROT_MAX_BUF(10KB) 分块转置。
- *      · 运行时可切换：`lvrot 0|1|2|3`
- *   B) 面板 MADCTL 硬件旋转 —— 若 CO5300 的 MV 位有效，则**零每帧开销**，
- *      且文字会跟着一起正确旋转（无需改界面）。库未使用该位，需实测：
- *      `madctl 60`(90°) / `C0`(180°) / `A0`(270°)，恢复 `madctl 0`
- *
- * ⚠️ 软件旋转与 full_refresh / direct_mode 不兼容（LVGL 明确禁止）。
- *    本工程为 partial 刷新模式，故可用；若日后改用全帧刷新需重新评估。
+ * 0°/180° 使用 LVGL 低开销路径；90°/270° 使用 CO5300 MADCTL 硬件旋转。
+ * 默认不旋转。完整取舍与真机数据见 docs/rotation-hardware-vs-software.md。
  */
 #define DISPLAY_ROT 0
 
 /* ---------------- 显示 ---------------- */
-
-/*
- * ── TE（Tearing Effect，撕裂同步）────────────────────────────────
- *
- * **GPIO 13 = LCD_TE**：官方 `HARDWARE_REFERENCE.md` 的引脚表明确写了
- *   | 13 | LCD_TE | CO5300 tearing-effect signal | Display synchronization input to the MCU. |
- *
- * 此前项目以为"没有 TE 引脚"，是因为只查了 Arduino 的 `pin_config.h`
- * （它确实没定义）—— 而**硬件是接了的**。
- *
- * 更关键：配套驱动 `Arduino_CO5300` 的初始化序列里，使能 TE 的那一行
- *   `// WRITE_C8_D8, CO5300_WC_TEARON, 0x00,`
- * 是**注释掉的**，所以本板 TE 从未输出过。
- *
- * 撕裂的本质：QSPI 是阻塞轮询写，与面板扫描**无任何同步**；
- * 整屏 434 KB 实测约 43 ms（≈2.6 个 60 Hz 场）→ 边写边扫必然撕裂。
- * 使能 TE 后可在 **V-blank 期间**写入，从而避免撕裂。
- */
-#define LCD_TE_PIN 13 /* CO5300 tearing-effect 输出 → ESP32-S3 GPIO13 */
-static bool s_te_on = false;
-
 
 static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
     LCD_CS /* CS */, LCD_SCLK /* SCK */, LCD_SDIO0 /* SDIO0 */, LCD_SDIO1 /* SDIO1 */,
@@ -109,59 +77,20 @@ static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
 #define QSPI_SPEED_HZ 80000000
 #endif
 
-/*
- * ── 可运行时设置地址偏移的 CO5300 ──────────────────────────────
- *
- * 为什么需要子类：本面板需要 6 像素地址偏移，而
- * `Arduino_TFT::setRotation()` 只提供 4 组**写死**的偏移组合
- * （本工程构造参数下只有 (6,0) / (0,0) / (0,6) 三种），
- * 硬件旋转下正确的那一组可能不在其中，且 `_xStart` 是 `uint8_t`（只能加、不能减）。
- * 基类成员是 `protected`，子类可访问 → 由此开放任意偏移，标定从此只需几秒。
- */
+/* Arduino_GFX 会随 setRotation() 改写地址偏移；厂商 BSP 要求始终保持 (6,0)。 */
 class DashboardCO5300 : public Arduino_CO5300 {
 public:
   DashboardCO5300(Arduino_DataBus *b, int8_t rst, uint8_t r, int16_t w, int16_t h,
                   uint8_t c1, uint8_t r1, uint8_t c2, uint8_t r2)
       : Arduino_CO5300(b, rst, r, w, h, c1, r1, c2, r2) {}
 
-  /** 设置地址窗口偏移（**有符号**）；INT_MIN 表示保持当前值 */
-  void setGap(int xo, int yo)
+  void setGap(uint8_t x, uint8_t y)
   {
-    if (xo != INT_MIN) _ox = (int16_t)xo;
-    if (yo != INT_MIN) _oy = (int16_t)yo;
+    _xStart = x;
+    _yStart = y;
     _currentX = -1; /* 强制下一帧重设 CASET/PASET */
     _currentY = -1;
   }
-  int gapX(void) const { return (int)_ox; }
-  int gapY(void) const { return (int)_oy; }
-
-  /*
-   * ★ 重写地址窗口写入，改用**有符号**偏移。
-   *
-   * 为什么要重写：库的 `Arduino_CO5300::writeAddrWindow()` 用
-   * `_xStart`/`_yStart`（`uint8_t`）**只能加、不能减**。而硬件旋转后
-   * 需要的偏移很可能是**负值**（面板扫描方向被 MADCTL 反转）——
-   * 这正是"无论怎么调正偏移都修不好边缘"的原因。
-   * 本函数是 `virtual`，故可在子类里替换。
-   */
-  void writeAddrWindow(int16_t x, int16_t y, uint16_t w, uint16_t h) override
-  {
-    if ((x != _currentX) || (w != _currentW) || (y != _currentY) || (h != _currentH)) {
-      _currentX = x;
-      _currentY = y;
-      _currentW = w;
-      _currentH = h;
-      const int32_t xs = (int32_t)x + _ox;
-      const int32_t ys = (int32_t)y + _oy;
-      _bus->writeC8D16D16(CO5300_W_CASET, (uint16_t)xs, (uint16_t)(xs + (int32_t)w - 1));
-      _bus->writeC8D16D16(CO5300_W_PASET, (uint16_t)ys, (uint16_t)(ys + (int32_t)h - 1));
-    }
-    _bus->writeCommand(CO5300_W_RAMWR);
-  }
-
-private:
-  int16_t _ox = 6; /* 有符号偏移，默认 = 库构造值 (6,0)，即 0° 的正确值 */
-  int16_t _oy = 0;
 };
 
 /*
@@ -173,80 +102,42 @@ static DashboardCO5300 *gfx = new DashboardCO5300(
     bus, LCD_RESET /* RST */, 0 /* rotation */, LCD_WIDTH /* width */, LCD_HEIGHT /* height */,
     6, 0, 0, 0);
 
-/** 使能/关闭面板 TE 输出（CO5300: 0x35 TEON / 0x34 TEOFF）*/
-static void te_panel(bool on)
-{
-  bus->beginWrite();
-  if (on) {
-    bus->writeC8D8(0x35, 0x00); /* TEON, mode 0 = 仅 V-blank */
-  }
-  else {
-    bus->writeCommand(0x34); /* TEOFF（无参数）*/
-  }
-  bus->endWrite();
-  s_te_on = on;
-}
-
-/* TE 同步刷屏（撕裂抑制）*/
-static bool s_te_sync = false;               /* 是否启用（默认关，便于 A/B 对比）*/
-static bool s_te_waited_this_frame = false;  /* 本帧是否已等过 TE */
-static uint32_t s_te_timeouts = 0;           /* 等待超时次数 */
-static uint32_t s_te_waits = 0;              /* 累计等待次数 */
-
-/**
- * 等待 TE **上升沿**（V-blank 开始）。
+/* ══════════════ 旋转路径 ══════════════
  *
- * 为什么先等它变低、再等它变高：若采样恰落在脉冲内部，直接判"高"
- * 会立刻满足，等于没同步。
- *
- * @param timeout_us 超时；**必须设**，否则 TE 一旦不输出就会死等
- * @return true = 等到上升沿；false = 超时（已计数，调用方继续写，不能卡死）
+ * 0°/180° 使用 LVGL 的低开销路径；90°/270° 按厂商 BSP 使用 CO5300
+ * MADCTL 硬件旋转。硬件旋转在本屏会留下少量边缘黑缺口，但能保持秒针、
+ * 指针和滑页的实时性。软件 flush 转置虽能消除缺口，真机实测会明显卡顿，
+ * 已明确弃用；完整数据见 docs/rotation-hardware-vs-software.md。
  */
-static bool te_wait_rise(uint32_t timeout_us)
-{
-  const uint32_t t0 = micros();
-  while (digitalRead(LCD_TE_PIN) == HIGH) {
-    if (micros() - t0 > timeout_us) return false;
-  }
-  while (digitalRead(LCD_TE_PIN) == LOW) {
-    if (micros() - t0 > timeout_us) return false;
-  }
-  return true;
-}
-
-/* ══════════════ 旋转：软件 vs 硬件 ══════════════
- *
- * 实测结论（2026-10-14，见 docs/rotation-tearing-fieldtest.md §5.5）：
- *
- *   LVGL 软件旋转：
- *     0°  / 180° —— 路径便宜（180° 只是原地首尾反转），**实测不撕裂**
- *     90° / 270° —— 需 4 向旋转，渲染涨到 25–33 ms，
- *                   超过面板一帧 16.78 ms → **撕裂**
- *   面板硬件旋转（MADCTL 0x36）：
- *     由面板自己完成，**LVGL 零开销** —— 实测 270° 不撕裂、无 1000ms 尖刺
- *
- * 所以 90°/270° 走硬件旋转。**这是本机唯一能消除 90°/270° 撕裂的办法**
- * （TE 对齐无效：它只能对齐写入起点，不能缩短渲染耗时）。
- *
- * ⚠️ MADCTL 是**寄存器写入，NVS 记不住**，复位/掉电即丢失 →
- *    必须持久化并在启动时重放，否则一重启方向就跳回默认（已踩过）。
- *
- * ⚠️ 硬件旋转时 LVGL **必须**不旋转，否则两者叠加。
- *    同时把 s_display_rot 置 0，使 flick_delta_to_logical() 自然变成空操作
- *    （它按 driver->rotated 判断）—— 触摸坐标改在采样处变换，两处不会打架。
- */
-#define HWROT_PREF_KEY "hwrot"    /* MADCTL 值，0 = 不用硬件旋转 */
-#define TOUCHROT_PREF_KEY "trot"  /* 触摸坐标变换档位，见 touch_apply_rot() */
-static uint8_t s_hw_rot = 0;
 static uint8_t s_touch_rot = 0;
+
 /*
- * 硬件旋转下的地址偏移（现场标定，**可为负**）。
- * 270° 用 MADCTL 0x60，标定结果为 (0, 9)：此时"黑环到边框的间距四周均匀"。
- * 90° 用 MADCTL 0xA0，轴向相同故取同样值（**未逐一标定**，待现场确认）。
- * 可用 `gap <x> <y>` 命令在运行时覆盖。
+ * 面板的 466x466 可见窗口使用固定地址偏移 (6,0)。厂商 ESP-IDF BSP 在
+ * MADCTL 0x00/0x60/0xC0/0xA0 四种方向下都保留这个 gap；MADCTL 自己负责
+ * 扫描方向，主控不应再把 gap 换轴或按 480x480 GRAM 反推第二次。
  */
-static int8_t s_gap_x = 0;
-static int8_t s_gap_y = 9;
+/*
+ * ── 调试输出闸门（装车运行的关键保护）──────────────────────────────
+ *
+ * ESP32-S3 的 USB-CDC `Serial.printf()` 在**没有主机接收**时会阻塞
+ * （等待 TX FIFO 空位）。实测单次可阻塞近 1 秒 —— 主循环被卡住的期间
+ * LVGL 定时器持续积压，于是下一次 `lv_timer_handler()` 要跑近 1 秒。
+ *
+ * 装车后设备不接电脑，若仍无条件打印就会表现为
+ * **"跑一段时间就很卡"**（每次周期打印都卡一下）。
+ * 这同时解释了"接着电脑调试时又不卡"——有主机接收，写入不阻塞。
+ *
+ * 故所有**周期性**打印都必须先过这道闸门：
+ *   - 主机连着（USB-CDC 的 DTR 有效，即有人开着串口）→ 正常输出
+ *   - 独立运行（车里没接电脑）→ 直接跳过，绝不阻塞
+ * 串口命令的应答**不需要**闸门：能发命令时主机必然连着。
+ * `verbose on|off` 可强制打开（以防某平台 DTR 检测不可靠）。
+ */
+static bool s_dbg_force = false;
+static inline bool dbg_on(void) { return s_dbg_force || (bool)Serial; }
+
+#define PANEL_NATIVE_GAP_X 6
+#define PANEL_NATIVE_GAP_Y 0
 
 
 static lv_disp_draw_buf_t draw_buf;
@@ -281,28 +172,6 @@ static TouchDrvCST92xx touch;
 static int16_t touch_x[5], touch_y[5];
 static int16_t last_x = 0, last_y = 0;
 
-/* 触摸采样环形缓冲（诊断用：`touch` 命令打印最近若干次采样） */
-#define TOUCH_LOG_N 40
-typedef struct {
-  uint32_t ms;
-  int16_t x, y;
-  uint8_t pressed;
-} touch_log_t;
-static touch_log_t s_tlog[TOUCH_LOG_N];
-static uint8_t s_tlog_head = 0, s_tlog_cnt = 0;
-
-/* 手势计数（诊断用：LVGL 是否识别到手势、方向为何） */
-static uint16_t s_gest_left = 0, s_gest_right = 0, s_gest_top = 0, s_gest_bottom = 0;
-static uint16_t s_gest_other = 0;
-
-/* 最近一次手势的细节（持久化，便于事后读取） */
-static struct {
-  const char *dir;
-  const char *target;  /* "screen" / "page" / "其它" */
-  int page_before, page_after;
-} s_last_gest = { "-", "-", -1, -1 };
-static int s_page_seen = -1; /* loop 中持续记录，便于取 before */
-
 /*
  * ---- 触摸锁存（修复「滑页无反应」）----
  * 问题：一帧渲染要 200ms 左右，LVGL 的 indev 读取被拖慢到 ~4 次/秒。
@@ -320,26 +189,18 @@ static volatile int8_t s_tp_flick = 0;      /* +1 下一页 / -1 上一页 / 0 �
 static volatile bool s_tp_settle = false;   /* 抬起但未达 flick：按最近页吸附 */
 static int16_t s_tp_start_x = 0, s_tp_start_y = 0;
 static uint32_t s_tp_start_ms = 0;
-/* 诊断：采样器共看到多少次「按下→抬起」、其中多少次判定为 flick */
-static volatile uint16_t s_tp_release_cnt = 0, s_tp_flick_cnt = 0;
-static volatile int16_t s_last_dx = 0, s_last_dy = 0;
-static volatile uint32_t s_last_dt = 0;
 static portMUX_TYPE s_tp_mux = portMUX_INITIALIZER_UNLOCKED;
 
 /*
- * flick 方向判定的**旋转补偿**（详见 docs/rotation-tearing-fieldtest.md）。
+ * flick 方向判定的旋转补偿（详见 docs/rotation-hardware-vs-software.md）。
  * 采样拿到的是**面板原始坐标**，而"左滑/右滑"应按 **LVGL 逻辑坐标**判定。
  * LVGL 自己的 indev 会对指针坐标做逆变换（lv_indev.c: indev_pointer_proc），
  * 但这条 100Hz 自建快路径绕过了它 → 90°/270° 时"左右滑"在面板上变成上下滑，
- * flick 判不出来，翻页退化成慢速原生拖拽。
- * 默认开启；串口 `flickrot 0|1` 可运行时 A/B，现场对比用。
+ * flick 判不出来，翻页会退化成慢速原生拖拽。
  */
-static bool s_flick_rot_fix = true;
-
 /** 面板原始位移 → LVGL 逻辑位移（映射与 lv_indev.c 的旋转规则严格一致）*/
 static void flick_delta_to_logical(int *dx, int *dy)
 {
-  if (!s_flick_rot_fix) return;
   lv_disp_t *d = lv_disp_get_default();
   if (d == NULL || d->driver == NULL) return;
 
@@ -350,16 +211,6 @@ static void flick_delta_to_logical(int *dx, int *dy)
     case LV_DISP_ROT_270: *dx =  ry; *dy = -rx; break;  /* x'=y, y'=H-x-1 */
     default: break;                                     /* NONE：原始即逻辑 */
   }
-}
-
-static void tlog_add(int16_t x, int16_t y, bool pressed)
-{
-  s_tlog[s_tlog_head].ms = millis();
-  s_tlog[s_tlog_head].x = x;
-  s_tlog[s_tlog_head].y = y;
-  s_tlog[s_tlog_head].pressed = pressed ? 1 : 0;
-  s_tlog_head = (s_tlog_head + 1) % TOUCH_LOG_N;
-  if (s_tlog_cnt < TOUCH_LOG_N) s_tlog_cnt++;
 }
 
 /* ---------------- BLE 遥测（iPhone Core Location 数据源）---------------- */
@@ -428,7 +279,16 @@ static void rtc_time_provider(struct tm *out)
   out->tm_hour = (int)dt.getHour();
   out->tm_min = (int)dt.getMinute();
   out->tm_sec = (int)dt.getSecond();
-  out->tm_wday = (int)dt.getWeek();
+  /*
+   * ⚠️ 星期必须钳制到 0..6。
+   * PCF85063 的星期寄存器异常时可能给出 7+，而 UI 侧用
+   * WD[tm_wday] 索引 7 元素数组 —— 越界取野指针后会崩在 snprintf 的 %s 上
+   * （实测 Core 1 LoadProhibited，backtrace 见 ui_clock.c 的同名注释）。
+   * 两处都设防：这里治本，UI 侧兜底。
+   */
+  int wd = (int)dt.getWeek();
+  if (wd < 0 || wd > 6) wd = 0;
+  out->tm_wday = wd;
 }
 
 /* ---------------- LVGL 移植 ---------------- */
@@ -444,19 +304,8 @@ static void rounder_cb(struct _lv_disp_drv_t *disp_drv, lv_area_t *area)
 
 static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
 {
-    /*
-     * TE 同步：**每帧只等一次** —— LVGL 一次刷新可能拆成多个 flush，
-     * 若每个都等，最多会白等好几帧（每帧 16.8ms）。
-     * 等 V-blank 上升沿之后再写，可避开面板正在扫描的时段。
-     */
-    if (s_te_sync && !s_te_waited_this_frame) {
-      s_te_waited_this_frame = true;
-      s_te_waits++;
-      if (!te_wait_rise(25000)) s_te_timeouts++;
-    }
-
-    uint32_t t_flush = micros();
-    s_flush_cnt++;
+  uint32_t t_flush = micros();
+  s_flush_cnt++;
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
   {
@@ -488,19 +337,6 @@ static void touch_sample_cb(void *)
 {
   uint8_t n = touch.getPoint(touch_x, touch_y, touch.getSupportTouchPoint());
   bool was = s_tp_pressed;
-
-  /*
-   * ⚠️ 临界区里**绝对不能**调用 Serial。
-   *
-   * 本函数是 100Hz 的 esp_timer 回调（高优先级、临界区内中断被关闭）。
-   * `Serial.printf()` 会阻塞等待 UART FIFO，一旦在关中断状态下等待过久
-   * 就会触发**中断看门狗复位** —— 真机表现正是"点一下屏幕就黑屏重启"
-   * （因为只有"抬起且有位移"这一支才会打印）。日志信息故先存本地变量，
-   * 出了临界区再输出。
-   */
-  bool log_release = false, log_flick = false;
-  int log_dx = 0, log_dy = 0, log_raw_dx = 0, log_raw_dy = 0;
-  uint32_t log_dt = 0;
 
   portENTER_CRITICAL(&s_tp_mux);
   if (n > 0) {
@@ -534,40 +370,15 @@ static void touch_sample_cb(void *)
       flick_delta_to_logical(&dx, &dy);   /* 逻辑坐标（判定与翻页方向都用它）*/
       int adx = dx < 0 ? -dx : dx;
       int ady = dy < 0 ? -dy : dy;
-      s_tp_release_cnt++;
-      s_last_dx = (int16_t)dx;
-      s_last_dy = (int16_t)dy;
-      s_last_dt = dt;
       if (dt < 600 && adx > 50 && adx > (ady * 12) / 10) {
         s_tp_flick = (dx < 0) ? 1 : -1; /* 左滑 → 下一页 */
-        s_tp_flick_cnt++;
-        log_release = true;
-        log_flick = true;
       }
       else {
         s_tp_settle = true; /* 缓慢拖拽：按最近页吸附 */
-        log_release = true;
       }
-      log_dx = dx;
-      log_dy = dy;
-      log_raw_dx = raw_dx;
-      log_raw_dy = raw_dy;
-      log_dt = dt;
     }
   }
   portEXIT_CRITICAL(&s_tp_mux);
-
-  /* 串口输出：**必须在临界区之外**（见函数开头的说明）*/
-  if (log_release) {
-    if (log_flick) {
-      Serial.printf("[触摸] flick dx=%d dy=%d（原始 %d,%d）dt=%lu ms\n", log_dx, log_dy,
-                    log_raw_dx, log_raw_dy, (unsigned long)log_dt);
-    }
-    else {
-      Serial.printf("[触摸] 抬起 dx=%d dy=%d（原始 %d,%d）dt=%lu ms（未达 flick 阈值→吸附）\n",
-                    log_dx, log_dy, log_raw_dx, log_raw_dy, (unsigned long)log_dt);
-    }
-  }
 }
 
 static void touchpad_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
@@ -596,8 +407,6 @@ static void touchpad_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
   else {
     data->state = LV_INDEV_STATE_RELEASED;
   }
-  tlog_add(last_x, last_y, pressed || latch);
-
   data->point.x = last_x;
   data->point.y = last_y;
 }
@@ -636,7 +445,7 @@ static void apply_screen(bool off)
 
 /* 消费一条 BLE 下行控制命令（主循环调用，BLE 回调只暂存） */
 /*
- * ---------------- 屏幕方向（LVGL 软件旋转）----------------
+ * ---------------- 屏幕方向 ----------------
  *
  * 说明：本屏为 1.75" **圆形** 466×466，旋转后仍是同一个圆，
  *       无长宽比/布局副作用；触摸坐标由 LVGL 自动逆变换（indev_pointer_proc）。
@@ -645,6 +454,8 @@ static void apply_screen(bool off)
  */
 #define ROT_PREF_NS  "dash"
 #define ROT_PREF_KEY "rot"
+#define ROT_POLICY_PREF_KEY "rot_policy"
+#define ROT_POLICY_VERSION  2
 /*
  * 表盘记忆：断电后沿用上次的表盘与启用/隐藏状态。
  * 沿用 rot 的同一个 NVS 命名空间，便于集中管理用户设置。
@@ -767,105 +578,73 @@ static void set_display_rotation(int deg, bool persist)
 {
   deg = ((deg % 360) + 360) % 360;
 
-  /*
-   * ★ 机制选择：让「视觉角度」成为**唯一真相来源**，由这里推导实现方式。
-   *
-   *   90° / 270° → 面板硬件旋转（MADCTL）：LVGL 零开销，实测**不撕裂**
-   *   0°  / 180° → LVGL 软件旋转：路径便宜，实测**不撕裂**且最丝滑
-   *
-   * 为什么不能在 90°/270° 用软件旋转：LVGL 这两个角度要做 4 向旋转，
-   * 渲染涨到 25–33 ms，超过面板一帧 16.78 ms → **撕裂**（真机反复确认）。
-   * 详见 docs/rotation-tearing-fieldtest.md §5.5。
-   *
-   * 触摸：硬件旋转下 LVGL 自己不做旋转，所以坐标必须我们变换；
-   *      0°/180° 走软件旋转时 LVGL 的 indev 会自动逆变换，无需处理。
-   *      档位 3 是现场标定出来的（270° 下触摸完全跟手）。
-   */
   const bool hw = (deg == 90 || deg == 270);
   if (hw) {
+    /*
+     * 厂商 BSP：方向 1/3 分别写 MADCTL 0x60/0xA0，并始终保留 gap=(6,0)。
+     * 本项目的视觉角度命名与面板扫描方向相反，因此 270° 对应 0x60。
+     * 先调用库旋转以同步内部地址状态，再恢复厂商固定 gap，最后覆盖 MADCTL。
+     */
     const uint8_t mad = (deg == 270) ? 0x60 : 0xA0;
     const uint8_t librot = (deg == 270) ? 3 : 1;
-
-    /*
-     * ⚠️ **必须先调库的 setRotation()**，再覆盖 MADCTL —— 顺序不能反。
-     *
-     * 本面板需要 6 像素地址偏移（构造参数 col_offset1=6）。
-     * `Arduino_TFT::setRotation()` 会按角度把偏移重新分配到正确的轴：
-     *     0°    → _xStart = COL_OFFSET1 = 6, _yStart = 0
-     *     case3 → _xStart = ROW_OFFSET2 = 0, _yStart = COL_OFFSET1 = 6   ← 偏移移到 y 轴
-     * 若只写 MADCTL 而不调它，偏移会留在 x 轴上，而面板寻址轴已变 →
-     * **边缘出现一条几像素宽的窄带被切**（真机已复现）。
-     *
-     * 但库的 setRotation() 也会写它自己的 MADCTL（且它的位定义与标准不同），
-     * 所以必须**在它之后再覆盖**成我们要的硬件旋转值。
-     */
     gfx->setRotation(librot);
+    gfx->setGap(PANEL_NATIVE_GAP_X, PANEL_NATIVE_GAP_Y);
     bus->beginWrite();
-    bus->writeC8D8(0x36, mad); /* 覆盖 MADCTL */
+    bus->writeC8D8(0x36, mad);
     bus->endWrite();
 
     s_touch_rot = (deg == 270) ? 3 : 1; /* 270° 已现场标定；90° 按镜像推得，未逐一标定 */
-    /*
-     * 硬件旋转下的地址偏移：由 gap 命令实测标定。
-     * 当前值来自现场标定（见 docs/rotation-tearing-fieldtest.md）。
-     */
-    gfx->setGap(s_gap_x, s_gap_y);
-    Serial.printf("[旋转] 应用地址偏移 gap=(%d, %d)\n", (int)s_gap_x, (int)s_gap_y);
-    lv_disp_set_rotation(NULL, LV_DISP_ROT_NONE); /* 必须清零，否则与硬件旋转叠加 */
-    s_display_rot = 0;
-    s_hw_rot = mad;
+    lv_disp_set_rotation(NULL, LV_DISP_ROT_NONE);
+    s_display_rot = deg;
     lv_obj_invalidate(lv_scr_act());
   }
   else {
-    if (s_hw_rot != 0) {
-      bus->beginWrite();
-      bus->writeC8D8(0x36, 0x00); /* 关掉硬件旋转 */
-      bus->endWrite();
-      s_hw_rot = 0;
-      lv_obj_invalidate(lv_scr_act());
-    }
+    /* 0°/180° 的 LVGL 路径完整且开销低；面板恢复原生方向。 */
+    gfx->setRotation(0); /* 内部会写 MADCTL=0 */
+    gfx->setGap(PANEL_NATIVE_GAP_X, PANEL_NATIVE_GAP_Y);
     s_touch_rot = 0;
     lv_disp_set_rotation(NULL, rot_deg_to_enum(deg));
     s_display_rot = deg;
+    lv_obj_invalidate(lv_scr_act());
   }
 
   if (persist) {
     Preferences prefs;
     if (prefs.begin(ROT_PREF_NS, false)) {
       prefs.putInt(ROT_PREF_KEY, deg);
-      prefs.putUChar(TOUCHROT_PREF_KEY, s_touch_rot);
       prefs.end();
     }
   }
   Serial.printf("[旋转] 屏幕方向 -> %d°（%s）%s\n", deg,
-                hw ? "面板硬件旋转" : "LVGL 软件旋转",
+                hw ? "CO5300 硬件旋转" : "LVGL 低开销路径",
                 persist ? "（已存 NVS）" : "（未持久化）");
 }
 
-/** 启动时恢复上次保存的方向；无记录则用编译期默认 DISPLAY_ROT */
+/** 启动时恢复方向；旋转策略升级时先回到编译期默认，之后继续保存用户设置。 */
 static void restore_display_rotation(void)
 {
   Preferences prefs;
   int saved = DISPLAY_ROT * 90;   /* 编译期默认 */
   bool from_nvs = false;
-  if (prefs.begin(ROT_PREF_NS, true)) {
-    from_nvs = prefs.isKey(ROT_PREF_KEY);   /* 先判断是否存在，才能区分来源 */
-    saved = prefs.getInt(ROT_PREF_KEY, saved);
+  bool policy_reset = false;
+  if (prefs.begin(ROT_PREF_NS, false)) {
+    const uint8_t policy = prefs.getUChar(ROT_POLICY_PREF_KEY, 0);
+    if (policy != ROT_POLICY_VERSION) {
+      /* 软件转置试验曾保存过旋转值；升级后按需求一次性恢复默认 0°。 */
+      prefs.putInt(ROT_PREF_KEY, saved);
+      prefs.putUChar(ROT_POLICY_PREF_KEY, ROT_POLICY_VERSION);
+      policy_reset = true;
+    }
+    else {
+      from_nvs = prefs.isKey(ROT_PREF_KEY);
+      saved = prefs.getInt(ROT_PREF_KEY, saved);
+    }
     prefs.end();
   }
   set_display_rotation(saved, false);
   Serial.printf("[旋转] 启动恢复方向 = %d°（来源：%s）\n", s_display_rot,
+                policy_reset ? "策略升级，重置为默认" :
                 from_nvs ? "NVS（上次用户设置）" : "编译期默认 DISPLAY_ROT");
-}
-
-/** 只写 MADCTL 寄存器并整屏重绘（不做持久化）*/
-static void apply_madctl(uint8_t v)
-{
-  bus->beginWrite();
-  bus->writeC8D8(0x36, v);
-  bus->endWrite();
-  s_hw_rot = v;
-  lv_obj_invalidate(lv_scr_act()); /* 触发整屏重绘，否则残留旧方向画面 */
 }
 
 /**
@@ -889,32 +668,6 @@ static void touch_apply_rot(int16_t *x, int16_t *y)
     default: break;
   }
 }
-
-/**
- * 设置并（可选）持久化硬件旋转。
- * @param v       MADCTL 值；0 = 关闭硬件旋转（回到 LVGL 软件旋转）
- * @param persist 是否写 NVS
- */
-static void set_hw_rotation(uint8_t v, bool persist)
-{
-  apply_madctl(v);
-  if (v != 0) {
-    /* 硬件旋转生效时，LVGL 必须不旋转，否则叠加成错误方向 */
-    lv_disp_set_rotation(NULL, LV_DISP_ROT_NONE);
-    s_display_rot = 0;
-  }
-  if (persist) {
-    Preferences prefs;
-    if (prefs.begin(ROT_PREF_NS, false)) {
-      prefs.putUChar(HWROT_PREF_KEY, v);
-      prefs.putUChar(TOUCHROT_PREF_KEY, s_touch_rot);
-      prefs.end();
-    }
-  }
-  Serial.printf("[旋转] 硬件旋转 MADCTL=0x%02X，触摸变换档=%u%s\n", (unsigned)v,
-                (unsigned)s_touch_rot, persist ? "（已存 NVS）" : "（未持久化）");
-}
-
 
 static void control_poll(void)
 {
@@ -1123,7 +876,7 @@ static void lvgl_init(void)
    */
   disp_drv.sw_rotate = 1;
 
-  /* 初始方向（编译期默认；运行时可用 madctl / lvrot 命令或 BLE 命令修改）*/
+  /* 初始方向（编译期默认；运行时可用 lvrot 命令或 BLE 命令修改）*/
 #if DISPLAY_ROT == 1
   disp_drv.rotated = LV_DISP_ROT_90;
 #elif DISPLAY_ROT == 2
@@ -1137,10 +890,7 @@ static void lvgl_init(void)
   /* 注册显示驱动（**必须先于 PSRAM 块**：注册时创建 lv_disp_t 与默认屏幕） */
   lv_disp_drv_register(&disp_drv);
 
-  /*
-   * PSRAM 全帧绘制缓冲：partial 模式下，缓冲 ≥ 脏区时 LVGL 只切 1 块。
-   * bufmode 串口命令可运行时在 内部/PSRAM 间切换（A/B 实测用）。
-   */
+  /* PSRAM 全帧绘制缓冲：partial 模式下，缓冲 ≥ 脏区时 LVGL 只切 1 块。 */
   s_buf_psram = (lv_color_t *)heap_caps_malloc(
       (size_t)LCD_WIDTH * LCD_HEIGHT * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
   if (s_buf_psram != NULL) {
@@ -1226,27 +976,15 @@ static void print_help(void)
   Serial.println("       pages                    列出页面");
   Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
-  Serial.println("       bufmode [psram|internal]  查看/切换绘制缓冲（滑动性能 A/B 对比）");
-  Serial.println("       te [on|off]               撕裂同步：使能并实测 TE 引脚（GPIO13）翻转");
-  Serial.println("       te sync [on|off]          开关「等 V-blank 再写」（撕裂抑制，可 A/B）");
-  Serial.println("       hwrot [0|60|A0|C0]        硬件旋转（持久化；90/270° 必须用它才不撕裂）");
-  Serial.println("       touchrot [0-3]            触摸坐标变换档位（硬件旋转下标定用）");
-  Serial.println("       edges                     四边彩线标定（再执行一次清除）");
-  Serial.println("       gap [x y]                 直接设置面板地址偏移（标定用）");
   Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
   Serial.println("       screen on|off             亮屏 / 息屏");
   Serial.println("       trip [reset]              行程统计：里程/最高速/均速");
   Serial.println("       face [id|next|prev]       查看/切换表盘（不带参数=列出全部）");
-  Serial.println("       spd [kmh|reset]           诊断：查询/强制设置速度指针");
   Serial.println("       nav [st mv dist [spd]]   导航卡片模拟数据（阶段1）：st=0..5 mv=0..7");
   Serial.println("                                  例: nav 1 2 500 68 → 导航中·左转·500m·68km/h");
-  Serial.println("       lvrot [0|1|2|3]          【运行时】LVGL 软件旋转 0/90/180/270°（不带参数=查询）");
-  Serial.println("       madctl <hex>              【实验】直写面板 MADCTL(0x36) 验证硬件旋转");
-  Serial.println("                                 参考: 00=0° 60=90° C0=180° A0=270°；恢复 madctl 0");
-  Serial.println("       flickrot [0|1]           flick 方向判定的旋转补偿（现场 A/B，不带参数=查询）");
+  Serial.println("       lvrot [0|1|2|3]          临时切换 0/90/180/270°（不写入 NVS）");
   Serial.println("       mem                      显示 LVGL/ESP 内存情况");
   Serial.println("       dump                     打印当前屏幕的元素树（排查元素缺失）");
-  Serial.println("       touch                    打印最近触摸采样（排查坐标镜像/旋转）");
   Serial.println("       help                     显示本帮助");
 }
 
@@ -1373,379 +1111,19 @@ static void print_dump(void)
   dump_obj(lv_scr_act(), 0);
 }
 
-static void print_touch_log(void)
-{
-  Serial.printf("[手势-最近] 方向=%s 目标=%s 页 %d → %d\n", s_last_gest.dir, s_last_gest.target,
-                s_last_gest.page_before, s_last_gest.page_after);
-  Serial.printf("[采样] 抬起 %u 次，其中 flick %u 次；最近 dx=%d dy=%d dt=%lu ms\n",
-                (unsigned)s_tp_release_cnt, (unsigned)s_tp_flick_cnt, (int)s_last_dx,
-                (int)s_last_dy, (unsigned long)s_last_dt);
-  Serial.printf("[手势] 计数 LEFT=%u RIGHT=%u TOP=%u BOTTOM=%u 其他=%u\n",
-                (unsigned)s_gest_left, (unsigned)s_gest_right, (unsigned)s_gest_top,
-                (unsigned)s_gest_bottom, (unsigned)s_gest_other);
-  Serial.printf("[触摸] 最近 %u 次采样（x,y,pressed,时刻ms）：\n", (unsigned)s_tlog_cnt);
-  uint8_t start = (s_tlog_cnt < TOUCH_LOG_N) ? 0 : s_tlog_head;
-  for (uint8_t i = 0; i < s_tlog_cnt; i++) {
-    touch_log_t *t = &s_tlog[(start + i) % TOUCH_LOG_N];
-    Serial.printf("   %4d,%4d  %d  %u\n", t->x, t->y, t->pressed, (unsigned)t->ms);
-  }
-}
-
 static void process_command(char *cmd)
 {
-  if (strncmp(cmd, "rot ", 4) == 0) {
-    int n = atoi(cmd + 4);
-    lv_disp_t *d = lv_disp_get_default();
-    if (d == NULL) {
-      Serial.println("[旋转] 显示未就绪");
-    }
-    else if (n >= 0 && n <= 3) {
-      lv_disp_rot_t r = (n == 1) ? LV_DISP_ROT_90
-                        : (n == 2) ? LV_DISP_ROT_180
-                        : (n == 3) ? LV_DISP_ROT_270 : LV_DISP_ROT_NONE;
-      lv_disp_set_rotation(d, r);
-      Serial.printf("[旋转] 已设为 %d（0=0° 1=90° 2=180° 3=270°）\n", n);
-    }
-    else {
-      Serial.println("[旋转] 参数应为 0/1/2/3");
-    }
+  if (strncmp(cmd, "verbose", 7) == 0) {
+    /* 调试输出闸门的手动开关（默认随 USB 主机连接状态自动判定） */
+    const char *arg = cmd + 7;
+    while (*arg == ' ') arg++;
+    if (strncmp(arg, "on", 2) == 0) s_dbg_force = true;
+    else if (strncmp(arg, "off", 3) == 0) s_dbg_force = false;
+    Serial.printf("[日志] 周期打印 = %s（主机连接=%d）\n",
+                  dbg_on() ? "开" : "关", (int)(bool)Serial);
   }
   else if (strcmp(cmd, "scan") == 0) {
     print_scan();
-  }
-  else if (strncmp(cmd, "spd", 3) == 0) {
-    /* 诊断命令：直接设置/查询速度指针（排查"速度 0 但指针不在 0"）*/
-    const char *arg = cmd + 3;
-    if (*arg == '\0') {
-      Serial.printf("[速度] 当前=%.1f km/h 有效=%d 指针对象=%p\n",
-                    (double)ui_speed_get_speed(), (int)ui_speed_get_valid(),
-                    (void *)ui_speed_get_needle());
-    }
-    else if (strncmp(arg, " reset", 6) == 0) {
-      ui_speed_set_fix(false, 0);
-      Serial.println("[速度] 已置为无效（指针应归零）");
-    }
-    else {
-      float v = (float)atof(arg);
-      ui_speed_set_fix(true, 12);
-      ui_speed_set_speed(v);
-      Serial.printf("[速度] 强制设为 %.1f km/h\n", (double)v);
-    }
-  }
-  else if (strncmp(cmd, "te", 2) == 0) {
-    /*
-     * 【诊断/实验】TE 撕裂同步。
-     *
-     *   te        使能 TE 并**实测 GPIO13 是否真的在翻转**（100 ms 采样）
-     *   te on     仅使能
-     *   te off    关闭
-     *
-     * 为什么要先测：TEON 此前从未被使能过，本板 TE 是否真的输出
-     * **从未被验证**。若引脚不翻转，后续"等 TE 再写"会死等。
-     */
-    const char *arg = cmd + 2;
-    if (strcmp(arg, " off") == 0) {
-      te_panel(false);
-      Serial.println("[TE] 已关闭（0x34 TEOFF）");
-    }
-    else if (strcmp(arg, " on") == 0) {
-      pinMode(LCD_TE_PIN, INPUT);
-      te_panel(true);
-      Serial.println("[TE] 已使能（0x35 TEON, mode 0 = 仅 V-blank）");
-    }
-    else if (strncmp(arg, " sync", 5) == 0) {
-      /* te sync on|off —— 开关"等 V-blank 再写" */
-      bool on = (strstr(arg, "off") == NULL);
-      if (on) {
-        if (!s_te_on) {
-          pinMode(LCD_TE_PIN, INPUT);
-          te_panel(true);
-        }
-        if (!te_wait_rise(30000)) {
-          Serial.println("[TE] ⚠️ 等不到 TE 上升沿 —— 拒绝启用（否则每帧白等 25ms）");
-        }
-        else {
-          s_te_sync = true;
-          Serial.println("[TE] ✅ TE 同步刷屏已开启（每帧等一次 V-blank 上升沿）");
-        }
-      }
-      else {
-        s_te_sync = false;
-        Serial.println("[TE] TE 同步刷屏已关闭（回到自由写入）");
-      }
-    }
-    else {
-      pinMode(LCD_TE_PIN, INPUT);
-      te_panel(true);
-      delay(30); /* 等面板开始输出 */
-
-      const uint32_t span_us = 100000; /* 采样 100 ms */
-      uint32_t t0 = micros();
-      uint32_t rises = 0, hi = 0, samples = 0;
-      int prev = digitalRead(LCD_TE_PIN);
-      uint32_t first_rise = 0, last_rise = 0;
-
-      while (micros() - t0 < span_us) {
-        int v = digitalRead(LCD_TE_PIN);
-        if (v != prev) {
-          if (v == HIGH) {
-            rises++;
-            uint32_t now = micros();
-            if (first_rise == 0) first_rise = now;
-            last_rise = now;
-          }
-          prev = v;
-        }
-        if (v) hi++;
-        samples++;
-      }
-
-      const uint32_t elapsed = micros() - t0;
-      Serial.printf("[TE] 引脚 GPIO%d：%u 次上升沿 / %.0f ms，高电平占比 %.1f%%\n", LCD_TE_PIN,
-                    (unsigned)rises, (double)elapsed / 1000.0,
-                    samples ? (double)hi * 100.0 / (double)samples : 0.0);
-      Serial.printf("[TE] 同步状态=%s｜累计等待 %u 次，超时 %u 次\n", s_te_sync ? "开" : "关",
-                    (unsigned)s_te_waits, (unsigned)s_te_timeouts);
-      if (rises >= 2 && last_rise > first_rise) {
-        const double period_ms = (double)(last_rise - first_rise) / 1000.0 / (double)(rises - 1);
-        Serial.printf("[TE] ✅ 检测到撕裂同步信号：周期 %.2f ms（≈ %.1f Hz）\n", period_ms,
-                      period_ms > 0 ? 1000.0 / period_ms : 0.0);
-      }
-      else {
-        Serial.println("[TE] ❌ 未检测到翻转 —— 该引脚未输出 TE（或需先使能 0x35）");
-      }
-    }
-  }
-  else if (strncmp(cmd, "hwrot", 5) == 0) {
-    /*
-     * 硬件旋转（推荐用法，**会持久化**）。
-     *
-     *   hwrot           查看当前设置
-     *   hwrot 0         关闭硬件旋转（回到 LVGL 软件旋转）
-     *   hwrot 60        启用 MADCTL=0x60（实测：USB 口朝下、不撕裂）
-     *   hwrot A0        启用 MADCTL=0xA0
-     *
-     * 与 `madctl` 的区别：**madctl 是实验命令、不持久化**；
-     * hwrot 写 NVS，并在启动时自动重放（MADCTL 是寄存器，复位即丢）。
-     * 启用时会自动把 LVGL 旋转清零，避免两者叠加。
-     */
-    const char *arg = cmd + 5;
-    while (*arg == ' ') arg++;
-    if (*arg == ' ') {
-      Serial.printf("[旋转] 硬件旋转 MADCTL=0x%02X（%s），触摸变换档=%u\n", (unsigned)s_hw_rot,
-                    s_hw_rot ? "已启用" : "未启用", (unsigned)s_touch_rot);
-      Serial.println("       用法: hwrot 0 | hwrot 60 | hwrot A0 | hwrot C0（会存 NVS）");
-    }
-    else {
-      unsigned int v = 0;
-      if (sscanf(arg, "%x", &v) == 1 && v <= 0xFF) {
-        set_hw_rotation((uint8_t)v, true);
-      }
-      else {
-        Serial.println("[旋转] 无效值，例: hwrot 60");
-      }
-    }
-  }
-  else if (strncmp(cmd, "touchrot", 8) == 0) {
-    /*
-     * 触摸坐标变换档位（硬件旋转必需，否则触摸错位）。
-     *   0 = 不变换   1 = 顺时针 90°   2 = 180°   3 = 逆时针 90°
-     * 现场标定：逐个试，哪个档位下触摸跟手就是它。
-     */
-    const char *arg = cmd + 8;
-    while (*arg == ' ') arg++;
-    if (*arg == ' ') {
-      Serial.printf("[触摸] 变换档=%u（0=不变换 1=顺时针90° 2=180° 3=逆时针90°）\n",
-                    (unsigned)s_touch_rot);
-    }
-    else {
-      int v = atoi(arg);
-      if (v >= 0 && v <= 3) {
-        s_touch_rot = (uint8_t)v;
-        Preferences prefs;
-        if (prefs.begin(ROT_PREF_NS, false)) {
-          prefs.putUChar(TOUCHROT_PREF_KEY, s_touch_rot);
-          prefs.end();
-        }
-        Serial.printf("[触摸] 变换档 -> %d（已存 NVS）\n", v);
-      }
-      else {
-        Serial.println("[触摸] 取值 0-3");
-      }
-    }
-  }
-  else if (strncmp(cmd, "swrot", 5) == 0) {
-    /*
-     * 【A/B 对比用】强制走**纯 LVGL 软件旋转**（= 改造前的旧行为）：
-     * MADCTL 归零 + 偏移回到构造值 (6,0) + lv_disp_set_rotation()。
-     * 用于和硬件旋转逐像素对比"显示是否完整"，不再靠猜。
-     */
-    const char *arg = cmd + 5;
-    while (*arg == ' ') arg++;
-    int v = (*arg == '\0') ? 3 : atoi(arg);
-    if (v < 0 || v > 3) v = 3;
-    bus->beginWrite();
-    bus->writeC8D8(0x36, 0x00); /* MADCTL 归零 */
-    bus->endWrite();
-    s_hw_rot = 0;
-    gfx->setGap(6, 0); /* 旧行为：库构造值 */
-    static const lv_disp_rot_t TBL[4] = {LV_DISP_ROT_NONE, LV_DISP_ROT_90, LV_DISP_ROT_180,
-                                         LV_DISP_ROT_270};
-    lv_disp_set_rotation(NULL, TBL[v]);
-    s_display_rot = v * 90;
-    Serial.printf("[旋转] 【旧行为】纯软件旋转 = %d°，MADCTL=0x00，gap=(6,0)%s", v * 90, "\n");
-  }
-  else if (strncmp(cmd, "gap", 3) == 0) {
-    /*
-     * 【标定】直接设置面板地址窗口偏移（绕过库的写死组合）。
-     *   gap              查看
-     *   gap <x> <y>      设置（-1 = 保持原值）
-     * 配合 edges 画的四边彩线，一眼就能判断哪个值让四条边都齐全。
-     */
-    const char *arg = cmd + 3;
-    while (*arg == ' ') arg++;
-    int xo = -1, yo = -1;
-    if (*arg == '\0' || sscanf(arg, "%d %d", &xo, &yo) < 1) {
-      Serial.printf("[旋转] 地址偏移 gap = (%d, %d)%s", gfx->gapX(), gfx->gapY(), "\n");
-    }
-    else {
-      gfx->setGap(xo, yo);
-      lv_obj_invalidate(lv_scr_act());
-      Serial.printf("[旋转] 地址偏移 -> (%d, %d)%s", gfx->gapX(), gfx->gapY(), "\n");
-    }
-  }
-
-  else if (strcmp(cmd, "edges") == 0) {
-    /*
-     * 【一次性标定】在**逻辑画面**的四条边各画一条 3px 彩线：
-     *     上=绿(y=0)  下=黄(y=H-1)  左=红(x=0)  右=蓝(x=W-1)
-     * 拍照后即可精确看出：每条逻辑边落在屏幕何处、被切掉多少像素、
-     * 以及是哪个轴发生了偏移 —— 比反复盲试偏移高效得多。
-     * 再执行一次 edges 即清除。
-     */
-    static lv_obj_t *s_edge[4] = {NULL, NULL, NULL, NULL};
-    static lv_obj_t *s_edge_dummy = NULL;
-    if (s_edge[0] != NULL || s_edge_dummy != NULL) {
-      for (int i = 0; i < 4; i++) {
-        if (s_edge[i]) lv_obj_del(s_edge[i]);
-        s_edge[i] = NULL;
-      }
-      if (s_edge_dummy) {
-        lv_obj_del(s_edge_dummy);
-        s_edge_dummy = NULL;
-      }
-      Serial.println("[标定] 边线已清除");
-    }
-    else {
-      /*
-       * 颜色选择：表盘本身是**橙红色系刻度 + 白底 + 深蓝插画**，
-       * 早期用红/黄/蓝标定线与刻度撞色，拍照后无法可靠区分。
-       * 改为 UI 里完全不出现的**洋红 / 青 / 亮绿 / 纯白**，
-       * 并同时画一个**黑色边界圆环**（见下方），便于目视判断"四周间距是否均匀"。
-       */
-      const lv_color_t col[4] = {lv_color_hex(0xFF00FF), lv_color_hex(0x00FFFF),
-                                 lv_color_hex(0x00FF00), lv_color_hex(0xFFFFFF)};
-      /* 线宽 10px、高饱和 —— 上次 3px 太细导致拍照后判断失误 */
-      const int16_t TK = 10;
-      const int16_t X[4] = {0, 0, 0, LCD_WIDTH - TK};
-      const int16_t Y[4] = {0, LCD_HEIGHT - TK, 0, 0};
-      const int16_t W[4] = {LCD_WIDTH, LCD_WIDTH, TK, TK};
-      const int16_t H[4] = {TK, TK, LCD_HEIGHT, LCD_HEIGHT};
-      const char *nm[4] = {"上(绿)", "下(黄)", "左(红)", "右(蓝)"};
-      /* 追加第 5 个对象：逻辑边界处的细黑圆环（半径 231），
-         用于目视判断"环到屏幕边框的间距四周是否均匀" */
-      s_edge_dummy = lv_obj_create(lv_scr_act());
-      lv_obj_remove_style_all(s_edge_dummy);
-      lv_obj_set_size(s_edge_dummy, LCD_WIDTH - 6, LCD_HEIGHT - 6);
-      lv_obj_center(s_edge_dummy);
-      lv_obj_set_style_radius(s_edge_dummy, LV_RADIUS_CIRCLE, 0);
-      lv_obj_set_style_bg_opa(s_edge_dummy, LV_OPA_TRANSP, 0);
-      lv_obj_set_style_border_width(s_edge_dummy, 2, 0);
-      lv_obj_set_style_border_color(s_edge_dummy, lv_color_hex(0x000000), 0);
-      lv_obj_clear_flag(s_edge_dummy, LV_OBJ_FLAG_SCROLLABLE);
-
-      for (int i = 0; i < 4; i++) {
-        s_edge[i] = lv_obj_create(lv_scr_act());
-        lv_obj_remove_style_all(s_edge[i]);
-        lv_obj_set_pos(s_edge[i], X[i], Y[i]);
-        lv_obj_set_size(s_edge[i], W[i], H[i]);
-        lv_obj_set_style_bg_color(s_edge[i], col[i], 0);
-        lv_obj_set_style_bg_opa(s_edge[i], LV_OPA_COVER, 0);
-        lv_obj_clear_flag(s_edge[i], LV_OBJ_FLAG_SCROLLABLE);
-      }
-      Serial.printf("[标定] 已画四条边线（10px）：%s=%s / %s=%s / %s=%s / %s=%s%s",
-                    nm[0], "y0", nm[1], "yH-1", nm[2], "x0", nm[3], "xW-1", "\n");
-    }
-  }
-  else if (strncmp(cmd, "librot", 6) == 0) {
-    /*
-     * 【现场标定】切换**库的**旋转索引（0-3），再重写当前 MADCTL。
-     *
-     * 为什么要它：本面板需要 6px 地址偏移，而 `Arduino_TFT::setRotation()`
-     * 按索引把偏移分配到不同轴：
-     *     0 → (_xStart=6, _yStart=0)   1 → (0,0)   2 → (0,0)   3 → (0,6)
-     * 硬件旋转下正确的轴向需实测确定，此命令免去反复烧录。
-     */
-    const char *arg = cmd + 6;
-    while (*arg == ' ') arg++;
-    if (*arg == '\0') {
-      Serial.printf("[旋转] 库旋转索引标定：用法 librot 0|1|2|3（再重写 MADCTL=0x%02X）\n",
-                    (unsigned)s_hw_rot);
-    }
-    else {
-      int v = atoi(arg);
-      if (v >= 0 && v <= 3) {
-        gfx->setRotation((uint8_t)v); /* 库会设置 _xStart/_yStart */
-        bus->beginWrite();
-        bus->writeC8D8(0x36, s_hw_rot ? s_hw_rot : 0x00); /* 再覆盖 MADCTL */
-        bus->endWrite();
-        lv_obj_invalidate(lv_scr_act());
-        Serial.printf("[旋转] 库旋转索引 -> %d，MADCTL 重写为 0x%02X%s", v,
-                      (unsigned)(s_hw_rot ? s_hw_rot : 0x00), "\n");
-      }
-      else {
-        Serial.println("[旋转] librot 取值 0-3");
-      }
-    }
-  }
-  else if (strncmp(cmd, "madctl", 6) == 0) {
-    /*
-     * 【实验命令】直接写面板 MADCTL(0x36)，验证 CO5300 是否支持**硬件旋转**。
-     *
-     * 为什么需要实验：
-     *   - 库的 Arduino_CO5300::setRotation() 只做 X/Y 翻转，**从不使用 MV(0x20) 位**
-     *     （90°/270° 旋转的关键位），源码注释也写 "CO5300 does not support rotation"；
-     *   - 且 setRotation() 在本工程**从未被调用** → MADCTL 一直是面板上电默认值，
-     *     其语义（含 MV 位是否有效）在本板**从未被实测**。
-     *   - 若硬件支持 MV，则 90° 旋转**零性能开销**，且面板会把**文字一起正确旋转**
-     *     → 无需重新设计界面（这是与"LVGL 软件旋转/重排布局"的本质区别）。
-     *
-     * 标准 ST7789 系取值参考（不同面板可能有差异，需实测）：
-     *   0x00 = 0°    0x60 = 90°    0xC0 = 180°    0xA0 = 270°
-     *   BGR 位可加 0x08 对比颜色顺序（RGB 系加 0x00）
-     *
-     * 恢复方式：`madctl 0`（回 0°），或按 RESET 复位（复位后回面板默认）。
-     */
-    const char *arg = cmd + 6;
-    if (*arg == '\0') {
-      Serial.println("[旋转] 用法: madctl <hex>   例: madctl 60");
-      Serial.println("       参考: 00=0°  60=90°  C0=180°  A0=270°");
-      Serial.println("       加 0x08 试 BGR 顺序，例: madctl 68");
-      Serial.println("       恢复: madctl 0  或按 RESET");
-    }
-    else {
-      unsigned int v = 0;
-      if (sscanf(arg, "%x", &v) == 1 && v <= 0xFF) {
-        bus->beginWrite();
-        bus->writeC8D8(0x36, (uint8_t)v);   /* MADCTL */
-        bus->endWrite();
-        lv_obj_invalidate(lv_scr_act());    /* 触发整屏重绘，便于观察 */
-        Serial.printf("[旋转] MADCTL <- 0x%02X；若画面异常请 `madctl 0` 或按 RESET\n", v);
-      }
-      else {
-        Serial.println("[旋转] 参数无效，应为 1-2 位十六进制（例: 60）");
-      }
-    }
   }
   else if (strncmp(cmd, "nav", 3) == 0) {
     /*
@@ -1791,28 +1169,10 @@ static void process_command(char *cmd)
     }
   }
   else if (strncmp(cmd, "lvrot", 5) == 0) {
-    /*
-     * 【运行时软件旋转】用 LVGL 官方的 lv_disp_set_rotation() 切换方向。
-     *
-     * 依据：官方示例 `06_LVGL_Widgets.ino` 正是此法（disp_drv.sw_rotate = 1 +
-     * 按 IMU 姿态调 lv_disp_set_rotation），四种角度均受支持。
-     *
-     * 本屏为圆形，旋转后仍是同一个圆 → **无长宽比/布局副作用**。
-     * 触摸坐标由 LVGL 自动做逆变换（indev_pointer_proc），无需自行处理。
-     *
-     * 开销按角度分档（见 lv_refr.c）：
-     *   0°   —— 无开销（不进入旋转路径）
-     *   180° —— 原地首尾反转，无需临时缓冲，成本低
-     *   90/270° —— 转置；本屏全屏脏区为**正方形**，走原地 4 向旋转
-     *              （draw_buf_rotate_90_sqr），同样不分配临时缓冲
-     */
+    /* 临时切换正式旋转策略，不写 NVS，便于开发期验证。 */
     const char *arg = cmd + 5;
-    lv_disp_t *d = lv_disp_get_default();
     if (*arg == '\0') {
-      Serial.printf("[旋转] 当前 LVGL 旋转=%d（%d°），sw_rotate=%d\n",
-                    d ? (int)d->driver->rotated : -1,
-                    d ? (int)d->driver->rotated * 90 : 0,
-                    d ? (int)d->driver->sw_rotate : 0);
+      Serial.printf("[旋转] 当前=%d°（0/180°=LVGL，90/270°=MADCTL）\n", s_display_rot);
       Serial.println("       用法: lvrot 0|1|2|3  →  0°/90°/180°/270°");
     }
     else {
@@ -1825,22 +1185,6 @@ static void process_command(char *cmd)
       else {
         Serial.println("[旋转] 参数应为 0-3（0°/90°/180°/270°）");
       }
-    }
-  }
-  else if (strncmp(cmd, "flickrot", 8) == 0) {
-    /*
-     * 【现场 A/B】flick 方向判定是否按当前屏幕方向做坐标逆变换。
-     *   0 = 旧行为：直接用面板原始坐标 → 90°/270° 下"左右滑"判不出 flick
-     *   1 = 修正行为（默认）：换算到 LVGL 逻辑坐标再判定
-     */
-    const char *arg = cmd + 8;
-    if (*arg == '\0') {
-      Serial.printf("[触摸] flick 旋转补偿 = %d（0=旧行为 1=修正）\n", s_flick_rot_fix ? 1 : 0);
-      Serial.println("       用法: flickrot 0|1（现场 A/B：切到 90° 后左右滑动对比）");
-    }
-    else {
-      s_flick_rot_fix = (atoi(arg) != 0);
-      Serial.printf("[触摸] flick 旋转补偿 -> %d\n", s_flick_rot_fix ? 1 : 0);
     }
   }
   else if (strncmp(cmd, "face", 4) == 0) {
@@ -1916,29 +1260,6 @@ static void process_command(char *cmd)
                     s_screen_off ? "是" : "否", (unsigned)s_brightness);
     }
   }
-  else if (strncmp(cmd, "bufmode", 7) == 0) {
-    const char *arg = cmd + 7;
-    lv_disp_t *d = lv_disp_get_default();
-    if (*arg == '\0') {
-      Serial.printf("[缓冲] 当前=%s（重绘/循环见心跳）\n",
-                    s_buf_psram_active ? "PSRAM 全帧 434KB" : "内部 1/10 屏 43KB");
-    }
-    else if (d != NULL && strcmp(arg, " psram") == 0 && s_buf_psram != NULL) {
-      d->driver->draw_buf = &s_draw_buf_psram;
-      s_buf_psram_active = true;
-      lv_obj_invalidate(lv_scr_act());
-      Serial.println("[缓冲] → PSRAM 全帧（脏区单块渲染）");
-    }
-    else if (d != NULL && strcmp(arg, " internal") == 0) {
-      d->driver->draw_buf = &draw_buf;
-      s_buf_psram_active = false;
-      lv_obj_invalidate(lv_scr_act());
-      Serial.println("[缓冲] → 内部 1/10 屏（基线，分块渲染）");
-    }
-    else {
-      Serial.println("[缓冲] 用法：bufmode | bufmode psram | bufmode internal");
-    }
-  }
   else if (strcmp(cmd, "ble") == 0) {
     print_ble();
   }
@@ -1947,9 +1268,6 @@ static void process_command(char *cmd)
   }
   else if (strcmp(cmd, "dump") == 0) {
     print_dump();
-  }
-  else if (strcmp(cmd, "touch") == 0) {
-    print_touch_log();
   }
   else if (strcmp(cmd, "help") == 0) {
     print_help();
@@ -2090,36 +1408,6 @@ void setup()
 
   /* 时间来源：RTC（失败时界面会显示无效应有的样子） */
   ui_timesrc_set_provider(rtc_time_provider);
-
-  /* 诊断：屏幕级手势日志（若 LVGL 识别到手势但页面未切换，说明是事件目标问题） */
-  lv_obj_add_event_cb(lv_scr_act(), [](lv_event_t *e) {
-    (void)e;
-    lv_dir_t d = lv_indev_get_gesture_dir(lv_indev_get_act());
-    lv_obj_t *tgt = (lv_obj_t *)lv_event_get_target(e);
-    lv_obj_t *cur = (lv_obj_t *)lv_event_get_current_target(e);
-    bool tgt_is_scr = (tgt == lv_scr_act());
-    bool tgt_is_page = false;
-    for (int i = 0; i < (int)UI_PAGE_COUNT; i++) {
-      if (tgt == ui_pages_obj((ui_page_t)i)) tgt_is_page = true;
-    }
-    s_last_gest.dir = (d == LV_DIR_LEFT) ? "LEFT" : (d == LV_DIR_RIGHT) ? "RIGHT"
-                      : (d == LV_DIR_TOP) ? "TOP" : (d == LV_DIR_BOTTOM) ? "BOTTOM" : "?";
-    s_last_gest.target = tgt_is_scr ? "screen" : tgt_is_page ? "page" : "其它";
-    s_last_gest.page_before = s_page_seen;
-    s_last_gest.page_after = (int)ui_pages_current();
-    Serial.printf("[手势] 目标=%s current=%s 页 %d→%d\n", s_last_gest.target,
-                  (cur == lv_scr_act()) ? "screen" : "其它", s_last_gest.page_before,
-                  s_last_gest.page_after);
-
-    if (d == LV_DIR_LEFT) s_gest_left++;
-    else if (d == LV_DIR_RIGHT) s_gest_right++;
-    else if (d == LV_DIR_TOP) s_gest_top++;
-    else if (d == LV_DIR_BOTTOM) s_gest_bottom++;
-    else s_gest_other++;
-    const char *n = (d == LV_DIR_LEFT) ? "LEFT" : (d == LV_DIR_RIGHT) ? "RIGHT"
-                    : (d == LV_DIR_TOP) ? "TOP" : (d == LV_DIR_BOTTOM) ? "BOTTOM" : "?";
-    Serial.printf("[手势] 屏幕收到 %s\n", n);
-  }, LV_EVENT_GESTURE, NULL);
 
   /* 烘焙图充气：必须在 ui_pages_init() 之前 —— 表盘构建时会 lv_img_set_src
    * 引用这些 dsc，提前改好可避免"先引用旧格式、后改写"的隐患。 */
@@ -2306,9 +1594,19 @@ static void ble_poll(void)
   bool speed_ok = m.speed_valid && m.speed_mps >= 0.0f;
   s_tel_valid = m.location_valid || speed_ok;
 
-  Serial.printf("[BLE] v=%d 速度=%.2f m/s(%.1f km/h) valid=%d 航向=%.1f° 定位=%d\n",
-                m.v, (double)m.speed_mps, (double)telemetry_speed_kmh(&m), (int)m.speed_valid,
-                (double)m.course_deg, (int)m.location_valid);
+  /* ⚠️ 2Hz 高频打印：必须过闸门，否则装车后会周期性阻塞主循环 */
+  uint32_t t_pkt0 = micros();
+  if (dbg_on()) {
+    Serial.printf("[BLE] v=%d 速度=%.2f m/s(%.1f km/h) valid=%d 航向=%.1f° 定位=%d\n",
+                  m.v, (double)m.speed_mps, (double)telemetry_speed_kmh(&m), (int)m.speed_valid,
+                  (double)m.course_deg, (int)m.location_valid);
+  }
+  {
+    uint32_t dtp = micros() - t_pkt0;
+    if (dtp > 30000) {
+      Serial.printf("[诊断] 遥测打印阻塞 %lu ms\n", (unsigned long)(dtp / 1000));
+    }
+  }
 }
 
 /*
@@ -2447,11 +1745,9 @@ void loop()
     ui_pages_settle();
   }
 
-  s_page_seen = (int)ui_pages_current(); /* 记录当前页，供手势诊断取 before */
   {
     uint32_t t_render = micros();
     lv_timer_handler();
-    s_te_waited_this_frame = false; /* 新的一帧：允许再等一次 TE */
     uint32_t dt = micros() - t_render;
     if (dt > s_render_us_max) s_render_us_max = dt;
     s_render_us_sum += dt;
@@ -2466,20 +1762,37 @@ void loop()
     uint32_t dt = now - last;
     last = now;
     uint32_t f = s_flush_cnt, l = s_loop_cnt;
-    Serial.printf("[运行] %lu s  空闲堆 %u B  循环 %u/s  重绘 %u/s  缓冲=%s\n",
-                  (unsigned long)(now / 1000), (unsigned)ESP.getFreeHeap(),
-                  (unsigned)((l - last_loop) * 1000UL / dt),
-                  (unsigned)((f - last_flush) * 1000UL / dt),
-                  s_buf_psram_active ? "PSRAM全帧" : "内部1/10");
-    Serial.printf("       渲染最大 %lu ms（占空 %u%%）｜QSPI 传输 合计 %lu ms 单次最大 %lu ms\n",
-                  (unsigned long)(s_render_us_max / 1000),
-                  (unsigned)(s_render_us_sum / (dt * 10)),
-                  (unsigned long)(s_flush_us_sum / 1000),
-                  (unsigned long)(s_flush_us_max / 1000));
-    Serial.printf("       脏区：单次最大 %lu px（占整屏 %u%%），窗口累计 %lu px（整屏 217156）\n",
-                  (unsigned long)s_flush_area_max,
-                  (unsigned)(s_flush_area_max * 100UL / 217156UL),
-                  (unsigned long)s_flush_area_sum);
+    /*
+     * 【诊断】测出这几条 printf 的真实耗时。
+     * 目的是用数据判定"串口输出是否会阻塞主循环"这一假设，
+     * 而不是靠推测 —— 若耗时只有几百微秒，则该假设不成立。
+     */
+    uint32_t t_print0 = micros();
+    /* ⚠️ 这 3 条 printf 实测就是 ~1 秒阻塞的来源，必须过闸门 */
+    if (dbg_on()) {
+      Serial.printf("[运行] %lu s  空闲堆 %u B  循环 %u/s  重绘 %u/s  缓冲=%s\n",
+                    (unsigned long)(now / 1000), (unsigned)ESP.getFreeHeap(),
+                    (unsigned)((l - last_loop) * 1000UL / dt),
+                    (unsigned)((f - last_flush) * 1000UL / dt),
+                    s_buf_psram_active ? "PSRAM全帧" : "内部1/10");
+      Serial.printf("       渲染最大 %lu ms（占空 %u%%）｜QSPI 传输 合计 %lu ms 单次最大 %lu ms\n",
+                    (unsigned long)(s_render_us_max / 1000),
+                    (unsigned)(s_render_us_sum / (dt * 10)),
+                    (unsigned long)(s_flush_us_sum / 1000),
+                    (unsigned long)(s_flush_us_max / 1000));
+      Serial.printf("       脏区：单次最大 %lu px（占整屏 %u%%），窗口累计 %lu px（整屏 217156）\n",
+                    (unsigned long)s_flush_area_max,
+                    (unsigned)(s_flush_area_max * 100UL / 217156UL),
+                    (unsigned long)s_flush_area_sum);
+    }
+    {
+      uint32_t dtp = micros() - t_print0;
+      if (dtp > 30000) {
+        Serial.printf("[诊断] 心跳打印阻塞 %lu ms（窗口 %lu ms）\n",
+                      (unsigned long)(dtp / 1000), (unsigned long)dt);
+      }
+    }
+    /* 统计清零与是否打印无关，照常执行 */
     s_render_us_max = 0;
     s_render_us_sum = 0;
     s_flush_us_sum = 0;

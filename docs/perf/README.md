@@ -90,7 +90,7 @@ python3 tools/perf_needle.py --duration 150 --label after-speedUI \
 |------|------|------|
 | 50Hz UI 限频 | `dashboard.ino` `ble_update()` | 手机 2Hz，限频压低空转成本 |
 | setter 变更检测 | `ui_speed.c` | 防 `lv_meter_set_indicator_value` 无条件失效化 |
-| PSRAM 全帧绘制缓冲 | `dashboard.ino` | partial 模式下脏区 ≤ 缓冲即**只切 1 块**；`bufmode` 可切内部 1/10 屏做 A/B |
+| PSRAM 全帧绘制缓冲 | `dashboard.ino` | partial 模式下脏区 ≤ 缓冲即**只切 1 块**；分配失败时降级为内部 1/10 屏 |
 | QSPI 80MHz | `QSPI_SPEED_HZ` | 实测单次传输 p50 仅 1ms，**不是瓶颈** |
 
 > 瓶颈是 **LVGL 渲染本身**（29ms），不是 QSPI。
@@ -162,7 +162,7 @@ python3 tools/perf_needle.py --duration 150 --label after-speedUI \
 ### 仍然值得优化的点
 
 **约 7 次刷新/秒对指针偏低**（理想 10–15 次/秒），观感会"有点跳"。
-方向：调整固件 `ble_update()` 的 UI 限频与 EMA 斜坡的配合，
+方向：调整固件 `ble_update()` 的 UI 限频与按时间斜坡的配合，
 或让指针在斜坡期间按固定帧率刷新，而不是"值一变就刷、值不变就不刷"。
 
 > 注意：这项只影响**观感流畅度**，与撕裂无关；撕裂已在硬件旋转下根治。

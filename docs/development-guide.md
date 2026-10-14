@@ -263,15 +263,15 @@ arduino-cli compile \
 
 ### 测试
 ```bash
-cd tests && make run PYTHON=<python路径>    # 207 项单测
+cd tests && make run PYTHON=<python路径>    # 全部单测
 python3 tools/ui_regression.py             # 10 项像素回归
 tools/run_ios_tests.sh                     # 5 项 XCUITest
 ```
 
 ### 串口命令
-`ble`（连接/遥测统计）、`face`（切表盘）、`spd`（诊断速度指针）、
-`trip`（行程）、`bright`/`screen`（亮度/息屏）、`bufmode`（缓冲 A/B）、
-`mem`、`touch`、`dump`、`help`。详见 [`../PROGRESS.md`](../PROGRESS.md) §11。
+`ble`（连接/遥测统计）、`face`（切表盘）、`trip`（行程）、
+`bright`/`screen`（亮度/息屏）、`lvrot`（临时切换方向）、
+`mem`、`dump`、`help`。详见 [`../PROGRESS.md`](../PROGRESS.md) §11。
 
 ---
 
@@ -334,11 +334,9 @@ tools/run_ios_tests.sh                     # 5 项 XCUITest
 
 | 方向 | 前提条件（已确认可用）| 工作量 |
 |------|---------------------|-------|
-| **屏幕旋转**（竖屏/横屏）| ✅ **已实现**：App/串口/BLE 切换 0/90/180/270°，NVS 持久化。LVGL 软件旋转官方支持，90°/270° 仅 +20ms/整屏帧；圆屏旋转无布局副作用 | 已完成 |
+| **屏幕旋转**（竖屏/横屏）| ✅ **已实现**：App/BLE 切换 0/90/180/270°，NVS 持久化。默认 0°；90°/270° 使用 MADCTL，接受少量边缘黑缺口以保证流畅度 | 已完成 |
 | 图片背景 + 时钟（功能②）| 存储已验证：**有 TF/microSD 卡槽**（SDMMC 1-bit）+ **9.9MB 未用 ffat 分区**（0x610000）| 中 |
-| 面板 MADCTL 硬件旋转 | 未探索：已加 `madctl <hex>` 实验命令，若 CO5300 的 MV 位有效可省掉那 20ms | 小 |
 | 行程统计上屏 | 数据已有，仅需 UI（当前只在串口 `trip` 查询）| 小 |
-| UI 状态标签与指针重叠 | 设计选项待定，见 [`ui-guidelines.md`](ui-guidelines.md) | 小 |
 
 ---
 

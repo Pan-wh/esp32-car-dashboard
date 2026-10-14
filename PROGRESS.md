@@ -1,6 +1,6 @@
 # 项目进度总览
 
-> 最后更新：2026-10-13
+> 最后更新：2026-10-14
 > 本文是**单一事实来源**：项目当前做到哪一步、还差什么、有什么已知问题。
 > 历史决策与踩坑细节见 `docs/decisions.md`、`docs/troubleshooting.md`。
 
@@ -16,7 +16,7 @@
 | [`docs/ai-task-boundaries.md`](docs/ai-task-boundaries.md) | **AI 任务边界**：给 AI 划定任务域，防止越界改坏代码（6 种任务模式）|
 | [`docs/test-results.md`](docs/test-results.md) | **测试台账**（单一事实来源）：§9 矩阵 12 项、DoD 8 项、复测指引 |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | 排障记录：按主题索引，含根因分析与踩坑 |
-| [`docs/rotation-tearing-fieldtest.md`](docs/rotation-tearing-fieldtest.md) | **现场测试清单**：旋转后撕裂/果冻的判定步骤、串口命令、记录表（待执行）|
+| [`docs/rotation-hardware-vs-software.md`](docs/rotation-hardware-vs-software.md) | **旋转结论**：硬件/软件方案的真机数据、最终取舍与禁止重复试验项 |
 | [`docs/architecture.md`](docs/architecture.md) | 系统架构、模块划分、共享代码层 |
 | [`docs/ble.md`](docs/ble.md) | BLE 协议细节（GATT、JSON 字段）|
 | [`docs/decisions.md`](docs/decisions.md) | 设计决策（含已被取代的决策，保留历史）|
@@ -117,9 +117,9 @@ ESP32-S3 (dashboard.ino)
 | **五表盘** | 模拟时钟 / 数字时钟 / 速度表 / 多彩时钟 / **导航卡片**，滑动切换 + BLE 远程切换 |
 | **导航卡片**（阶段1）| 转向箭头（8 种，lv_line 绘制）+ 距离（m/km 自适应）+ 车速 + 状态；**过期/无数据时不显示旧指引** |
 | **五态链路显示** | BT OFF / WAIT GPS / NO FIX / STALE / LIVE |
-| **速度指针** | 烘焙表盘 + 橙色指针，EMA 平滑，失效立即归零 |
+| **速度指针** | 烘焙表盘 + 橙色指针，按时间推进的速度斜坡，失效立即归零 |
 | **驾驶员插画** | 三态表情（平静/皱眉/咬牙），按 90/120 km/h 阈值切换 |
-| **航向 + 行程 HUD** | 底部显示「NE 45° · 12.3 km · MAX 87」，位于指针扫不到的扇区 |
+| **底部状态子仪表** | 白底圆形区域组合数字速度、单位、状态色点与五态文案，不抢人物和指针焦点 |
 | **设备控制** | 亮度（0-255）、息屏/亮屏、**屏幕方向 0/90/180/270°**（NVS 持久化）|
 | **时间同步** | 首次 BLE UTC → RTC，时钟页显示 SYNCED |
 | **行程统计** | 里程/最高速/加权均速，**仅 LIVE 且速度有效时累积** |
@@ -228,13 +228,12 @@ ESP32-S3 (dashboard.ino)
 
 | 优先级 | 事项 | 前置调研 / 已确认前提 | 预估工作量 |
 |--------|------|---------------------|-----------|
-| ~~高~~ | ~~竖屏 UI（重排布局）~~ | ✅ **已由「屏幕旋转」解决，无需重排界面**：LVGL 软件旋转官方支持，实测 90°/270° 仅 **+20ms/整屏帧**；圆屏旋转无布局副作用。App/串口/BLE 均可切换并持久化（NVS）| 已完成 |
+| ~~高~~ | ~~竖屏 UI（重排布局）~~ | ✅ **已由「屏幕旋转」解决，无需重排界面**：默认 0°；90°/270° 使用 MADCTL 硬件旋转，接受少量边缘黑缺口以保证动画与滑页性能。App/BLE 可切换并持久化（NVS）| 已完成 |
 | 中 | 功能②：图片背景 + 时钟 | ✅ 存储已验证：**有 TF/microSD 卡槽**（SDMMC 1-bit）+ **9.9MB 未用 ffat 分区**（`0x610000`）| 中 |
 | 中 | 偶发单帧 1000ms+ 尖刺 | 32 分钟长稳**未复现**；需更长监测或加长耗时打点 | 小（调研为主）|
-| **高** | **旋转后撕裂 / 果冻效应**：现场判定 + 修复路线 | 源码核对 + 模拟器实测已完成：撕裂根因是 **QSPI 写 GRAM 与面板扫描无同步**（整屏 434KB/43ms ≈ 2.6 个场周期），软件旋转再把一次刷新拆成多次 flush（数字时钟实测 0°=1 次 → 90°≈11 次）。**执行清单见 [`docs/rotation-tearing-fieldtest.md`](docs/rotation-tearing-fieldtest.md)**（含 40MHz A/B、`madctl` 硬件旋转验证、TE 调查）| 中 |
-| 中 | flick 手势的旋转坐标补偿（90°/270° 下滑动失效、翻页退化成慢拖拽）| 补丁已备好且映射已逐点验证（与 `lv_indev.c` 公式 **9676 点全部一致**）；**仓库内尚未应用**（整体编译待并行改动落地后补跑）。见清单 §3 | 小 |
-| **高** | 面板 MADCTL 硬件旋转（`madctl 60/C0/A0`）| **仍未实测**：库从不使用 MV(0x20) 位。⚠️ 取值与微雪 IDF BSP `bsp_display_rotation_set()` 完全一致，但该函数在厂商仓库内**无任何调用者** → 厂商同样未验证。若有效可去掉软件旋转的每帧开销与拆块（**必须同步改触摸映射**）| 小（实验）|
-| 低 | UI 设计定稿：状态标签与指针重叠 | 5 个候选方案见 [`ui-guidelines.md`](docs/ui-guidelines.md) | 小 |
+| ~~高~~ | ~~旋转后撕裂 / 果冻效应~~ | ✅ 真机测试完成：软件转置显示完整但明显卡顿；最终采用厂商 MADCTL 硬件旋转并接受边缘黑缺口。完整结论见 [`docs/rotation-hardware-vs-software.md`](docs/rotation-hardware-vs-software.md) | 已完成 |
+| ~~中~~ | ~~flick 手势的旋转坐标补偿~~ | ✅ 已在触摸采样层按当前方向转换坐标，270° 真机验证跟手 | 已完成 |
+| ~~高~~ | ~~面板 MADCTL 硬件旋转~~ | ✅ 已真机验证并进入正式路径：90°=`0xA0`、270°=`0x60`，固定原生 gap `(6,0)` | 已完成 |
 | 中 | 导航**阶段 3**（接近完成）| ✅ 网关（真实 Key 联调）；✅ 导航核心 **含偏航重算**（156 项测试）；✅ Mac 模拟器打通全链路（[nav_sim](tools/nav_sim/README.md)，真机验证"偏航→重算→无缝续导"）。⬜ **仅剩 App 接入（需 iPhone）** | 大 |
 | 低 | 行程统计上屏 | 数据已有（`trip` 串口命令可查），仅需 UI 呈现 | 小 |
 
@@ -289,17 +288,12 @@ xcodebuild -project CarDashboardPhone.xcodeproj -scheme CarDashboardPhone \
 |------|------|
 | `ble` | BLE 连接/遥测/控制统计 |
 | `face [id\|next\|prev]` | 查看/切换表盘 |
-| `spd [值\|reset]` | **诊断**：查询/强制设置速度 |
 | `trip [reset]` | 行程统计查询/清零 |
 | `bright <0-255>` | 亮度 |
 | `screen on\|off` | 亮屏/息屏 |
 | `page N` / `pages` | 切页 |
-| `bufmode [psram\|internal]` | 绘制缓冲 A/B |
 | `mem` | 内存情况 |
-| `touch` | 触摸采样诊断 |
 | `dump` | 打印元素树 |
-| `lvrot [0\|1\|2\|3]` | 【运行时】LVGL 软件旋转 0/90/180/270°（不带参数=查询）|
-| `madctl <hex>` | 【实验】直写面板 MADCTL(0x36)：`60`=90° `C0`=180° `A0`=270°，恢复 `madctl 0` |
-| `flickrot [0\|1]` | flick 方向判定的旋转补偿 A/B（**补丁应用后**可用；0=旧行为 1=修正）|
+| `lvrot [0\|1\|2\|3]` | 临时切换正式旋转策略 0/90/180/270°（不写入 NVS）|
 | `scan` | I2C 扫描 |
 | `help` | 全部命令 |

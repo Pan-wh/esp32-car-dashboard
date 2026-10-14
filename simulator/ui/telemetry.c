@@ -268,49 +268,6 @@ telemetry_link_t telemetry_link_state(bool connected, bool had_data, uint32_t ag
     return LINK_OK;
 }
 
-void telemetry_smooth_reset(telemetry_smooth_t *st)
-{
-    if (st == NULL) return;
-    st->inited = false;
-    st->value_kmh = 0.0f;
-}
-
-float telemetry_smooth_step(telemetry_smooth_t *st, float kmh, bool valid)
-{
-    if (st == NULL) return valid ? kmh : 0.0f;
-
-    /* 无效数据：立即重置，不把上一次的值平滑出来 */
-    if (!valid) {
-        telemetry_smooth_reset(st);
-        return 0.0f;
-    }
-
-    if (kmh < 0.0f) kmh = 0.0f;
-
-    if (!st->inited) {
-        st->inited = true;
-        st->value_kmh = kmh;
-        return st->value_kmh;
-    }
-
-    /* 跳变过大（换源/异常）：重置而非平滑 */
-    float diff = kmh - st->value_kmh;
-    if (diff > TELEMETRY_SMOOTH_JUMP_KMH || diff < -TELEMETRY_SMOOTH_JUMP_KMH) {
-        st->value_kmh = kmh;
-        return st->value_kmh;
-    }
-
-    if (kmh < st->value_kmh) {
-        /* 减速：立即跟随（安全优先，避免仪表滞后显示高车速） */
-        st->value_kmh = kmh;
-    }
-    else {
-        /* 加速：EMA 平滑，抑制低速抖动 */
-        st->value_kmh += TELEMETRY_SMOOTH_ALPHA * diff;
-    }
-    return st->value_kmh;
-}
-
 bool telemetry_plausible(const telemetry_msg_t *m)
 {
     if (m == NULL) return false;

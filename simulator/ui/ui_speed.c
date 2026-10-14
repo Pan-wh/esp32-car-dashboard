@@ -400,7 +400,17 @@ void ui_speed_sweep(void)
 {
     if (s_meter == NULL || s_needle5 == NULL) return;
 
-    lv_anim_del(&s_sweep_anim, NULL);
+    /*
+     * ⚠️ 必须按 exec_cb 匹配，**不能**传 &s_sweep_anim。
+     *
+     * LVGL 的 lv_anim_del(var, cb) 匹配条件是：
+     *     (a->var == var || var == NULL) && (a->exec_cb == cb || cb == NULL)
+     * 而本动画的 var 被设成了 NULL（lv_anim_set_var(&s_sweep_anim, NULL)），
+     * 所以传 &s_sweep_anim 时 a->var(NULL) != var(&s_sweep_anim) → **一个都删不掉**，
+     * 扫表动画会一直残留并继续访问 s_meter/s_needle5。
+     * 传 var=NULL、cb=sweep_anim_cb 才能按回调精确匹配到所有扫表动画。
+     */
+    lv_anim_del(NULL, (lv_anim_exec_xcb_t)sweep_anim_cb);
     if (s_sweep_timer != NULL) { /* 连点切换表盘时避免叠加多个定时器 */
         lv_timer_del(s_sweep_timer);
         s_sweep_timer = NULL;
@@ -424,21 +434,6 @@ void ui_speed_sweep(void)
     lv_timer_set_repeat_count(s_sweep_timer, 1);
 }
 
-void ui_speed_sweep_stop(void)
-{
-    lv_anim_del(&s_sweep_anim, NULL);
-    if (s_sweep_timer != NULL) {
-        lv_timer_del(s_sweep_timer);
-        s_sweep_timer = NULL;
-    }
-    s_sweeping = false;
-}
-
-bool ui_speed_is_sweeping(void)
-{
-    return s_sweeping;
-}
-
 /* 子仪表速度刷新（同文案不重设，避免无谓 invalidate） */
 static void hud5_refresh(void)
 {
@@ -449,10 +444,6 @@ static void hud5_refresh(void)
     snprintf(s_hud_shown, sizeof(s_hud_shown), "%s", buf);
     lv_label_set_text(s_hud5, buf);
 }
-
-float ui_speed_get_speed(void) { return s_speed; }
-int ui_speed_get_valid(void) { return s_valid ? 1 : 0; }
-void *ui_speed_get_needle(void) { return (void *)s_needle5; }
 
 void ui_speed_set_trip(float distance_km, float max_kmh)
 {

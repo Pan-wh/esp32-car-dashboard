@@ -93,7 +93,7 @@
 # 1) 编译模拟器（最快，先过这关）
 cd simulator && make -j8
 
-# 2) 全部单测（207 项）
+# 2) 全部单测
 cd tests && make run PYTHON=<python路径>
 
 # 3) UI 像素级回归（10 项，改 UI 必跑）
@@ -133,7 +133,7 @@ arduino-cli compile \
 | 步骤 | 命令 | 结果 |
 |------|------|------|
 | 编译 | `cd simulator && make -j8` | ✅ 通过 |
-| 单测 | `cd tests && make run` | ✅ 207 项 |
+| 单测 | `cd tests && make run` | ✅ 全部通过 |
 | 像素回归 | `python3 tools/ui_regression.py` | ✅ 10 项 |
 | 同步 | `tools/sync_firmware.sh` | ✅ |
 | 固件编译 | (命令) | ✅ Flash 75% |
