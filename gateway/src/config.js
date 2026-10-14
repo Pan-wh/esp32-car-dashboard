@@ -50,6 +50,12 @@ export function loadConfig(env = process.env, opts = {}) {
     amapKey,
     authToken,
     port: Number(env.PORT ?? 8080),
+    /*
+     * 周边地图瓦片的磁盘缓存目录。
+     * 必须缓存：OpenFreeMap 的离线额度是"每次 ≤3000 瓦片"，
+     * 而导航中同一个区域会被反复请求（实测首次 1.7s、缓存后 7ms）。
+     */
+    mapCacheDir: (env.MAP_CACHE_DIR ?? '.cache/map-tiles').trim(),
     /** 每秒允许的请求数（自用规模足够；防止误用刷爆高德配额） */
     rateLimitPerMin: Number(env.RATE_LIMIT_PER_MIN ?? 60),
     /** 单次上游请求超时（毫秒） */
