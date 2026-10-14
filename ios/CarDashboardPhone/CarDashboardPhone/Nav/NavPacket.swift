@@ -14,6 +14,8 @@
  *      这样也就不需要中文字模。将来若要显示路名，须先解决字模与带宽。
  *   4. `dist_m` 未知时**省略该字段**（而不是发 0）—— 固件据此显示 "--"，
  *      避免把"未知"伪装成"距离为 0"（0 会被读成"马上要转向"）。
+ *   5. `ox`/`oy`（自车在地图窗口局部坐标中的偏移）**必须成对**出现固件才认，
+ *      没有地图窗口时整个省略。
  */
 
 import Foundation
@@ -28,26 +30,44 @@ struct NavPacket: Codable {
     var maneuver: Int
     /// 距下一动作的距离（米）；nil = 未知，序列化时字段整个省略
     var distM: Int?
+    /**
+     * 自车在**地图窗口局部坐标系**中的偏移（米，x 向东、y 向北）。
+     *
+     * 窗口原点在"手机发起请求时的位置"，而车在动。把偏移在这里算好下发，
+     * 固件就不必做任何经纬度换算，只按航向旋转 + 平移即可。
+     * 无地图窗口时省略字段 —— 固件据此不使用旧偏移。
+     */
+    var offsetX: Int?
+    var offsetY: Int?
 
     enum CodingKeys: String, CodingKey {
         case t
         case state
         case maneuver
         case distM = "dist_m"
+        case offsetX = "ox"
+        case offsetY = "oy"
     }
 
     /// 从导航快照构造（这是唯一的正常来源）
-    init(snapshot: NavSnapshot) {
+    /// - Parameter vehicleOffset: 自车相对地图窗口中心的偏移（米）。
+    ///   由 `NavSession` 依据当前窗口算出；没有窗口时传 nil。
+    init(snapshot: NavSnapshot, vehicleOffset: (x: Int, y: Int)? = nil) {
         self.state = snapshot.state.rawValue
         self.maneuver = snapshot.maneuver.rawValue
         self.distM = snapshot.distanceToManeuverM
+        self.offsetX = vehicleOffset?.x
+        self.offsetY = vehicleOffset?.y
     }
 
     /// 直接构造（测试/调试用）
-    init(state: NavState, maneuver: Maneuver, distM: Int?) {
+    init(state: NavState, maneuver: Maneuver, distM: Int?,
+         offsetX: Int? = nil, offsetY: Int? = nil) {
         self.state = state.rawValue
         self.maneuver = maneuver.rawValue
         self.distM = distM
+        self.offsetX = offsetX
+        self.offsetY = offsetY
     }
 
     /// 最紧凑的 JSON（利于塞进 BLE MTU；与 TelemetryPacket.encode 同一策略）

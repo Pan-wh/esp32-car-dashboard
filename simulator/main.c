@@ -21,6 +21,8 @@
 #include "ui_baked_images.h"
 #include "ui_img_inflate.h"
 #include "ui_nav.h"
+#include "ui_nav_map.h"
+#include "nav_map.h"
 #include "ui_pages.h"
 #include "ui_speed.h"
 #include "ui_timesrc.h"
@@ -155,6 +157,62 @@ static void page_gesture_probe_cb(lv_event_t *e)
     fflush(stdout);
 }
 
+/*
+ * --map-demo：注入一个**合成的地图窗口**用于离线验证渲染。
+ *
+ * 为什么需要：地图链路的真实数据要手机+网关+BLE 三者齐备才能跑通，
+ * 而渲染层（航向朝上变换、道路等级线宽、建筑轮廓、路线）可以在模拟器里
+ * 先用合成数据看效果 —— 这样"画得对不对"与"数据通不通"能分开排查。
+ *
+ * 造一个规则路网 + 少量建筑 + 一条向北偏东的路线，覆盖 ±300m 可见范围。
+ */
+static void inject_map_demo(void)
+{
+    nav_map_init();
+    const char *begin = "{\"t\":\"mw\"}";
+    nav_map_handle(begin, strlen(begin));
+
+    char buf[512];
+    /* 横向道路（东西向）：y 固定，x 从 -320 到 320 */
+    const int ys[] = { -240, -160, -80, 0, 80, 160, 240 };
+    const int ycls[] = { 2, 3, 1, 0, 1, 3, 2 };
+    for (int i = 0; i < 7; i++) {
+        snprintf(buf, sizeof(buf), "{\"t\":\"mr\",\"c\":%d,\"p\":[[-320,%d],[-160,%d],[0,%d],[160,%d],[320,%d]]}",
+                 ycls[i], ys[i], ys[i], ys[i], ys[i], ys[i]);
+        nav_map_handle(buf, strlen(buf));
+    }
+    /* 纵向道路（南北向）：x 固定，y 从 -320 到 320 */
+    const int xs[] = { -240, -160, -80, 0, 80, 160, 240 };
+    const int xcls[] = { 3, 2, 1, 0, 1, 2, 3 };
+    for (int i = 0; i < 7; i++) {
+        snprintf(buf, sizeof(buf), "{\"t\":\"mr\",\"c\":%d,\"p\":[[%d,-320],[%d,-160],[%d,0],[%d,160],[%d,320]]}",
+                 xcls[i], xs[i], xs[i], xs[i], xs[i], xs[i]);
+        nav_map_handle(buf, strlen(buf));
+    }
+    /* 建筑：每个街区一个方块 */
+    const int bx[] = { -220, -140, -60, 20, 100, 180 };
+    const int by[] = { -220, -140, -60, 20, 100, 180 };
+    for (int i = 0; i < 6; i++) {
+        for (int k = 0; k < 3; k++) {
+            const int x0 = bx[i] + k * 8;
+            const int y0 = by[(i + k) % 6];
+            snprintf(buf, sizeof(buf), "{\"t\":\"mb\",\"p\":[[%d,%d],[%d,%d],[%d,%d],[%d,%d]]}",
+                     x0, y0, x0 + 46, y0, x0 + 46, y0 + 46, x0, y0 + 46);
+            nav_map_handle(buf, strlen(buf));
+        }
+    }
+    /* 路线：从自车向前（北）再右转（东），模拟"前方右转" */
+    const char *route = "{\"t\":\"mp\",\"p\":[[0,0],[0,60],[14,120],[46,166],[96,188],[170,196],[250,196]]}";
+    nav_map_handle(route, strlen(route));
+
+    const char *end = "{\"t\":\"me\"}";
+    nav_map_handle(end, strlen(end));
+
+    /* 自车放在窗口中心 */
+    nav_map_set_vehicle_offset(0, 0);
+}
+
+
 int main(int argc, char **argv)
 {
     int scale = 2;
@@ -173,7 +231,10 @@ int main(int argc, char **argv)
     int driver_state = UI_DRIVER_AUTO;
     int gesture_test = 0;
     int sweep_test = 0;
-    int ble_sim = 0; /* 复刻固件 ble_update 每帧调用 setter 的行为（性能回归复现） */
+    int ble_sim = 0;
+    int map_demo = 0;          /* --map-demo：注入合成地图窗口 */
+    float map_heading = 0.0f;  /* --map-heading：初始航向 */
+    /* 复刻固件 ble_update 每帧调用 setter 的行为（性能回归复现） */
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
@@ -195,6 +256,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--gesture-test")) gesture_test = 1;
         else if (!strcmp(argv[i], "--sweep")) sweep_test = 1;
         else if (!strcmp(argv[i], "--ble-sim")) ble_sim = 1;
+        else if (!strcmp(argv[i], "--map-demo")) map_demo = 1;
+        else if (!strcmp(argv[i], "--map-heading") && i + 1 < argc) map_heading = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
             if (sscanf(argv[++i], "%d:%d:%d", &fh, &fm, &fs) < 2) fh = -1;
         }
@@ -301,6 +364,14 @@ int main(int argc, char **argv)
     if (nav_maneuver >= 0) ui_nav_set_maneuver(nav_maneuver);
     if (nav_dist >= 0)     ui_nav_set_distance(nav_dist);
     if (nav_speed >= 0.0f) ui_nav_set_speed(nav_speed, true);
+
+    /* 地图层：合成窗口（--map-demo）用于离线验证渲染；航向可选 */
+    if (map_demo) {
+        inject_map_demo();
+        ui_nav_map_set_heading(map_heading);
+        ui_nav_map_invalidate();
+    }
+
     ui_pages_show((ui_page_t)start_page);
 
     if (gesture_test) {
@@ -441,6 +512,8 @@ int main(int argc, char **argv)
             }
         }
 
+        ui_nav_map_update(); /* 与固件一致：主循环刷新地图层（内部按航向/位移节流）*/
+        ui_nav_set_map_mode(ui_nav_map_has_data());
         lv_timer_handler();
 
         SDL_UpdateTexture(frame_tex, NULL, g_frame, SIM_W * (int)sizeof(lv_color_t));

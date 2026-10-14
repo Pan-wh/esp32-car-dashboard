@@ -39,6 +39,29 @@ struct TelemetryPacket: Codable {
 
     static let protocolVersion = 1
 
+    /// 构造一个**纯时间包**（只含协议版本 + UTC 时间戳，不带任何定位字段）。
+    ///
+    /// 用途：连接成功后立即下发一次，让仪表在**未开始驾驶/未授权定位**时也能
+    /// 同步时间（RTC 走时）。仪表侧 `ble_poll` 只认 `ts_utc_ms`（`has_ts`）
+    /// 就会 `time_sync_maybe` 校时，与定位字段无关。
+    ///
+    /// ⚠️ 必须 `locationValid = false`：纯时间包没有经纬度，若置 true 会触发
+    ///    固件 telemetry.c 的"定位有效但无位置信息"自洽性校验而整包被丢弃。
+    static func timeOnly(nowUtcMs: Int64) -> TelemetryPacket {
+        TelemetryPacket(
+            v: protocolVersion,
+            tsUtcMs: nowUtcMs,
+            speedMps: nil,
+            speedAccuracyMps: nil,
+            latitude: nil,
+            longitude: nil,
+            horizontalAccuracyM: nil,
+            courseDeg: nil,
+            locationValid: false,
+            speedValid: false
+        )
+    }
+
     /// 编码为紧凑 JSON；nil 的可选字段用 encodeIfPresent 省略，减小包体。
     func encode() throws -> Data {
         let encoder = JSONEncoder()

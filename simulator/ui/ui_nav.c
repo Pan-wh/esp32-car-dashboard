@@ -17,12 +17,14 @@
  *   y≈422  当前车速
  */
 #include "ui_nav.h"
+#include "ui_nav_map.h"
 
 #include <stdio.h>
 
 #include "nav.h"
 
 LV_FONT_DECLARE(speed_num_150); /* 数字 + . - /（距离数值用）*/
+LV_FONT_DECLARE(speed_num_64);  /* 中号数字 + k/m（地图模式的紧凑距离）*/
 LV_FONT_DECLARE(label_26);      /* 全 ASCII（状态/单位/车速用）*/
 
 /* 黑底 + 高对比（与时钟类表盘一致，OLED 省电）*/
@@ -53,6 +55,15 @@ static lv_obj_t *s_state_lbl;   /* 顶部状态文字标签 */
 static lv_obj_t *s_dist;
 static lv_obj_t *s_unit;
 static lv_obj_t *s_speed;
+/**
+ * 紧凑模式下的距离标签（小号）。
+ *
+ * 为什么需要两个距离标签：原设计是"无地图"的大字卡片（150px 数字），
+ * 而地图铺满屏幕时它会把地图盖掉一半。地图有数据时改用这个小的，
+ * 放在车头箭头正下方，把画面主体让给地图（与参考项目布局一致）。
+ */
+static lv_obj_t *s_dist_small;
+static bool s_map_mode = false; /* 是否处于"有地图"的紧凑布局 */
 
 static int s_maneuver = NAV_MANEUVER_UNKNOWN;
 static int s_distance = NAV_DISTANCE_INVALID;
@@ -259,6 +270,12 @@ static void apply_distance(void)
     nav_format_distance_value(s_distance, num, sizeof(num));
     lv_label_set_text(s_dist, num);
     lv_label_set_text(s_unit, nav_distance_unit(s_distance));
+    /* 紧凑标签：数值 + 单位合成一行（地图模式下用它）*/
+    {
+        char cb[24];
+        snprintf(cb, sizeof(cb), "%s %s", num, nav_distance_unit(s_distance));
+        lv_label_set_text(s_dist_small, cb);
+    }
 }
 
 /* 应用车速 */
@@ -293,6 +310,12 @@ lv_obj_t *ui_nav_create(lv_obj_t *parent)
 
     lv_obj_set_style_bg_color(parent, lv_color_hex(C_BG), 0);
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
+
+    /*
+     * 地图层放在**最前面**创建 —— 后创建的在上层，
+     * 因此它位于所有指引元素之下（路线压路网、图标压地图，与参考项目一致）。
+     */
+    ui_nav_map_init(parent);
 
     /* 导航状态（顶部）*/
     s_state_lbl = lv_label_create(parent);
@@ -336,6 +359,14 @@ lv_obj_t *ui_nav_create(lv_obj_t *parent)
     lv_label_set_text(s_unit, "");
     lv_obj_align(s_unit, LV_ALIGN_CENTER, 0, 147);
 
+    /* 紧凑距离（仅在地图有数据时显示，见 s_dist_small 的说明）*/
+    s_dist_small = lv_label_create(parent);
+    lv_obj_set_style_text_font(s_dist_small, &speed_num_64, 0);
+    lv_obj_set_style_text_color(s_dist_small, lv_color_hex(C_DIST), 0);
+    lv_label_set_text(s_dist_small, "");
+    lv_obj_align(s_dist_small, LV_ALIGN_CENTER, 0, 40);
+    lv_obj_add_flag(s_dist_small, LV_OBJ_FLAG_HIDDEN);
+
     /* 当前车速（底部）*/
     s_speed = lv_label_create(parent);
     lv_obj_set_style_text_font(s_speed, &label_26, 0);
@@ -351,7 +382,53 @@ lv_obj_t *ui_nav_create(lv_obj_t *parent)
     return parent;
 }
 
+/* ---------------- 布局模式（有无地图）---------------- */
+
+/**
+ * 切换"有无地图"两套布局。
+ *
+ * - `false`（无地图）：原来的大字卡片 —— 大图标居中 + 150px 距离 + 车速。
+ * - `true`（有地图）：紧凑布局 —— 把指引移到画面下方，主体让给地图。
+ *
+ * ⚠️ 只在模式**真的变化**时才动布局：本函数会被高频调用，
+ *    无条件 align/set_flag 会让 LVGL 反复 invalidate（项目已踩过这个坑）。
+ */
+static void apply_map_mode(bool on)
+{
+    if (on == s_map_mode) return;
+    s_map_mode = on;
+
+    if (on) {
+        /*
+         * 地图模式：画面**上半部让给地图**（"前方"才是驾驶要看的方向），
+         * 指引元素全部压到下半部。转向图标**必须保留** —— 它是导航的核心信息，
+         * 只是从画面正中被挪到下方；150px 的大数字则换成 64px 的紧凑行。
+         */
+        lv_obj_align(s_box, LV_ALIGN_CENTER, 0, 140);
+        lv_obj_align(s_dist_small, LV_ALIGN_CENTER, 0, 36);
+        lv_obj_add_flag(s_dist, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_unit, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_speed, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_dist_small, LV_OBJ_FLAG_HIDDEN);
+        apply_maneuver(); /* 保证图形可见性正确（到达/未知等）*/
+    }
+    else {
+        lv_obj_align(s_box, LV_ALIGN_CENTER, 0, -83); /* 还原无地图时的位置 */
+        lv_obj_clear_flag(s_box, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_dist, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_unit, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_speed, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_dist_small, LV_OBJ_FLAG_HIDDEN);
+        apply_maneuver();
+    }
+}
+
 /* ---------------- 对外接口（均带变更检测）---------------- */
+
+void ui_nav_set_map_mode(bool on)
+{
+    apply_map_mode(on);
+}
 
 void ui_nav_set_maneuver(int maneuver)
 {

@@ -25,6 +25,7 @@
 		E6D1D8986CC6A5AF1EBD96A7 /* LocationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A77792F272247B65306766CE /* LocationService.swift */; };
 		ED2CF185151F8E4F62825E63 /* CarDashboardPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90328C9C31C539EC52E1A87D /* CarDashboardPhoneApp.swift */; };
 		F569284BEE2E71612370E64B /* NavPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EA857645CD0BF1BA8BC01A5 /* NavPacket.swift */; };
+		FD59496AF200E46DED289C71 /* MapWindowPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF05B783835A0124086B067A /* MapWindowPacket.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 		B0D22E82D27FEF70D93C0BC2 /* CarDashboardPhoneUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarDashboardPhoneUITests.swift; sourceTree = "<group>"; };
 		B0F08529A4B704779DCBA324 /* NavSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavSession.swift; sourceTree = "<group>"; };
 		BE45E92AB18790F5DEEC4D67 /* LinkDiagnosticsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkDiagnosticsUITests.swift; sourceTree = "<group>"; };
+		DF05B783835A0124086B067A /* MapWindowPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapWindowPacket.swift; sourceTree = "<group>"; };
 		E64BAD111E15074881588DA9 /* DeviceFaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceFaces.swift; sourceTree = "<group>"; };
 		F24318EB88B2A85793A51CDA /* DriveSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DriveSessionManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -78,6 +80,7 @@
 			children = (
 				972FFB47975907877A92C727 /* Coords.swift */,
 				56BCEAC1DF235542021ED285 /* GatewayClient.swift */,
+				DF05B783835A0124086B067A /* MapWindowPacket.swift */,
 				91126479FAA3F00C2B901B2D /* NavCore.swift */,
 				7EA857645CD0BF1BA8BC01A5 /* NavPacket.swift */,
 				B0F08529A4B704779DCBA324 /* NavSession.swift */,
@@ -222,6 +225,7 @@
 				B235513F0C1CCE3B55EC7E93 /* DriveSessionManager.swift in Sources */,
 				46438450E48C6B4345A8C6CB /* GatewayClient.swift in Sources */,
 				E6D1D8986CC6A5AF1EBD96A7 /* LocationService.swift in Sources */,
+				FD59496AF200E46DED289C71 /* MapWindowPacket.swift in Sources */,
 				175EAD92F2639AC5C012ADFD /* NavCore.swift in Sources */,
 				F569284BEE2E71612370E64B /* NavPacket.swift in Sources */,
 				1C5E05BEF4B31F6822AF15AB /* NavSession.swift in Sources */,

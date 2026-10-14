@@ -96,6 +96,11 @@ npx --yes lv_font_conv --font "../$SRC/inter-bold-num-sub.ttf" \
 npx --yes lv_font_conv --font "../$SRC/inter-med-ascii-sub.ttf" \
   --size 26 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h \
   -r 0x20-0x7E,0xB0 --lv-font-name label_26 -o ui/font_label_26.c
+# 中号数字：导航地图模式下的"距离+单位"一行（如 "300 m"）。
+# ⚠️ 只取必需字形（数字、减号、空格、k、m），ASCII 全量会让这份 64px 字模涨到 200KB。
+npx --yes lv_font_conv --font "../$SRC/inter-bold-num-sub.ttf" \
+  --size 64 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h \
+  -r 0x20,0x2D-0x39,0x6B,0x6D --lv-font-name speed_num_64 -o ui/font_speed_num_64.c
 cd "$ROOT"
 
 # ---- 5) 同步子集 TTF 给 LVGL Pro 草稿工程 ----

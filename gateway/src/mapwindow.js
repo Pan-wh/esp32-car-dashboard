@@ -35,6 +35,7 @@
  */
 
 import { VectorTile } from '@mapbox/vector-tile';
+import { wgs84ToGcj02 } from './coords.js';
 import { PbfReader } from 'pbf';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -89,6 +90,9 @@ export function lonLatToTile(lon, lat, z = TILE_ZOOM) {
  * 经纬度 → 以 `origin` 为原点的局部米坐标（等距圆柱近似）。
  *
  * 500m 量级下该近似的误差可忽略（<0.1m），却比完整墨卡托简单得多。
+ *
+ * ⚠️ 调用前**必须**保证 `lon/lat` 与 `originLon/originLat` 在**同一坐标系**，
+ *    否则会引入数百米的整体偏移（见 `fetchMapWindow` 里的坐标系统一说明）。
  */
 export function toLocalMeters(lon, lat, originLon, originLat) {
   const mPerDegLat = 111320;
@@ -199,7 +203,9 @@ function collectLines(layer, klass, originLon, originLat, tile, radiusM, minPoin
     for (const ring of rings) {
       const pts = ring.map((p) => {
         const { lon, lat } = tilePointToLonLat(p.x, p.y, layer.extent, tile);
-        return toLocalMeters(lon, lat, originLon, originLat);
+        /* OSM 是 WGS84 → 先统一到 GCJ-02，再投影到（同样是 GCJ-02 的）原点 */
+        const gcj = wgs84ToGcj02({ lon, lat });
+        return toLocalMeters(gcj.lon, gcj.lat, originLon, originLat);
       });
       if (pts.length < 2 || !withinRadius(pts, radiusM)) continue;
       const s = decimate(simplify(pts, minPointSpacingM), maxPointsPerFeature);
@@ -235,22 +241,37 @@ export async function fetchMapWindow({
   budget = DEFAULT_BUDGET,
   fetchImpl = globalThis.fetch,
 }) {
+  /*
+   * ── 坐标系统一（关键，做错整张图偏约 500 米）────────────────────────
+   *
+   * OSM 数据是 **WGS84**，而导航路线来自高德的 **GCJ-02**。两层要画在同一张
+   * 图上就必须统一。这里统一到 **GCJ-02**：
+   *
+   *   1. 中心点：入参是手机的 WGS84 定位 → 转成 GCJ-02，作为局部坐标原点
+   *   2. OSM 要素：逐个 WGS84 → GCJ-02 后再投影到该原点
+   *   3. 客户端拿到的 `center` 就是 GCJ-02，因此**App 端一行转换都不用写**
+   *      （它本来就有 GCJ-02 的自车位置，直接算偏移即可）
+   *
+   * 瓦片本身仍按 **WGS84** 定位并缓存（OSM 的固有坐标系）。
+   */
   const tile = lonLatToTile(lon, lat);
   const { buf } = await loadTile(tile, { cacheDir, fetchImpl });
+
+  const centerGcj = wgs84ToGcj02({ lon, lat });
 
   const vt = new VectorTile(new PbfReader(buf));
 
   /* 道路：折线，抽稀到 ~8m 一点（500m 内足够平滑，点数可控） */
   const roadLayer = vt.layers.transportation;
   let roads = roadLayer
-    ? collectLines(roadLayer, ROAD_CLASSES, lon, lat, tile, radiusM, 8, budget.maxPointsPerFeature)
+    ? collectLines(roadLayer, ROAD_CLASSES, centerGcj.lon, centerGcj.lat, tile, radiusM, 8, budget.maxPointsPerFeature)
     : [];
   roads.sort((a, b) => a.nearest - b.nearest);
 
   /* 建筑：多边形轮廓，抽稀更狠（只要形状可辨） */
   const bLayer = vt.layers.building;
   let buildings = bLayer
-    ? collectLines(bLayer, null, lon, lat, tile, radiusM, 12, budget.maxPointsPerFeature)
+    ? collectLines(bLayer, null, centerGcj.lon, centerGcj.lat, tile, radiusM, 12, budget.maxPointsPerFeature)
         .map((b) => ({ pts: b.pts, nearest: b.nearest }))
     : [];
   buildings.sort((a, b) => a.nearest - b.nearest);
@@ -280,7 +301,12 @@ export async function fetchMapWindow({
   const round = (pts) => pts.map((p) => [Math.round(p.x), Math.round(p.y)]);
 
   return {
+    /** 入参所用的 WGS84 中心（原样回显，便于排查）*/
     center: { lon, lat },
+    /** **局部坐标原点**（GCJ-02）。自车偏移必须相对它计算。*/
+    centerGcj: { lon: centerGcj.lon, lat: centerGcj.lat },
+    /** 所有几何的坐标系，供客户端自检 */
+    crs: 'GCJ-02',
     radiusM,
     roads: pickedRoads.map((r) => ({ c: r.class, p: round(r.pts) })),
     buildings: pickedBuildings.map((b) => ({ p: round(b.pts) })),

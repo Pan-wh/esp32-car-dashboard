@@ -24,7 +24,9 @@ import Foundation
 // MARK: - 基础类型
 
 /// 经纬度点（GCJ-02）
-public struct GeoPoint: Equatable, Sendable {
+///
+/// `Codable`：网关返回的地图窗口里带中心点（`center` / `centerGcj`），需要解码。
+public struct GeoPoint: Equatable, Sendable, Codable {
     public var lon: Double
     public var lat: Double
 

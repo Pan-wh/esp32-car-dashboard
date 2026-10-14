@@ -48,6 +48,16 @@ static bool s_have_rx = false; /* 是否收到过至少一条有效遥测（与 
 
 static volatile bool s_connected = false;
 
+/*
+ * 断连后的"重启广播"请求标志（见 onDisconnect 的说明）。
+ * 不在 BLE 回调里直接 startAdvertising()：NimBLE 下断连回调执行时
+ * ble_gap host 尚未切回可广播状态，同步立即重启会失败并卡死协商，
+ * 之后手机扫描不到设备，只能断电重启。故只置标志，由主循环
+ * 经 ble_telemetry_poll() 延迟调用（既避开竞态，也符合"回调不做
+ * 硬件副作用"的架构约定）。
+ */
+static volatile bool s_restart_adv = false;
+
 static uint32_t s_rx_bytes = 0;
 static uint32_t s_ok = 0;
 static uint32_t s_parse_err = 0;
@@ -195,7 +205,17 @@ public:
         (void)s;
         s_connected = false;
         s_asm_len = 0; /* 断连后清空半包 */
-        BLEDevice::startAdvertising(); /* 自动恢复广播，支持重连 */
+        /*
+         * ⚠️ 不要在这里直接 BLEDevice::startAdvertising()。
+         *
+         * 本固件底层是 NimBLE（sdkconfig CONFIG_BT_NIMBLE_ENABLED）。
+         * 断连回调运行时 ble_gap host 还没切回可广播状态，若在此同步
+         * 立即重启广播，ble_gap_adv_start 会失败/让 host 卡在忙状态，
+         * 之后广播再也恢复不了 —— 症状即"断联太久后手机扫描不到设备，
+         * 只能断电重启"。故只置标志，交由主循环的 ble_telemetry_poll()
+         * 延迟重启（断连事件 → 主循环之间通常已足够让 host 回到就绪）。
+         */
+        s_restart_adv = true;
     }
 };
 
@@ -260,6 +280,22 @@ bool ble_telemetry_begin(void)
 bool ble_telemetry_connected(void)
 {
     return s_connected;
+}
+
+/*
+ * 主循环周期调用（配合 ble_poll / ble_update）。
+ * 若断连回调已请求重启广播，且 host 已就绪，则在此恢复广播。
+ * 失败不致命：保留标志待下次循环重试（millis 自然流逝已拉开与断连的距离）。
+ */
+void ble_telemetry_poll(void)
+{
+    if (!s_restart_adv) return;
+    if (s_connected) {
+        s_restart_adv = false; /* 又连上了，无需重启广播 */
+        return;
+    }
+    BLEDevice::startAdvertising();
+    s_restart_adv = false;
 }
 
 bool ble_telemetry_fetch(telemetry_msg_t *out, uint32_t *rx_ms)

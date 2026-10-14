@@ -56,6 +56,10 @@ final class BLEClient: NSObject, ObservableObject {
     // 待发队列：BLE 尚未就绪时缓存最新一条，连接/发现特征后立即补发
     private var pendingPacket: Data?
 
+    /// 本次连接是否已下发过"纯时间包"（每次连接只发一次，见 sendTimeOnConnect）。
+    /// 断连重连时会随连接生命周期重置，保证**每次新建连接**都能校一次时。
+    private var didSendTimeOnConnect = false
+
     override init() {
         super.init()
         central = CBCentralManager(delegate: self, queue: .main)
@@ -214,14 +218,57 @@ final class BLEClient: NSObject, ObservableObject {
         }
     }
 
+    /// 连接成功后下发一次**纯时间包**，仅用于让仪表同步 RTC 时间。
+    ///
+    /// 背景：点「连接仪表」只建立 BLE 连接、**不启动定位**，因此设备不会收到
+    /// 任何遥测包，RTC 时间也不会更新（要等点「开始驾驶」才发带 ts_utc_ms 的包）。
+    /// 这里在特征发现完成后立刻发一次最小时间包，让"仅连接"也能校时。
+    ///
+    /// 语义：
+    ///   - 每次 BLE 连接只发一次（didSendTimeOnConnect 标志，didConnect 时重置）；
+    ///   - 不依赖定位/权限（纯时间包无定位字段，locationValid=false）；
+    ///   - telemetryChar 未就绪时不发（等 didDiscoverCharacteristicsFor 里补发）。
+    func sendTimeOnConnect() {
+        guard isConnected, telemetryChar != nil, !didSendTimeOnConnect else { return }
+        let nowUtcMs = Int64(Date().timeIntervalSince1970 * 1000)
+        guard let data = try? TelemetryPacket.timeOnly(nowUtcMs: nowUtcMs).encode() else { return }
+        peripheral?.writeValue(data, for: telemetryChar!, type: .withResponse)
+        didSendTimeOnConnect = true
+        NSLog("[BLE] 已下发纯时间包（连接校时）")
+    }
+
     /// 下发导航消息（与遥测**共用同一个特征**，靠载荷里的 `"t":"nav"` 分流）。
     ///
     /// ⚠️ 与 `send(packet:)` 的一处不同：导航消息**不暂存补发**。
     /// 遥测是"当前状态"，晚一点发仍有意义；而导航指引是**时效性数据**
     /// （距下一转向 30 米，断开重连后这条早已过期），补发只会显示过期指引。
     /// 断连时直接丢弃，由 NavSession 在恢复后发新的一条。
-    func sendNav(snapshot: NavSnapshot) {
-        guard let data = try? NavPacket(snapshot: snapshot).encode() else { return }
+    /// - Parameter vehicleOffset: 自车在地图窗口局部坐标中的偏移（米）；
+    ///   没有地图窗口时传 nil（字段省略，固件不用旧偏移）。
+    /**
+     顺序下发一组地图窗口消息（`mw` … `me`）。
+
+     ⚠️ **必须按顺序、且用 `.withResponse`**：固件靠"收到 `me` 才整体切换"来
+     保证画面不会画到一半。若改成 `.withoutResponse`，写入可能乱序或丢失，
+     窗口会一直等到 3 秒超时被丢弃。
+
+     - Returns: 实际发出的条数；未连接时为 0。
+     */
+    @discardableResult
+    func sendMapMessages(_ messages: [String]) -> Int {
+        guard let ch = telemetryChar, isConnected else { return 0 }
+        var sent = 0
+        for m in messages {
+            guard let data = m.data(using: .utf8) else { continue }
+            peripheral?.writeValue(data, for: ch, type: .withResponse)
+            sent += 1
+        }
+        return sent
+    }
+
+    func sendNav(snapshot: NavSnapshot, vehicleOffset: (x: Int, y: Int)? = nil) {
+        guard let data = try? NavPacket(snapshot: snapshot, vehicleOffset: vehicleOffset).encode()
+        else { return }
         guard let ch = telemetryChar, isConnected else { return }
         peripheral?.writeValue(data, for: ch, type: .withResponse)
     }
@@ -259,6 +306,7 @@ extension BLEClient: CBCentralManagerDelegate {
         NSLog("[BLE] 已连接，开始发现服务")
         isConnected = true
         lastNotice = "已连接 CarDashboard"
+        didSendTimeOnConnect = false // 新连接：允许再校一次时
         peripheral.delegate = self
         peripheral.discoverServices([serviceUUID])
     }
@@ -311,6 +359,8 @@ extension BLEClient: CBPeripheralDelegate {
             peripheral.writeValue(pending, for: ch, type: .withResponse)
             pendingPacket = nil
         }
+        // 特征就绪后补发一次纯时间包（连接校时，仅一次）
+        sendTimeOnConnect()
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
