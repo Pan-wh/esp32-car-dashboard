@@ -239,8 +239,14 @@ static bool te_wait_rise(uint32_t timeout_us)
 #define TOUCHROT_PREF_KEY "trot"  /* 触摸坐标变换档位，见 touch_apply_rot() */
 static uint8_t s_hw_rot = 0;
 static uint8_t s_touch_rot = 0;
-static int8_t s_gap_x = 0;  /* 硬件旋转下的地址偏移（现场标定，**可为负**）*/
-static int8_t s_gap_y = 6;
+/*
+ * 硬件旋转下的地址偏移（现场标定，**可为负**）。
+ * 270° 用 MADCTL 0x60，标定结果为 (0, 9)：此时"黑环到边框的间距四周均匀"。
+ * 90° 用 MADCTL 0xA0，轴向相同故取同样值（**未逐一标定**，待现场确认）。
+ * 可用 `gap <x> <y>` 命令在运行时覆盖。
+ */
+static int8_t s_gap_x = 0;
+static int8_t s_gap_y = 9;
 
 
 static lv_disp_draw_buf_t draw_buf;
@@ -804,6 +810,7 @@ static void set_display_rotation(int deg, bool persist)
      * 当前值来自现场标定（见 docs/rotation-tearing-fieldtest.md）。
      */
     gfx->setGap(s_gap_x, s_gap_y);
+    Serial.printf("[旋转] 应用地址偏移 gap=(%d, %d)\n", (int)s_gap_x, (int)s_gap_y);
     lv_disp_set_rotation(NULL, LV_DISP_ROT_NONE); /* 必须清零，否则与硬件旋转叠加 */
     s_display_rot = 0;
     s_hw_rot = mad;
@@ -1617,16 +1624,27 @@ static void process_command(char *cmd)
      * 再执行一次 edges 即清除。
      */
     static lv_obj_t *s_edge[4] = {NULL, NULL, NULL, NULL};
-    if (s_edge[0] != NULL) {
+    static lv_obj_t *s_edge_dummy = NULL;
+    if (s_edge[0] != NULL || s_edge_dummy != NULL) {
       for (int i = 0; i < 4; i++) {
         if (s_edge[i]) lv_obj_del(s_edge[i]);
         s_edge[i] = NULL;
       }
+      if (s_edge_dummy) {
+        lv_obj_del(s_edge_dummy);
+        s_edge_dummy = NULL;
+      }
       Serial.println("[标定] 边线已清除");
     }
     else {
-      const lv_color_t col[4] = {lv_color_hex(0x00FF00), lv_color_hex(0xFFFF00),
-                                 lv_color_hex(0xFF0000), lv_color_hex(0x0000FF)};
+      /*
+       * 颜色选择：表盘本身是**橙红色系刻度 + 白底 + 深蓝插画**，
+       * 早期用红/黄/蓝标定线与刻度撞色，拍照后无法可靠区分。
+       * 改为 UI 里完全不出现的**洋红 / 青 / 亮绿 / 纯白**，
+       * 并同时画一个**黑色边界圆环**（见下方），便于目视判断"四周间距是否均匀"。
+       */
+      const lv_color_t col[4] = {lv_color_hex(0xFF00FF), lv_color_hex(0x00FFFF),
+                                 lv_color_hex(0x00FF00), lv_color_hex(0xFFFFFF)};
       /* 线宽 10px、高饱和 —— 上次 3px 太细导致拍照后判断失误 */
       const int16_t TK = 10;
       const int16_t X[4] = {0, 0, 0, LCD_WIDTH - TK};
@@ -1634,6 +1652,18 @@ static void process_command(char *cmd)
       const int16_t W[4] = {LCD_WIDTH, LCD_WIDTH, TK, TK};
       const int16_t H[4] = {TK, TK, LCD_HEIGHT, LCD_HEIGHT};
       const char *nm[4] = {"上(绿)", "下(黄)", "左(红)", "右(蓝)"};
+      /* 追加第 5 个对象：逻辑边界处的细黑圆环（半径 231），
+         用于目视判断"环到屏幕边框的间距四周是否均匀" */
+      s_edge_dummy = lv_obj_create(lv_scr_act());
+      lv_obj_remove_style_all(s_edge_dummy);
+      lv_obj_set_size(s_edge_dummy, LCD_WIDTH - 6, LCD_HEIGHT - 6);
+      lv_obj_center(s_edge_dummy);
+      lv_obj_set_style_radius(s_edge_dummy, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_bg_opa(s_edge_dummy, LV_OPA_TRANSP, 0);
+      lv_obj_set_style_border_width(s_edge_dummy, 2, 0);
+      lv_obj_set_style_border_color(s_edge_dummy, lv_color_hex(0x000000), 0);
+      lv_obj_clear_flag(s_edge_dummy, LV_OBJ_FLAG_SCROLLABLE);
+
       for (int i = 0; i < 4; i++) {
         s_edge[i] = lv_obj_create(lv_scr_act());
         lv_obj_remove_style_all(s_edge[i]);
