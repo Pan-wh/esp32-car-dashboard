@@ -376,7 +376,21 @@ void telemetry_ramp_reset(telemetry_ramp_t *r)
     if (r == NULL) return;
     r->value_kmh = 0.0f;
     r->target_kmh = 0.0f;
+    r->start_kmh = 0.0f;
+    r->elapsed_ms = 0;
+    r->duration_ms = 0;
     r->inited = false;
+}
+
+/* 启动一次新的斜坡：从当前显示值插值到新目标 */
+static void ramp_start(telemetry_ramp_t *r, float target, uint32_t duration_ms)
+{
+    r->start_kmh = r->value_kmh;
+    r->target_kmh = target;
+    r->elapsed_ms = 0;
+    r->duration_ms = duration_ms;
+    /* 起点与终点相同则无需斜坡，直接到位 */
+    if (r->start_kmh == target) r->duration_ms = 0;
 }
 
 void telemetry_ramp_set_target(telemetry_ramp_t *r, float kmh, bool valid)
@@ -385,19 +399,36 @@ void telemetry_ramp_set_target(telemetry_ramp_t *r, float kmh, bool valid)
 
     if (!valid) {
         /* 无效：目标归零（由斜坡平滑收回，不闪现旧值） */
-        r->target_kmh = 0.0f;
-        if (!r->inited) r->value_kmh = 0.0f;
+        if (!r->inited) {
+            r->value_kmh = 0.0f;
+            r->target_kmh = 0.0f;
+            r->start_kmh = 0.0f;
+            r->elapsed_ms = 0;
+            r->duration_ms = 0;
+            return;
+        }
+        if (r->target_kmh == 0.0f) return; /* 已在归零途中，不要反复重启 */
+        ramp_start(r, 0.0f, TELEMETRY_RAMP_DOWN_MS);
         return;
     }
 
     if (kmh < 0.0f) kmh = 0.0f;
-    r->target_kmh = kmh;
 
     if (!r->inited) {
         /* 首次拿到有效值：直接对齐，避免从 0 慢慢爬（起步即准） */
         r->value_kmh = kmh;
+        r->target_kmh = kmh;
+        r->start_kmh = kmh;
+        r->elapsed_ms = 0;
+        r->duration_ms = 0;
         r->inited = true;
+        return;
     }
+
+    if (kmh == r->target_kmh) return; /* 目标未变：让进行中的斜坡跑完 */
+
+    /* 减速用更短时长，保证刹车时读数及时下降 */
+    ramp_start(r, kmh, (kmh > r->value_kmh) ? TELEMETRY_RAMP_UP_MS : TELEMETRY_RAMP_DOWN_MS);
 }
 
 float telemetry_ramp_step(telemetry_ramp_t *r, uint32_t dt_ms)
@@ -406,22 +437,17 @@ float telemetry_ramp_step(telemetry_ramp_t *r, uint32_t dt_ms)
     if (!r->inited) return 0.0f;
     if (dt_ms == 0) return r->value_kmh;
 
-    float diff = r->target_kmh - r->value_kmh;
-    if (diff == 0.0f) return r->value_kmh;
+    if (r->duration_ms == 0) return r->value_kmh; /* 已到位 */
 
-    /* 按方向选择速率，换算成本帧允许的最大变化量 */
-    float rate = (diff > 0.0f) ? TELEMETRY_RAMP_UP_KMH_PER_S
-                               : TELEMETRY_RAMP_DOWN_KMH_PER_S;
-    float max_step = rate * ((float)dt_ms / 1000.0f);
-
-    if (diff > max_step) {
-        r->value_kmh += max_step;
-    }
-    else if (diff < -max_step) {
-        r->value_kmh -= max_step;
+    r->elapsed_ms += dt_ms;
+    if (r->elapsed_ms >= r->duration_ms) {
+        r->value_kmh = r->target_kmh; /* 到位 */
+        r->duration_ms = 0;
     }
     else {
-        r->value_kmh = r->target_kmh; /* 足够接近：直接对齐，避免无限逼近 */
+        /* 按时间比例插值 —— 只依赖累计时间，故与帧率无关 */
+        const float t = (float)r->elapsed_ms / (float)r->duration_ms;
+        r->value_kmh = r->start_kmh + (r->target_kmh - r->start_kmh) * t;
     }
     return r->value_kmh;
 }

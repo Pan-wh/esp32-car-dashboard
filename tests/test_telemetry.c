@@ -330,14 +330,24 @@ int main(void)
         telemetry_ramp_set_target(&r, 60.0f, true);
         CHECK_NEAR(telemetry_ramp_value(&r), 60.0, 1e-3, "首次对齐到 60");
 
-        /* 加速：40 km/h/s，100ms 应走 4 km/h（时间基线性） */
+        /*
+         * 加速：**固定时长**插值（450ms 走完 60→100）。
+         * 改为固定时长的原因见 telemetry.h：
+         * 手机 2Hz 下发，固定速率会让指针"动一段、停一段"。
+         */
         telemetry_ramp_set_target(&r, 100.0f, true);
         float v = telemetry_ramp_step(&r, 100);
-        CHECK_NEAR(v, 64.0, 1e-3, "100ms 后 = 60 + 40*0.1 = 64");
+        CHECK_NEAR(v, 60.0 + 40.0 * (100.0 / 450.0), 1e-3,
+                   "100ms 后 = 60 + (100-60)*100/450");
 
-        /* 再 100ms → 68（等速前进，证明与帧率无关） */
+        /* 再 100ms → 按时间比例继续推进（与帧率无关） */
         v = telemetry_ramp_step(&r, 100);
-        CHECK_NEAR(v, 68.0, 1e-3, "再 100ms → 68");
+        CHECK_NEAR(v, 60.0 + 40.0 * (200.0 / 450.0), 1e-3,
+                   "再 100ms → 60 + (100-60)*200/450");
+
+        /* 走满 450ms 后必须精确落在目标上（不会无限逼近） */
+        v = telemetry_ramp_step(&r, 250);
+        CHECK_NEAR(v, 100.0, 1e-3, "累计 450ms → 精确到 100");
 
         /* 帧率无关性：同样的总时长，拆成多帧结果一致 */
         telemetry_ramp_t a, b;
@@ -351,14 +361,15 @@ int main(void)
         CHECK_NEAR(telemetry_ramp_value(&a), telemetry_ramp_value(&b), 1e-3,
                    "1 秒总时长：50×20ms 与 5×200ms 结果一致（帧率无关）");
 
-        /* 减速：用更快速率（80 km/h/s） */
+        /* 减速：用更短时长（250ms 走完 100→0），保证刹车读数及时 */
         telemetry_ramp_reset(&r);
         telemetry_ramp_set_target(&r, 100.0f, true);   /* 对齐 100 */
         telemetry_ramp_set_target(&r, 0.0f, true);
         v = telemetry_ramp_step(&r, 100);
-        CHECK_NEAR(v, 92.0, 1e-3, "减速 100ms = 100 - 80*0.1 = 92");
+        CHECK_NEAR(v, 100.0 - 100.0 * (100.0 / 250.0), 1e-3,
+                   "减速 100ms = 100 + (0-100)*100/250");
 
-        /* 足够接近时直接对齐，不会无限逼近 */
+        /* 收敛到目标值，不会无限逼近 */
         telemetry_ramp_reset(&r);
         telemetry_ramp_set_target(&r, 50.0f, true);
         telemetry_ramp_set_target(&r, 50.5f, true);

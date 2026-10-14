@@ -79,20 +79,30 @@ float telemetry_speed_kmh(const telemetry_msg_t *m);
  * 阶梯式运动，观感是跳针且更新慢。
  *
  * 本方案改为**按时间**的固定速率斜坡（用户选择的"假线性"）：
- *   - 每帧代入实际经过的 dt_ms，指针以 ramp_kmh_per_s 匀速逼近目标
- *   - 无论调用频率多少，视觉速度一致（时间基，不受帧率影响）
- *   - 减速同样走斜坡（但速率更快），既线性又不会长时间滞后显示高车速
+ *   - 每帧代入实际经过的 dt_ms，在**固定时长**内插值到目标
+ *   - 无论调用频率多少，视觉过程一致（时间基，不受帧率影响）
+ *   - 减速时长更短，保证刹车时读数及时下降
+ *
+ * ⚠️ 为什么是"固定时长"而不是"固定速率"：
+ *   手机以 2Hz（500ms 间隔）下发车速。若用固定速率，小幅变化 250ms 就走完，
+ *   指针会"动 250ms → 静止 250ms → 再动"，肉眼即一顿一顿。
+ *   改成固定时长后，**每次变化都恰好占满一个数据间隔**，指针连续运动。
  */
 typedef struct {
-    float value_kmh;  /* 当前显示值 */
-    float target_kmh; /* 目标值（最新遥测） */
+    float value_kmh;      /* 当前显示值 */
+    float target_kmh;     /* 目标值（最新遥测） */
+    float start_kmh;      /* 本次斜坡的起点 */
+    uint32_t elapsed_ms;  /* 本次斜坡已用时间 */
+    uint32_t duration_ms; /* 本次斜坡总时长；0 = 已到位 */
     bool inited;
 } telemetry_ramp_t;
 
-/* 加速斜坡速率（km/h 每秒）：约 0→100 需 2.5s，视觉平滑不拖沓 */
-#define TELEMETRY_RAMP_UP_KMH_PER_S 40.0f
-/* 减速斜坡速率（km/h 每秒）：比加速快一倍，保证刹车时读数及时下降 */
-#define TELEMETRY_RAMP_DOWN_KMH_PER_S 80.0f
+/*
+ * 斜坡时长（毫秒）。取值依据：手机遥测为 2Hz（500ms 间隔），
+ * 故取略小于 500ms，使指针在下一帧数据到达前刚好走完 —— 全程连续运动。
+ */
+#define TELEMETRY_RAMP_UP_MS 450u   /* 加速：覆盖整个数据间隔 */
+#define TELEMETRY_RAMP_DOWN_MS 250u /* 减速：更快，刹车读数及时 */
 
 void telemetry_ramp_reset(telemetry_ramp_t *r);
 

@@ -1,0 +1,120 @@
+{
+  "label": "duration-ramp-2",
+  "timestamp": "2026-10-14 11:44:03",
+  "duration_s": 60,
+  "hz": 2.0,
+  "uptime_start": 138,
+  "uptime_end": 204,
+  "uptime_delta": 66,
+  "reset_reason": "USB",
+  "samples_run": 13,
+  "samples_render": 13,
+  "loop_per_s": {
+    "min": 51,
+    "max": 191,
+    "p50": 78
+  },
+  "redraw_per_s": {
+    "min": 2,
+    "max": 53,
+    "p50": 35
+  },
+  "render_max_ms": {
+    "min": 23,
+    "p50": 28,
+    "p90": 62,
+    "max": 69
+  },
+  "duty_pct": {
+    "p50": 56,
+    "max": 71
+  },
+  "qspi_max_ms": {
+    "p50": 7,
+    "max": 19
+  },
+  "spikes_gt80": 0,
+  "spikes_gt100": 0,
+  "spikes_gt150": 0,
+  "per_window": [
+    {
+      "render_max_ms": 31,
+      "duty_pct": 4,
+      "qspi_sum_ms": 59,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 28,
+      "duty_pct": 71,
+      "qspi_sum_ms": 1235,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 23,
+      "duty_pct": 50,
+      "qspi_sum_ms": 869,
+      "qspi_max_ms": 6
+    },
+    {
+      "render_max_ms": 62,
+      "duty_pct": 59,
+      "qspi_sum_ms": 1029,
+      "qspi_max_ms": 19
+    },
+    {
+      "render_max_ms": 25,
+      "duty_pct": 58,
+      "qspi_sum_ms": 1012,
+      "qspi_max_ms": 6
+    },
+    {
+      "render_max_ms": 62,
+      "duty_pct": 39,
+      "qspi_sum_ms": 604,
+      "qspi_max_ms": 19
+    },
+    {
+      "render_max_ms": 25,
+      "duty_pct": 60,
+      "qspi_sum_ms": 1003,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 69,
+      "duty_pct": 57,
+      "qspi_sum_ms": 999,
+      "qspi_max_ms": 19
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 56,
+      "qspi_sum_ms": 1000,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 28,
+      "duty_pct": 58,
+      "qspi_sum_ms": 1045,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 55,
+      "qspi_sum_ms": 998,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 29,
+      "duty_pct": 59,
+      "qspi_sum_ms": 1062,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 28,
+      "duty_pct": 45,
+      "qspi_sum_ms": 812,
+      "qspi_max_ms": 7
+    }
+  ],
+  "credible": true
+}
