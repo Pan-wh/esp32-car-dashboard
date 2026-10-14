@@ -49,8 +49,12 @@ struct ContentView: View {
         return deviceFaces.filter { $0.group == g }
     }
     /// 屏幕方向选项（度）—— 只列 90 的整数倍，与固件 control.c 的严格校验一致。
-    /// 仪表侧走 LVGL 软件旋转（本屏为圆形，旋转无长宽比副作用），
-    /// 并会持久化到 NVS，重启后保持。
+    ///
+    /// 固件**按角度自动选最合适的旋转机制**（App 不需关心）：
+    ///   - 0° / 180° → LVGL 软件旋转（路径便宜，实测最丝滑）
+    ///   - 90° / 270° → **面板硬件旋转**（MADCTL）：LVGL 在这两个角度要做
+    ///     4 向旋转，渲染耗时超过面板一帧（16.78 ms）→ 会撕裂，故改走硬件
+    /// 方向持久化到仪表 NVS，重启后保持。
     private let rotations = [0, 90, 180, 270]
     @State private var selectedRotation = 0
 
@@ -203,6 +207,11 @@ struct ContentView: View {
             .onChange(of: selectedRotation) { _, deg in
                 _ = session.ble.setRotation(deg)
             }
+            // 备注（用户要求写在这里）：说明 90°/270° 为何与另两个角度不同。
+            // 早期固件在 90°/270° 下确实会撕裂 —— 现已改走面板硬件旋转解决。
+            Text("90° / 270° 走面板硬件旋转，不会撕裂；0° / 180° 走 LVGL 软件旋转（实测最丝滑）。若仪表固件停留在旧版本，90° / 270° 仍会出现画面撕裂，请更新固件。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
 
             HStack {
                 Text("亮度")
