@@ -1136,8 +1136,8 @@ static void print_help(void)
   Serial.println("       set YYYY-MM-DD HH:MM:SS   手动校准 RTC 时间（例：set 2026-10-10 22:30:00）");
   Serial.println("       page N                   切换页面");
   Serial.println("       pages                    列出页面");
-  Serial.println("       sd [list]                TF 卡状态（`sd list` 连根目录一起列）
-       scan                     I2C 总线扫描（确认器件在线）");
+  Serial.println("       sd [list]                TF 卡状态（`sd list` 连根目录一起列）");
+  Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
   Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
   Serial.println("       screen on|off             亮屏 / 息屏");
@@ -1963,18 +1963,19 @@ void loop()
   rotation_poll();            /* 合并后的方向切换（见 s_pending_rot 说明）*/
 
   /*
-   * ── 已试过且**无效**的修法（留档，避免重复踩）────────────────────
+   * ── 硬件旋转的"显示不全"：**问题一直存在，旋转并不能修复** ──────────
    *
-   * 用户报：硬件旋转（90°/270°）下速度表盘有局部遮蔽。
-   * 曾观察到"开机即 270° 有遮蔽，而开机 0° 再手动切到 270° 就正常"，
-   * 于是实现了"开机自动切走再切回"（away=(target+90)%360 后切回 target）。
+   * 曾误以为"开机即 270° 有黑边，切到别的角度再切回 270° 就正常"，
+   * 并据此实现过"开机自动切走再切回"（两版：一版没渲染、一版用
+   * lv_refr_now 强制两次真实渲染）—— **两版都无效**。
    *
-   * 实测结论：**无效**。日志确认两次 set_display_rotation() 都执行了
-   * （序列 0° → 270°），遮蔽依旧。故已撤除，不再每次开机白做两次整屏重绘。
+   * 用户最终查明真实原因：**那个"旋转后就好了"是误判**。早前会话加过一个
+   * **白色描边的遮挡块**，手动旋转屏幕会触发它显示出来，于是看起来"变好了"。
+   * 该显示不全**与旋转无关，一直存在**。
    *
-   * 详见 docs/rotation-hardware-vs-software.md 的"硬件旋转遮蔽"一节。
-   */
-  ph_end(PH_CONTROL);
+   * 现状：用户表示"没法修复就先继续这样，有点显示不全也无所谓" —— 暂不处理。
+   * 详见 docs/rotation-hardware-vs-software.md 第十二节。
+   */  ph_end(PH_CONTROL);
 
   /*
    * 表盘变化检测：**滑动、串口命令、BLE 命令**都会改变当前表盘，
