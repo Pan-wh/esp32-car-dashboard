@@ -727,6 +727,30 @@ static void touch_apply_rot(int16_t *x, int16_t *y)
   }
 }
 
+/*
+ * ── 方向切换的"合并"（避免连点导致画面长时间卡住）────────────────
+ *
+ * 背景：每次切换屏幕方向都必须**整屏重绘**（实测渲染 101ms + QSPI 44ms）
+ * 并写一次 NVS。App 的方向选择器每点一下发一条命令，连点 7 次就会排队
+ * 执行 7 次 → 约 1.5 秒画面像冻住（用户报"点旋转后卡死了"）。
+ *
+ * 做法：收到命令只记下**目标值**，等 ROT_COALESCE_MS 内没有新命令才真正执行。
+ * 连点任意多次只会执行最后一次，代价从 N×200ms 降到 1×200ms。
+ */
+#define ROT_COALESCE_MS 300
+static int s_pending_rot = -1; /* <0 = 无待执行 */
+static uint32_t s_pending_rot_ms = 0;
+
+/* 主循环调用：安静了才真正切方向 */
+static void rotation_poll(void)
+{
+  if (s_pending_rot < 0) return;
+  if ((uint32_t)(millis() - s_pending_rot_ms) < ROT_COALESCE_MS) return;
+  const int deg = s_pending_rot;
+  s_pending_rot = -1;
+  set_display_rotation(deg, true);
+}
+
 static void control_poll(void)
 {
   control_cmd_t cmd;
@@ -808,10 +832,17 @@ static void control_poll(void)
       s_faces_dirty = true;
       break;
     }
-    case CONTROL_ROTATE:
-      /* 屏幕方向（角度由 control.c 校验为 90 的整数倍）*/
-      set_display_rotation((int)cmd.value, true);
+    case CONTROL_ROTATE: {
+      /*
+       * 只暂存目标值（合并连点），真正执行交给 rotation_poll()。
+       * 已经是当前方向则直接忽略，连一次重绘都不做。
+       */
+      const int deg = (int)cmd.value;
+      if (deg == s_display_rot) break;
+      s_pending_rot = deg;
+      s_pending_rot_ms = millis();
       break;
+    }
     default:
       break;
   }
@@ -1845,6 +1876,7 @@ void loop()
   ph_end(PH_SERIAL);
   ph_begin();
   control_poll();             /* BLE 下行控制：亮度 / 息屏 / 表盘 */
+  rotation_poll();            /* 合并后的方向切换（见 s_pending_rot 说明）*/
   ph_end(PH_CONTROL);
 
   /*
