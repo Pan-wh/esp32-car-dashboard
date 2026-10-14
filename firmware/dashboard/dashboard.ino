@@ -79,6 +79,27 @@ extern "C" {
 
 /* ---------------- 显示 ---------------- */
 
+/*
+ * ── TE（Tearing Effect，撕裂同步）────────────────────────────────
+ *
+ * **GPIO 13 = LCD_TE**：官方 `HARDWARE_REFERENCE.md` 的引脚表明确写了
+ *   | 13 | LCD_TE | CO5300 tearing-effect signal | Display synchronization input to the MCU. |
+ *
+ * 此前项目以为"没有 TE 引脚"，是因为只查了 Arduino 的 `pin_config.h`
+ * （它确实没定义）—— 而**硬件是接了的**。
+ *
+ * 更关键：配套驱动 `Arduino_CO5300` 的初始化序列里，使能 TE 的那一行
+ *   `// WRITE_C8_D8, CO5300_WC_TEARON, 0x00,`
+ * 是**注释掉的**，所以本板 TE 从未输出过。
+ *
+ * 撕裂的本质：QSPI 是阻塞轮询写，与面板扫描**无任何同步**；
+ * 整屏 434 KB 实测约 43 ms（≈2.6 个 60 Hz 场）→ 边写边扫必然撕裂。
+ * 使能 TE 后可在 **V-blank 期间**写入，从而避免撕裂。
+ */
+#define LCD_TE_PIN 13 /* CO5300 tearing-effect 输出 → ESP32-S3 GPIO13 */
+static bool s_te_on = false;
+
+
 static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
     LCD_CS /* CS */, LCD_SCLK /* SCK */, LCD_SDIO0 /* SDIO0 */, LCD_SDIO1 /* SDIO1 */,
     LCD_SDIO2 /* SDIO2 */, LCD_SDIO3 /* SDIO3 */);
@@ -91,6 +112,47 @@ static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
 static Arduino_CO5300 *gfx = new Arduino_CO5300(
     bus, LCD_RESET /* RST */, 0 /* rotation */, LCD_WIDTH /* width */, LCD_HEIGHT /* height */,
     6, 0, 0, 0);
+
+/** 使能/关闭面板 TE 输出（CO5300: 0x35 TEON / 0x34 TEOFF）*/
+static void te_panel(bool on)
+{
+  bus->beginWrite();
+  if (on) {
+    bus->writeC8D8(0x35, 0x00); /* TEON, mode 0 = 仅 V-blank */
+  }
+  else {
+    bus->writeCommand(0x34); /* TEOFF（无参数）*/
+  }
+  bus->endWrite();
+  s_te_on = on;
+}
+
+/* TE 同步刷屏（撕裂抑制）*/
+static bool s_te_sync = false;               /* 是否启用（默认关，便于 A/B 对比）*/
+static bool s_te_waited_this_frame = false;  /* 本帧是否已等过 TE */
+static uint32_t s_te_timeouts = 0;           /* 等待超时次数 */
+static uint32_t s_te_waits = 0;              /* 累计等待次数 */
+
+/**
+ * 等待 TE **上升沿**（V-blank 开始）。
+ *
+ * 为什么先等它变低、再等它变高：若采样恰落在脉冲内部，直接判"高"
+ * 会立刻满足，等于没同步。
+ *
+ * @param timeout_us 超时；**必须设**，否则 TE 一旦不输出就会死等
+ * @return true = 等到上升沿；false = 超时（已计数，调用方继续写，不能卡死）
+ */
+static bool te_wait_rise(uint32_t timeout_us)
+{
+  const uint32_t t0 = micros();
+  while (digitalRead(LCD_TE_PIN) == HIGH) {
+    if (micros() - t0 > timeout_us) return false;
+  }
+  while (digitalRead(LCD_TE_PIN) == LOW) {
+    if (micros() - t0 > timeout_us) return false;
+  }
+  return true;
+}
 
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t buf[LCD_WIDTH * LCD_HEIGHT / 10]; /* 与官方示例相同的缓冲大小 */
@@ -285,8 +347,19 @@ static void rounder_cb(struct _lv_disp_drv_t *disp_drv, lv_area_t *area)
 
 static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
 {
-  uint32_t t_flush = micros();
-  s_flush_cnt++;
+    /*
+     * TE 同步：**每帧只等一次** —— LVGL 一次刷新可能拆成多个 flush，
+     * 若每个都等，最多会白等好几帧（每帧 16.8ms）。
+     * 等 V-blank 上升沿之后再写，可避开面板正在扫描的时段。
+     */
+    if (s_te_sync && !s_te_waited_this_frame) {
+      s_te_waited_this_frame = true;
+      s_te_waits++;
+      if (!te_wait_rise(25000)) s_te_timeouts++;
+    }
+
+    uint32_t t_flush = micros();
+    s_flush_cnt++;
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
 
@@ -899,6 +972,8 @@ static void print_help(void)
   Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
   Serial.println("       bufmode [psram|internal]  查看/切换绘制缓冲（滑动性能 A/B 对比）");
+  Serial.println("       te [on|off]               撕裂同步：使能并实测 TE 引脚（GPIO13）翻转");
+  Serial.println("       te sync [on|off]          开关「等 V-blank 再写」（撕裂抑制，可 A/B）");
   Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
   Serial.println("       screen on|off             亮屏 / 息屏");
   Serial.println("       trip [reset]              行程统计：里程/最高速/均速");
@@ -1096,6 +1171,90 @@ static void process_command(char *cmd)
       ui_speed_set_fix(true, 12);
       ui_speed_set_speed(v);
       Serial.printf("[速度] 强制设为 %.1f km/h\n", (double)v);
+    }
+  }
+  else if (strncmp(cmd, "te", 2) == 0) {
+    /*
+     * 【诊断/实验】TE 撕裂同步。
+     *
+     *   te        使能 TE 并**实测 GPIO13 是否真的在翻转**（100 ms 采样）
+     *   te on     仅使能
+     *   te off    关闭
+     *
+     * 为什么要先测：TEON 此前从未被使能过，本板 TE 是否真的输出
+     * **从未被验证**。若引脚不翻转，后续"等 TE 再写"会死等。
+     */
+    const char *arg = cmd + 2;
+    if (strcmp(arg, " off") == 0) {
+      te_panel(false);
+      Serial.println("[TE] 已关闭（0x34 TEOFF）");
+    }
+    else if (strcmp(arg, " on") == 0) {
+      pinMode(LCD_TE_PIN, INPUT);
+      te_panel(true);
+      Serial.println("[TE] 已使能（0x35 TEON, mode 0 = 仅 V-blank）");
+    }
+    else if (strncmp(arg, " sync", 5) == 0) {
+      /* te sync on|off —— 开关"等 V-blank 再写" */
+      bool on = (strstr(arg, "off") == NULL);
+      if (on) {
+        if (!s_te_on) {
+          pinMode(LCD_TE_PIN, INPUT);
+          te_panel(true);
+        }
+        if (!te_wait_rise(30000)) {
+          Serial.println("[TE] ⚠️ 等不到 TE 上升沿 —— 拒绝启用（否则每帧白等 25ms）");
+        }
+        else {
+          s_te_sync = true;
+          Serial.println("[TE] ✅ TE 同步刷屏已开启（每帧等一次 V-blank 上升沿）");
+        }
+      }
+      else {
+        s_te_sync = false;
+        Serial.println("[TE] TE 同步刷屏已关闭（回到自由写入）");
+      }
+    }
+    else {
+      pinMode(LCD_TE_PIN, INPUT);
+      te_panel(true);
+      delay(30); /* 等面板开始输出 */
+
+      const uint32_t span_us = 100000; /* 采样 100 ms */
+      uint32_t t0 = micros();
+      uint32_t rises = 0, hi = 0, samples = 0;
+      int prev = digitalRead(LCD_TE_PIN);
+      uint32_t first_rise = 0, last_rise = 0;
+
+      while (micros() - t0 < span_us) {
+        int v = digitalRead(LCD_TE_PIN);
+        if (v != prev) {
+          if (v == HIGH) {
+            rises++;
+            uint32_t now = micros();
+            if (first_rise == 0) first_rise = now;
+            last_rise = now;
+          }
+          prev = v;
+        }
+        if (v) hi++;
+        samples++;
+      }
+
+      const uint32_t elapsed = micros() - t0;
+      Serial.printf("[TE] 引脚 GPIO%d：%u 次上升沿 / %.0f ms，高电平占比 %.1f%%\n", LCD_TE_PIN,
+                    (unsigned)rises, (double)elapsed / 1000.0,
+                    samples ? (double)hi * 100.0 / (double)samples : 0.0);
+      Serial.printf("[TE] 同步状态=%s｜累计等待 %u 次，超时 %u 次\n", s_te_sync ? "开" : "关",
+                    (unsigned)s_te_waits, (unsigned)s_te_timeouts);
+      if (rises >= 2 && last_rise > first_rise) {
+        const double period_ms = (double)(last_rise - first_rise) / 1000.0 / (double)(rises - 1);
+        Serial.printf("[TE] ✅ 检测到撕裂同步信号：周期 %.2f ms（≈ %.1f Hz）\n", period_ms,
+                      period_ms > 0 ? 1000.0 / period_ms : 0.0);
+      }
+      else {
+        Serial.println("[TE] ❌ 未检测到翻转 —— 该引脚未输出 TE（或需先使能 0x35）");
+      }
     }
   }
   else if (strncmp(cmd, "madctl", 6) == 0) {
@@ -1841,6 +2000,7 @@ void loop()
   {
     uint32_t t_render = micros();
     lv_timer_handler();
+    s_te_waited_this_frame = false; /* 新的一帧：允许再等一次 TE */
     uint32_t dt = micros() - t_render;
     if (dt > s_render_us_max) s_render_us_max = dt;
     s_render_us_sum += dt;
