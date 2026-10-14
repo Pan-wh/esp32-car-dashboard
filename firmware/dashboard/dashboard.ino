@@ -21,6 +21,7 @@
  *   未连接 / 无定位 / 数据过期时，速度页显示无效状态（不伪造旧值）。
  */
 #include <Arduino.h>
+#include <SD_MMC.h>
 #include <nvs.h>
 #include <Preferences.h>   /* NVS：持久化屏幕方向等用户设置 */
 #include <esp_heap_caps.h> /* PSRAM 分配 */
@@ -190,6 +191,79 @@ static void IRAM_ATTR isr_gap_cb(void)
   }
   s_isr_last_us = now;
   s_isr_cnt++;
+}
+
+/*
+ * ── TF / microSD 卡 ────────────────────────────────────────────────
+ *
+ * 引脚取自厂商 BSP（`esp32_s3_touch_amoled_1_75.c`）与硬件参考手册：
+ *   SD_CLK = GPIO2、SD_CMD = GPIO1、SD_D0 = GPIO3（**1-bit SDMMC**）
+ * （SD_D3/CS = GPIO41 虽在 PCB 上连着，但 1-bit 模式不用它。）
+ *
+ * 为什么现在只挂载、不做别的：先把"卡在不在、多大、能不能读写"确认下来，
+ * 后续导航的地图包/离线资源要放这里（见 docs/nav-backend.md 的待办）。
+ *
+ * ⚠️ 用 `SD_MMC`（原生 SDMMC 控制器）而不是 `SD`(SPI)：本板就是原生接法，
+ *    走 SPI 需要占用其它 GPIO 且速率低得多。
+ */
+#define SD_CLK_PIN 2
+#define SD_CMD_PIN 1
+#define SD_D0_PIN  3
+
+static bool s_sd_ok = false;
+static uint32_t s_sd_retry_ms = 0;
+
+/** 挂载 TF 卡（1-bit SDMMC）。可重复调用；失败不 format（绝不能悄悄格式化用户的卡）。 */
+static bool sd_mount(void)
+{
+  if (s_sd_ok) return true;
+  SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN);
+  /* begin(mountpoint, mode1bit, format_if_mount_failed, max_files) */
+  if (!SD_MMC.begin("/sdcard", true, false, 5)) {
+    s_sd_ok = false;
+    return false;
+  }
+  s_sd_ok = true;
+  return true;
+}
+
+/** 打印卡信息。`verbose=false` 时只报"在/不在"，供周期性状态行使用。 */
+static void sd_report(bool verbose)
+{
+  if (!sd_mount()) {
+    Serial.println("[SD] 未检测到 TF 卡（或未格式化）");
+    return;
+  }
+  const uint8_t type = SD_MMC.cardType();
+  const char *typeName = (type == CARD_MMC)  ? "MMC"
+                         : (type == CARD_SD) ? "SDSC"
+                         : (type == CARD_SDHC) ? "SDHC"
+                                               : "未知";
+  const uint64_t total = SD_MMC.totalBytes();
+  const uint64_t used = SD_MMC.usedBytes();
+  Serial.printf("[SD] 已挂载：类型=%s 容量=%.1f GB 已用=%.2f GB 可用=%.2f GB\n",
+                typeName, (double)total / 1073741824.0, (double)used / 1073741824.0,
+                (double)(total - used) / 1073741824.0);
+  if (!verbose) return;
+
+  /* 列根目录（最多 20 项，避免刷屏） */
+  File root = SD_MMC.open("/");
+  if (!root || !root.isDirectory()) {
+    Serial.println("[SD] 打不开根目录");
+    return;
+  }
+  Serial.println("[SD] 根目录：");
+  int n = 0;
+  for (File f = root.openNextFile(); f && n < 20; f = root.openNextFile(), n++) {
+    if (f.isDirectory()) {
+      Serial.printf("       <DIR>  %s\n", f.name());
+    }
+    else {
+      Serial.printf("       %8u B  %s\n", (unsigned)f.size(), f.name());
+    }
+  }
+  if (n == 0) Serial.println("       （空）");
+  if (n >= 20) Serial.println("       …（仅列前 20 项）");
 }
 
 #define PANEL_NATIVE_GAP_X 6
@@ -1062,7 +1136,8 @@ static void print_help(void)
   Serial.println("       set YYYY-MM-DD HH:MM:SS   手动校准 RTC 时间（例：set 2026-10-10 22:30:00）");
   Serial.println("       page N                   切换页面");
   Serial.println("       pages                    列出页面");
-  Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
+  Serial.println("       sd [list]                TF 卡状态（`sd list` 连根目录一起列）
+       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
   Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
   Serial.println("       screen on|off             亮屏 / 息屏");
@@ -1201,7 +1276,13 @@ static void print_dump(void)
 
 static void process_command(char *cmd)
 {
-  if (strcmp(cmd, "nvs") == 0) {
+  if (strncmp(cmd, "sd", 2) == 0) {
+    /* TF 卡检测：`sd` 看状态，`sd list` 连目录一起列 */
+    const char *arg = cmd + 2;
+    while (*arg == ' ') arg++;
+    sd_report(strcmp(arg, "list") == 0);
+  }
+  else if (strcmp(cmd, "nvs") == 0) {
     /*
      * 【诊断】NVS 分区用量与 GC 统计。
      * 动机：停滞时"中断正常但 lv_timer_handler 耗时 1 秒、且 flush 次数不变"，
@@ -1609,6 +1690,9 @@ void setup()
 
   /* 恢复上次保存的屏幕方向（NVS）；无记录则用编译期默认 DISPLAY_ROT */
   restore_display_rotation();
+
+  /* TF 卡：启动时尝试挂载一次并报告（失败不影响启动） */
+  sd_report(false);
 
   /*
    * 恢复表盘状态（断电记忆）：先恢复启用/隐藏集合，再恢复当前表盘。
