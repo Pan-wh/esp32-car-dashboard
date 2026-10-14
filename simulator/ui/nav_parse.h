@@ -33,10 +33,21 @@ typedef struct {
     bool has_state;
     bool has_maneuver;
     bool has_dist;
+    /**
+     * 是否带回了**自车在窗口局部坐标系中的偏移**（`ox`/`oy`，单位米）。
+     *
+     * 为什么需要：地图窗口的坐标原点在"手机发起请求时的位置"，而车在动。
+     * 让设备自己做经纬度换算会把投影数学带进固件（不必要），
+     * 因此由手机把偏移算好一起下发 —— 设备只做旋转/缩放/平移。
+     * 两个字段必须**同时**出现才算有效。
+     */
+    bool has_offset;
 
     nav_state_t state;
     nav_maneuver_t maneuver;
     int distance_m; /* NAV_DISTANCE_INVALID 表示"明确无效" */
+    int offset_x_m; /* 自车相对窗口中心：x 向东为正 */
+    int offset_y_m; /* 自车相对窗口中心：y 向北为正 */
 } nav_msg_t;
 
 /**

@@ -5,7 +5,7 @@ PYTHON  ?= python3
 CFLAGS  := -O1 -std=gnu99 -Wall -Wextra -I../simulator/ui
 SRC     := ../simulator/ui/telemetry.c
 
-TESTS   := test_telemetry test_control test_ui_face test_nav test_nav_parse test_img_indexed test_face_report
+TESTS   := test_telemetry test_control test_ui_face test_nav test_nav_parse test_nav_map test_img_indexed test_face_report
 
 # iOS 侧导航核心：直接编译 App 的真实源文件（不复制逻辑，避免与实现漂移）
 NAV_SRC      := ../ios/CarDashboardPhone/CarDashboardPhone/Nav/NavCore.swift \
@@ -39,6 +39,9 @@ test_nav: test_nav.c ../simulator/ui/nav.c
 # face_report 依赖 ui_face（读取注册表）
 test_face_report: test_face_report.c ../simulator/ui/face_report.c ../simulator/ui/ui_face.c
 	$(CC) $(CFLAGS) -o $@ $^
+
+test_nav_map: test_nav_map.c ../simulator/ui/nav_map.c
+	$(CC) $(CFLAGS) -I../simulator/ui -o $@ $^
 
 test_nav_parse: test_nav_parse.c ../simulator/ui/nav_parse.c ../simulator/ui/nav.c
 	$(CC) $(CFLAGS) -o $@ $^

@@ -151,6 +151,44 @@ int main(void)
         CHECK(!nav_is_nav_message(tel, strlen(tel)), "分流函数也正确排除遥测包");
     }
 
+    /* ---- 自车偏移 ox/oy（地图窗口用）---- */
+    printf("--- 自车偏移 ox/oy ---\n");
+    CHECK(PARSE("{\"t\":\"nav\",\"state\":1,\"ox\":13,\"oy\":-42}", &m), "带偏移的导航包可解析");
+    CHECK(m.has_offset, "偏移被标记有效");
+    CHECK(m.offset_x_m == 13, "ox=13（实际 %d）", m.offset_x_m);
+    CHECK(m.offset_y_m == -42, "oy=-42（实际 %d）", m.offset_y_m);
+
+    CHECK(PARSE("{\"t\":\"nav\",\"state\":1}", &m), "不带偏移也能解析");
+    CHECK(!m.has_offset, "缺偏移时 has_offset=false");
+
+    /* 只带偏移、不带指引：也算有效包（换窗口后手机可能只补发一次偏移）*/
+    CHECK(PARSE("{\"t\":\"nav\",\"ox\":1,\"oy\":2}", &m), "只有偏移也是有效包");
+    CHECK(m.has_offset && m.offset_x_m == 1 && m.offset_y_m == 2, "只有偏移时数值正确");
+    CHECK(!m.has_state && !m.has_maneuver && !m.has_dist, "只有偏移时不清掉指引");
+
+    /* 必须成对：只给一个不算有效偏移 */
+    CHECK(PARSE("{\"t\":\"nav\",\"state\":1,\"ox\":5}", &m), "只给 ox 仍可解析（state 有效）");
+    CHECK(!m.has_offset, "只给 ox：偏移无效（必须成对）");
+
+    /* null → 明确表示本次无偏移 */
+    CHECK(PARSE("{\"t\":\"nav\",\"state\":1,\"ox\":null,\"oy\":null}", &m), "null 偏移可解析");
+    CHECK(!m.has_offset, "null 偏移 → has_offset=false");
+
+    /* 越界值不夹到边界（避免把车画到屏幕边上）*/
+    CHECK(PARSE("{\"t\":\"nav\",\"state\":1,\"ox\":40000,\"oy\":0}", &m), "超大偏移可解析");
+    CHECK(!m.has_offset, "超大偏移视为无效，不夹到边界");
+
+    /* 字段顺序无关 */
+    CHECK(PARSE("{\"oy\":-7,\"ox\":8,\"t\":\"nav\",\"state\":1}", &m), "偏移字段顺序无关");
+    CHECK(m.has_offset && m.offset_x_m == 8 && m.offset_y_m == -7, "顺序无关时数值正确");
+
+    /* 偏移不干扰原有字段 */
+    CHECK(PARSE("{\"t\":\"nav\",\"state\":1,\"maneuver\":2,\"dist_m\":500,\"ox\":3,\"oy\":4}", &m),
+          "偏移与原有字段共存");
+    CHECK(m.has_state && m.state == NAV_STATE_ACTIVE && m.has_maneuver && m.maneuver == NAV_MANEUVER_LEFT,
+          "原有字段仍正确");
+    CHECK(m.has_dist && m.distance_m == 500 && m.has_offset && m.offset_x_m == 3, "所有字段都对");
+
     printf("结果: %d 通过, %d 失败\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

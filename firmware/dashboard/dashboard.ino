@@ -44,6 +44,7 @@ extern "C" {
 #include "ui_pages.h"
 #include "ui_speed.h"
 #include "ui_nav.h"      /* 导航指引卡片（阶段 1：UI 原型） */
+#include "nav_map.h"    /* 周边地图窗口的接收缓冲（阶段 4）*/
 #include "ui_baked_images.h" /* 烘焙图声明（非 const，启动时可充气）*/
 #include "ui_img_inflate.h"  /* 索引图 → PSRAM RGB565 直通图 */
 #include "nav.h"         /* 导航状态/动作枚举与文案（纯 C，共用） */
@@ -1136,6 +1137,7 @@ static void print_help(void)
   Serial.println("       set YYYY-MM-DD HH:MM:SS   手动校准 RTC 时间（例：set 2026-10-10 22:30:00）");
   Serial.println("       page N                   切换页面");
   Serial.println("       pages                    列出页面");
+  Serial.println("       map                      地图窗口诊断（收到多少/能否画/自车偏移）");
   Serial.println("       sd [list]                TF 卡状态（`sd list` 连根目录一起列）");
   Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
@@ -1276,7 +1278,40 @@ static void print_dump(void)
 
 static void process_command(char *cmd)
 {
-  if (strncmp(cmd, "sd", 2) == 0) {
+  if (strcmp(cmd, "map") == 0) {
+    /*
+     * 地图窗口诊断：看"有没有收到、够不够画、自车在哪儿"。
+     * 排查链路（手机 → BLE → 解析 → 渲染）时先看这里。
+     */
+    int ox = 0, oy = 0;
+    const bool has_off = nav_map_get_vehicle_offset(&ox, &oy);
+    const nav_map_window_t *w = nav_map_active();
+    Serial.printf("[地图] 消息=%u 窗口=%u 丢弃=%u\n",
+                  (unsigned)nav_map_msg_count(), (unsigned)nav_map_window_count(),
+                  (unsigned)nav_map_drop_count());
+    if (w == NULL) {
+      Serial.println("[地图] 当前无可用窗口（未收到 / 已过期）");
+    }
+    else {
+      int rp = 0, bp = 0;
+      for (int i = 0; i < w->n_roads; i++) rp += w->roads[i].n;
+      for (int i = 0; i < w->n_bldgs; i++) bp += w->bldgs[i].n;
+      Serial.printf("[地图] 窗口：道路 %d 条/%d 点，建筑 %d 栋/%d 点，路线 %d 点\n",
+                    w->n_roads, rp, w->n_bldgs, bp, w->n_route);
+      if (w->n_roads > 0) {
+        Serial.printf("[地图] 第 0 条道路：等级=%d 点数=%d 首点=(%d,%d)\n",
+                      w->roads[0].cls, w->roads[0].n,
+                      w->roads[0].pts[0].x, w->roads[0].pts[0].y);
+      }
+    }
+    if (has_off) {
+      Serial.printf("[地图] 自车偏移=(%d,%d) 米\n", ox, oy);
+    }
+    else {
+      Serial.println("[地图] 自车偏移：未设置（导航消息未带 ox/oy）");
+    }
+  }
+  else if (strncmp(cmd, "sd", 2) == 0) {
     /* TF 卡检测：`sd` 看状态，`sd list` 连目录一起列 */
     const char *arg = cmd + 2;
     while (*arg == ' ') arg++;
@@ -1694,6 +1729,9 @@ void setup()
   /* TF 卡：启动时尝试挂载一次并报告（失败不影响启动） */
   sd_report(false);
 
+  /* 地图窗口：清空接收缓冲（等待手机下发） */
+  nav_map_init();
+
   /*
    * 恢复表盘状态（断电记忆）：先恢复启用/隐藏集合，再恢复当前表盘。
    * 必须在 ui_pages_init() 之后（注册表已就绪），且在首次 show 之前
@@ -1813,11 +1851,15 @@ static void nav_poll(void)
     if (nm.has_state)    ui_nav_set_state((int)nm.state);
     if (nm.has_maneuver) ui_nav_set_maneuver((int)nm.maneuver);
     if (nm.has_dist)     ui_nav_set_distance(nm.distance_m);
+    /* 自车在窗口坐标系中的偏移：地图层据此平移地图，使车永远在中心箭头上 */
+    if (nm.has_offset)   nav_map_set_vehicle_offset(nm.offset_x_m, nm.offset_y_m);
 
-    Serial.printf("[导航] state=%s maneuver=%s dist=%d\n",
+    Serial.printf("[导航] state=%s maneuver=%s dist=%d offset=%d,%d\n",
                   nav_state_name(nm.has_state ? nm.state : NAV_STATE_NO_DATA),
                   nav_maneuver_name(nm.has_maneuver ? nm.maneuver : NAV_MANEUVER_UNKNOWN),
-                  nm.has_dist ? nm.distance_m : -1);
+                  nm.has_dist ? nm.distance_m : -1,
+                  nm.has_offset ? nm.offset_x_m : -9999,
+                  nm.has_offset ? nm.offset_y_m : -9999);
     return;
   }
 
@@ -1845,7 +1887,8 @@ static void nav_poll(void)
 
 static void ble_poll(void)
 {
-  nav_poll(); /* 导航消息（与遥测同一特征，先生效以便状态切换）*/
+  nav_poll();
+  nav_map_tick(millis()); /* 地图窗口：累积超时与过期检查 */ /* 导航消息（与遥测同一特征，先生效以便状态切换）*/
 
   telemetry_msg_t m;
   uint32_t rx_ms = 0;

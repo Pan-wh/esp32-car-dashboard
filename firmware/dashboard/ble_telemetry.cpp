@@ -16,6 +16,7 @@
 
 #include "telemetry.h"
 #include "nav_parse.h"
+#include "nav_map.h"
 
 #define DEVICE_NAME      "CarDashboard"
 #define SERVICE_UUID        "7D2A0001-8F4A-4B7C-9D21-5E6A3B8C1000"
@@ -107,6 +108,15 @@ static void handle_chunk(const char *data, size_t n)
              *    在回调里对共享缓冲区做 %s 打印会与下一次写入形成竞态
              *    （排查时短暂加过，日志尾部出现过错拼）。需要看内容请在
              *    主循环消费后打印 —— nav_poll 里已有等价日志。
+             */
+        }
+        else if (nav_map_handle(s_asm, s_asm_len)) {
+            /*
+             * 地图窗口消息（mw/mr/mb/mp/me）：同样复用本特征，用 "t" 分流。
+             * ⚠️ 顺序：**nav → 地图 → 遥测**。地图消息没有 "v" 字段，
+             *    落到遥测分支会解析失败并污染 s_parse_err 统计。
+             * 该函数内部只做"解析 + 存缓冲"，窗口切换发生在收到 me 时，
+             * 都是纯内存操作，适合回调内完成（无硬件副作用）。
              */
         }
         else {

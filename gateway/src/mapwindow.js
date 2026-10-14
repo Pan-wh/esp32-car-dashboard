@@ -61,6 +61,15 @@ export const DEFAULT_BUDGET = {
   maxRoadPoints: 192,
   maxBuildings: 16,
   maxBuildingPoints: 128,
+  /**
+   * **单条要素**的点数上限。
+   *
+   * 为什么必须有：BLE 是"一条要素一条消息"，单条消息不能超过一个 BLE 包
+   * （iOS 实到约 185 字节）。一条 1km 的直路按 8m 抽稀有 125 个点，会被
+   * 总数预算直接跳过 —— 而它往往正是穿过中心、最该显示的那条路。
+   * 因此改为**每条要素自适应降采样**到这个上限，宁可形状粗一点也不能丢。
+   */
+  maxPointsPerFeature: 16,
 };
 
 /* ---------------- 瓦片坐标与投影 ---------------- */
@@ -146,6 +155,21 @@ export async function loadTile(tile, { cacheDir, fetchImpl = globalThis.fetch, t
 
 /* ---------------- 几何提取 ---------------- */
 
+/**
+ * 均匀降采样到 `maxN` 个点（**保留首尾**）。
+ *
+ * 用于"单条要素点数超上限"时：形状会变粗，但要素本身不会丢。
+ * 这是刻意的取舍 —— 背景图层的作用是提供路网参照，不是精确测距。
+ */
+function decimate(points, maxN) {
+  if (points.length <= maxN || maxN < 2) return points.slice(0, maxN);
+  const out = [points[0]];
+  const step = (points.length - 1) / (maxN - 1);
+  for (let k = 1; k < maxN - 1; k++) out.push(points[Math.round(k * step)]);
+  out.push(points[points.length - 1]);
+  return out;
+}
+
 /** 折线抽稀：相邻点距离小于 `minM` 时丢弃，减少点数 */
 function simplify(points, minM) {
   if (points.length <= 2) return points;
@@ -164,7 +188,7 @@ function withinRadius(points, radiusM) {
   return points.some((p) => Math.hypot(p.x, p.y) <= radiusM);
 }
 
-function collectLines(layer, klass, originLon, originLat, tile, radiusM, minPointSpacingM) {
+function collectLines(layer, klass, originLon, originLat, tile, radiusM, minPointSpacingM, maxPointsPerFeature) {
   const out = [];
   for (let i = 0; i < layer.length; i++) {
     const f = layer.feature(i);
@@ -178,7 +202,7 @@ function collectLines(layer, klass, originLon, originLat, tile, radiusM, minPoin
         return toLocalMeters(lon, lat, originLon, originLat);
       });
       if (pts.length < 2 || !withinRadius(pts, radiusM)) continue;
-      const s = simplify(pts, minPointSpacingM);
+      const s = decimate(simplify(pts, minPointSpacingM), maxPointsPerFeature);
       /* 最近点距离：用于超预算时按"离我最近"取舍 */
       let nearest = Infinity;
       for (const p of s) nearest = Math.min(nearest, Math.hypot(p.x, p.y));
@@ -219,14 +243,15 @@ export async function fetchMapWindow({
   /* 道路：折线，抽稀到 ~8m 一点（500m 内足够平滑，点数可控） */
   const roadLayer = vt.layers.transportation;
   let roads = roadLayer
-    ? collectLines(roadLayer, ROAD_CLASSES, lon, lat, tile, radiusM, 8)
+    ? collectLines(roadLayer, ROAD_CLASSES, lon, lat, tile, radiusM, 8, budget.maxPointsPerFeature)
     : [];
   roads.sort((a, b) => a.nearest - b.nearest);
 
   /* 建筑：多边形轮廓，抽稀更狠（只要形状可辨） */
   const bLayer = vt.layers.building;
   let buildings = bLayer
-    ? collectLines(bLayer, null, lon, lat, tile, radiusM, 12).map((b) => ({ pts: b.pts, nearest: b.nearest }))
+    ? collectLines(bLayer, null, lon, lat, tile, radiusM, 12, budget.maxPointsPerFeature)
+        .map((b) => ({ pts: b.pts, nearest: b.nearest }))
     : [];
   buildings.sort((a, b) => a.nearest - b.nearest);
 
