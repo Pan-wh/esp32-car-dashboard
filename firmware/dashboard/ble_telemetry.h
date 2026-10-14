@@ -29,6 +29,13 @@ bool ble_telemetry_begin(void);
 bool ble_telemetry_connected(void);
 
 /*
+ * 主循环周期调用：处理断连后的广播重启（延迟到本函数执行，
+ * 避开 NimBLE 断连回调内同步 startAdvertising 的竞态）。
+ * 应在 loop() 里与 ble_telemetry_fetch 等一起周期调用。
+ */
+void ble_telemetry_poll(void);
+
+/*
  * 非阻塞取最新一条遥测（线程安全）。
  * 有尚未取走的新数据时返回 true 并填 out + *rx_ms（本机毫秒，收到时刻）。
  */

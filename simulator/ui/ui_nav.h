@@ -30,6 +30,17 @@ void ui_nav_set_distance(int meters);          /* NAV_DISTANCE_INVALID = 无效 
 void ui_nav_set_state(int state);              /* nav_state_t */
 void ui_nav_set_speed(float kmh, bool valid);  /* 当前车速 */
 
+/**
+ * 告知"当前是否有地图窗口"，用于切换两套布局。
+ *
+ * 有地图时把大图标与 150px 距离收起来，改用紧凑布局，把画面主体让给地图；
+ * 无地图（未连接/无网/窗口过期）时回到原来的大字卡片 —— **保证导航指引
+ * 在没有底图时依然清晰可读**，这是刻意的降级策略。
+ *
+ * 高频调用安全：内部只在模式变化时才动布局。
+ */
+void ui_nav_set_map_mode(bool on);
+
 /* ---- 诊断查询（串口 nav 命令用）---- */
 int ui_nav_get_maneuver(void);
 int ui_nav_get_distance(void);

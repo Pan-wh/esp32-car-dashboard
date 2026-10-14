@@ -45,6 +45,7 @@ extern "C" {
 #include "ui_speed.h"
 #include "ui_nav.h"      /* 导航指引卡片（阶段 1：UI 原型） */
 #include "nav_map.h"    /* 周边地图窗口的接收缓冲（阶段 4）*/
+#include "ui_nav_map.h" /* 导航地图层（阶段 4）*/
 #include "ui_baked_images.h" /* 烘焙图声明（非 const，启动时可充气）*/
 #include "ui_img_inflate.h"  /* 索引图 → PSRAM RGB565 直通图 */
 #include "nav.h"         /* 导航状态/动作枚举与文案（纯 C，共用） */
@@ -1304,6 +1305,7 @@ static void process_command(char *cmd)
                       w->roads[0].pts[0].x, w->roads[0].pts[0].y);
       }
     }
+    Serial.printf("[地图] 地图层重算=%u 次\n", (unsigned)ui_nav_map_redraw_count());
     if (has_off) {
       Serial.printf("[地图] 自车偏移=(%d,%d) 米\n", ox, oy);
     }
@@ -1888,7 +1890,13 @@ static void nav_poll(void)
 static void ble_poll(void)
 {
   nav_poll();
-  nav_map_tick(millis()); /* 地图窗口：累积超时与过期检查 */ /* 导航消息（与遥测同一特征，先生效以便状态切换）*/
+  nav_map_tick(millis()); /* 地图窗口：累积超时与过期检查 */
+  ui_nav_map_update();  /* 地图层：按航向/位移节流重算（无窗口时自动隐藏）*/
+  /*
+   * 有地图时切紧凑布局：把大图标与 150px 距离收起来，主体让给地图。
+   * 无地图（未连接/无网/过期）自动回到大字卡片，保证指引依然清晰可读。
+   */
+  ui_nav_set_map_mode(ui_nav_map_has_data()); /* 导航消息（与遥测同一特征，先生效以便状态切换）*/
 
   telemetry_msg_t m;
   uint32_t rx_ms = 0;
@@ -1984,6 +1992,8 @@ static void ble_update(void)
        */
       telemetry_ramp_set_target(&s_ramp, telemetry_speed_kmh(&s_tel), true);
       if (s_tel.has_course) ui_speed_set_heading((int)(s_tel.course_deg + 0.5f));
+      /* 地图层也按同一航向做"航向朝上"旋转（无 course 时内部保持上一次）*/
+      if (s_tel.has_course) ui_nav_map_set_heading(s_tel.course_deg);
     }
     else {
       telemetry_ramp_set_target(&s_ramp, 0.0f, false); /* 速度不可信：目标归零 */
@@ -2072,6 +2082,7 @@ void loop()
   ph_end(PH_TRIP);
   ph_begin();
   ble_poll();                 /* 取 BLE 遥测 + 校时（无新数据直接返回） */
+  ble_telemetry_poll();       /* 断连后延迟重启广播（见 ble_telemetry.cpp 说明） */
   ble_update();               /* 五态状态机，每循环驱动速度页 */
   ph_end(PH_POLL);
   ph_begin();

@@ -198,6 +198,53 @@ public extension GatewayClient {
     }
 }
 
+// MARK: - 周边地图窗口
+
+public extension GatewayClient {
+    /**
+     取当前位置周边的地图窗口（道路 + 建筑几何）。
+
+     与 `fetchRoute` 不同，这里用 **async URLSession**：调用方是 `NavSession`
+     的时钟回调，可以 `await`，不会阻塞主线程。
+
+     - Parameter positionWGS84: 手机的 WGS84 定位。**网关内部会转成 GCJ-02**，
+       返回的 `centerGcj` 才是局部坐标原点（WGS84 与 GCJ-02 在北京差约 556m，
+       不统一会让整张底图偏移一个窗口的距离）。
+     */
+    static func fetchMapWindow(gateway: String,
+                               token: String,
+                               positionWGS84: GeoPoint,
+                               radiusM: Double = 500,
+                               timeoutSec: Double = 10) async throws -> MapWindowBundle {
+        guard let url = URL(string: gateway.hasSuffix("/") ? gateway + "mapwindow"
+                                                           : gateway + "/mapwindow") else {
+            throw GatewayError.badURL(gateway)
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
+        req.timeoutInterval = timeoutSec
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "lon": positionWGS84.lon,
+            "lat": positionWGS84.lat,
+            "radiusM": radiusM,
+        ])
+
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else {
+            let detail = String(data: data, encoding: .utf8) ?? ""
+            throw GatewayError.transport("HTTP \(code)：\(detail.prefix(300))")
+        }
+        do {
+            return try JSONDecoder().decode(MapWindowBundle.self, from: data)
+        } catch {
+            throw GatewayError.decode("\(error)")
+        }
+    }
+}
+
 // MARK: - 路线来源与重算调度
 
 /// 路线来源抽象。**坐标一律 WGS84**（与网关约定一致）。

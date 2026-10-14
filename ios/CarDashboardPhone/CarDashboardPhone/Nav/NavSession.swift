@@ -83,6 +83,35 @@ final class NavSession: ObservableObject {
     private var lastSentMs: Int64 = 0
     private let sendIntervalMs: Int64 = 500
 
+    // MARK: - 地图窗口（阶段 4）
+
+    /// 当前已下发的地图窗口（nil = 没有）。仅用于诊断展示与算偏移。
+    private var mapBundle: MapWindowBundle?
+    /// **局部坐标原点**（GCJ-02）。自车偏移相对它计算。
+    private var mapOriginGcj: GeoPoint?
+    /// 上次请求窗口时的 WGS84 位置（用于判断"移动超过 100 米"）
+    private var lastMapQueryPos: GeoPoint?
+    /// 上次请求窗口的时刻（毫秒）
+    private var lastMapQueryMs: Int64 = 0
+    /// 是否有窗口请求在飞行中（避免叠加）
+    private var mapQueryInFlight = false
+    /// 已下发的窗口次数（诊断用，UI 可见）
+    @Published private(set) var mapWindowCount = 0
+    /**
+     * 最近一次采纳的**自车 GCJ-02 位置**。
+     *
+     * ⚠️ 必须自己记：`NavSnapshot` 里**没有**位置字段（它只描述"指引状态"），
+     * 而算自车偏移需要位置。也不能用 `NavFix`，那是每次采样新建的临时值。
+     */
+    private var lastVehicleGCJ: GeoPoint?
+
+    /// 移动超过这么多米就重新取窗口（对齐 docs/ble.md 的约定）
+    private let mapMoveThresholdM = 100.0
+    /// 即使没怎么动，也至少这么久刷新一次（毫秒）
+    private let mapRefreshIntervalMs: Int64 = 15000
+    /// 路线只发自车前方这么远的部分（设备窗口半径 500m，留些余量）
+    private let routeAheadM = 600.0
+
     /// 上次已发布的快照，用于"只有变化才赋值"
     private var lastPublished = NavSnapshot()
 
@@ -165,6 +194,15 @@ final class NavSession: ObservableObject {
         routeRequestInFlight = false
         rerouteInFlight = false
         stopClock()
+
+        /* 清掉地图窗口，并**立即**通知设备清空（否则要等 60 秒过期）*/
+        mapBundle = nil
+        mapOriginGcj = nil
+        lastVehicleGCJ = nil
+        lastMapQueryPos = nil
+        lastMapQueryMs = 0
+        mapQueryInFlight = false
+        ble?.sendMapMessages(["{\"t\":\"mw\"}", "{\"t\":\"me\"}"])
         /*
          * ⚠️ 这里**不关定位**：定位可能正被「开始驾驶」用着（遥测仍要发速度）。
          * 谁开的谁关 —— 定位只由 DriveSessionManager / 用户显式停止。
@@ -202,7 +240,14 @@ final class NavSession: ObservableObject {
                          horizontalAccuracyM: location.horizontalAccuracy,
                          courseDeg: location.course >= 0 ? location.course : nil,
                          timestampMs: fixMs)
+        lastVehicleGCJ = fix.position
         handle(core.handle(fix: fix, nowMs: nowMs), nowMs: nowMs)
+
+        /*
+         * 地图窗口：与导航指引分开的一条数据流。
+         * 只有"在导航中且有路线"时才取 —— 没路线时圆屏画底图也没有意义。
+         */
+        maybeRefreshMapWindow(vehicleWGS84: wgs, vehicleGCJ: fix.position, nowMs: nowMs)
     }
 
     /// 没有新定位时推进（数据过期判定 / 到达确认等）
@@ -218,11 +263,113 @@ final class NavSession: ObservableObject {
         }
         update(snapshot: outcome.snapshot, force: false)
 
-        /* 节流下发 */
+        /* 节流下发（带上自车在窗口内的偏移，让圆屏把地图平移到固定箭头下） */
         if nowMs - lastSentMs >= sendIntervalMs {
             lastSentMs = nowMs
-            ble?.sendNav(snapshot: outcome.snapshot)
+            ble?.sendNav(snapshot: outcome.snapshot, vehicleOffset: currentVehicleOffset())
         }
+    }
+
+    // MARK: - 地图窗口
+
+    /// 自车相对窗口原点的偏移（米）。没有窗口时返回 nil（此时不下发 ox/oy）。
+    ///
+    /// 用**核心已转好的 GCJ-02 位置**：窗口原点也是 GCJ-02，
+    /// 两边同系才能直接相减（WGS84 与 GCJ-02 在北京差约 556 米）。
+    private func currentVehicleOffset() -> (x: Int, y: Int)? {
+        guard let origin = mapOriginGcj, let veh = lastVehicleGCJ else { return nil }
+        return LocalProjection.toMeters(veh, origin: origin)
+    }
+
+    /// 是否需要重新取窗口：移动超过阈值、或超时、或首次。
+    private func maybeRefreshMapWindow(vehicleWGS84: GeoPoint, vehicleGCJ: GeoPoint,
+                                      nowMs: Int64) {
+        guard isNavigating, core.route != nil else { return }
+        guard isConfigured, !mapQueryInFlight else { return }
+
+        let movedFar: Bool
+        if let last = lastMapQueryPos {
+            movedFar = distanceM(last, vehicleWGS84) >= mapMoveThresholdM
+        } else {
+            movedFar = true /* 首次必取 */
+        }
+        let timedOut = (nowMs - lastMapQueryMs) >= mapRefreshIntervalMs
+        guard movedFar || timedOut else { return }
+
+        mapQueryInFlight = true
+        lastMapQueryPos = vehicleWGS84
+        lastMapQueryMs = nowMs
+
+        /*
+         * 路线只发自车**前方**一段：设备只有 500m 的窗口，发整条 10km 路线
+         * 既浪费带宽，又会在按 64 点降采样时把眼前那段抽稀得看不清。
+         */
+        let routeAhead = routeAheadSlice(from: vehicleGCJ)
+
+        let gateway = gatewayURL
+        let token = gatewayToken
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let bundle = try await GatewayClient.fetchMapWindow(
+                    gateway: gateway, token: token, positionWGS84: vehicleWGS84)
+                await MainActor.run {
+                    self.mapBundle = bundle
+                    self.mapOriginGcj = bundle.centerGcj
+                    self.mapQueryInFlight = false
+                    let msgs = MapWindowCodec.messages(bundle: bundle, routeGCJ: routeAhead)
+                    let sent = self.ble?.sendMapMessages(msgs) ?? 0
+                    self.mapWindowCount += 1
+                    self.lastError = nil
+                    print(String(format: "[地图] 窗口 #%d：道路 %d 建筑 %d 路线 %d 点 → 下发 %d 条消息",
+                                 self.mapWindowCount, bundle.roads.count,
+                                 bundle.buildings.count, routeAhead.count, sent))
+                }
+            } catch {
+                await MainActor.run {
+                    self.mapQueryInFlight = false
+                    /*
+                     * ⚠️ **不把窗口失败写进 lastError**：地图是辅助层，
+                     *    取不到底图不应让用户以为导航坏了（导航指引仍正常）。
+                     *    只打日志，界面上的导航状态不受影响。
+                     */
+                    print(String(format: "[地图] 取窗口失败：%@", String(describing: error)))
+                }
+            }
+        }
+    }
+
+    /// 取自车前方 `routeAheadM` 米内的路线点（含自车最近点）
+    private func routeAheadSlice(from vehicleGCJ: GeoPoint) -> [GeoPoint] {
+        guard let route = core.route, route.polyline.count >= 2 else { return [] }
+        let pts = route.polyline
+
+        /* 找离自车最近的折线点 */
+        var bestIdx = 0
+        var bestD = Double.greatestFiniteMagnitude
+        for (i, p) in pts.enumerated() {
+            let d = distanceM(p, vehicleGCJ)
+            if d < bestD { bestD = d; bestIdx = i }
+        }
+
+        /* 从该点向后累积到超过 routeAheadM 为止（并多取一点保证连线不断）*/
+        var out: [GeoPoint] = [pts[bestIdx]]
+        var acc = 0.0
+        for i in (bestIdx + 1)..<pts.count {
+            acc += distanceM(pts[i - 1], pts[i])
+            out.append(pts[i])
+            if acc >= routeAheadM { break }
+        }
+        return out
+    }
+
+    /// 两点间近似距离（米）。导航中只需几十米量级的判断，等距圆柱足够。
+    private func distanceM(_ a: GeoPoint, _ b: GeoPoint) -> Double {
+        let mPerDegLat = LocalProjection.metersPerDegLat
+        let mPerDegLon = mPerDegLat * cos(a.lat * .pi / 180)
+        let dx = (b.lon - a.lon) * mPerDegLon
+        let dy = (b.lat - a.lat) * mPerDegLat
+        return (dx * dx + dy * dy).squareRoot()
     }
 
     /// 发布快照 + 刷新文案。**只有变化才赋值**（见文件头说明 6）
