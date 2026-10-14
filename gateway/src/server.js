@@ -23,6 +23,7 @@ import http from 'node:http';
 
 import { loadConfig, redact, AMAP_DRIVING_URL } from './config.js';
 import { fetchDrivingRoute, fetchGeocode } from './amap.js';
+import { fetchMapWindow } from './mapwindow.js';
 import { normalizeRoute, AmapError } from './normalize.js';
 import { validLonLat } from './coords.js';
 
@@ -97,7 +98,7 @@ export function createServer(config, deps = {}) {
     }
 
     /* 只放行已知端点；其余一律 404（不暴露内部结构） */
-    if (url.pathname !== '/route' && url.pathname !== '/geocode') {
+    if (url.pathname !== '/route' && url.pathname !== '/geocode' && url.pathname !== '/mapwindow') {
       return sendJson(res, 404, { error: 'not_found' });
     }
     if (req.method !== 'POST') {
@@ -123,6 +124,34 @@ export function createServer(config, deps = {}) {
     } catch (e) {
       const code = e.code === 'BODY_TOO_LARGE' ? 413 : 400;
       return sendJson(res, code, { error: e.code ?? 'bad_request' });
+    }
+
+    // ---- 周边地图窗口：当前位置 ±500m 的道路/建筑几何（画圆屏底图用）----
+    if (url.pathname === '/mapwindow') {
+      const lon = body.lon;
+      const lat = body.lat;
+      if (!Number.isFinite(lon) || !Number.isFinite(lat) ||
+          lon < -180 || lon > 180 || lat < -90 || lat > 90) {
+        return sendJson(res, 400, {
+          error: 'invalid_center',
+          expect: { lon: 'WGS84 经度', lat: 'WGS84 纬度', radiusM: '可选，默认 500' },
+        });
+      }
+      const radiusM = Number.isFinite(body.radiusM)
+        ? Math.min(Math.max(body.radiusM, 100), 1500) : 500;
+      try {
+        const w = await fetchMapWindow({
+          lon, lat, radiusM, cacheDir: config.mapCacheDir, fetchImpl,
+        });
+        return sendJson(res, 200, w);
+      } catch (e) {
+        const msg = redact(e?.message ?? String(e), secrets);
+        log(`[地图窗口错误] ${msg}`);
+        return sendJson(res, 502, {
+          error: 'mapwindow_failed',
+          ...(config.verboseErrors ? { detail: msg } : {}),
+        });
+      }
     }
 
     // ---- 地理编码：地址文本 → 坐标（让目的地能填中文地名）----

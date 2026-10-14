@@ -11,5 +11,9 @@
     "start": "node --env-file-if-exists=.env src/server.js",
     "test": "node --test \"test/**/*.test.js\"",
     "probe": "node --env-file-if-exists=.env bin/probe.js"
+  },
+  "dependencies": {
+    "@mapbox/vector-tile": "^3.0.0",
+    "pbf": "^5.1.2"
   }
 }
