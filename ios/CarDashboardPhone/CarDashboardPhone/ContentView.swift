@@ -58,6 +58,16 @@ struct ContentView: View {
     private let rotations = [0, 90, 180, 270]
     @State private var selectedRotation = 0
 
+    // ── 导航页的状态 ────────────────────────────────────────
+    /// 网关地址/令牌用 @AppStorage 持久化：开发期反复改会烦，且退出 App 后应保留。
+    /// 默认地址是开发机的局域网 IP —— 手机访问不到电脑的 127.0.0.1，必须用局域网地址。
+    @AppStorage("navGateway") private var navGateway = "http://192.168.5.188:8080"
+    @AppStorage("navToken") private var navToken = ""
+    /// 目的地坐标输入（"纬度,经度"，WGS84）。不持久化：每次导航目的地都不同。
+    @State private var navDestination = ""
+    /// 坐标格式错误的提示
+    @State private var navInputError: String?
+
     /// 当前选中的**分组**（不是表盘）。分组来自设备上报。
     ///
     /// 注：「当前表盘」**不设本地状态** —— 它同样以设备上报的 `cur` 为准
@@ -160,33 +170,125 @@ struct ContentView: View {
         .navigationViewStyle(.stack)
     }
 
-    // MARK: - 标签页 3：导航（预留）
+    // MARK: - 标签页 3：导航
 
     private var navTab: some View {
         NavigationView {
             Form {
-                Section {
-                    Text("此页将显示导航指引：路线进度、下一转向、偏离路线与重新规划状态。")
-                        .font(.footnote)
-                    Text("数据来源：手机定位 → 本机导航核心匹配路线 → 经蓝牙下发到仪表。")
-                        .font(.footnote).foregroundColor(.secondary)
-                } header: {
-                    Text("导航（开发中）")
+                // ── 实时状态 ─────────────────────────────────
+                Section("导航状态") {
+                    HStack {
+                        Label(session.nav.statusText,
+                              systemImage: navStateIcon)
+                        Spacer()
+                        if session.nav.isNavigating {
+                            Text("\(Int(session.nav.snapshot.remainingDistanceM)) m")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                    if let s = session.nav.routeSummary {
+                        Text("全程 \(s)").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if session.nav.rerouteCount > 0 {
+                        Text("已重新规划 \(session.nav.rerouteCount) 次")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if let e = session.nav.lastError {
+                        Text(e).font(.footnote).foregroundStyle(.red)
+                    }
                 }
 
-                Section("当前进度") {
-                    // 如实标注各部分状态，避免看起来"已经能用"
-                    navStatusRow("后端网关（高德代理 + 坐标转换）", done: true)
-                    navStatusRow("导航核心（路线匹配 / 偏航 / 重算）", done: true)
-                    navStatusRow("本页界面与数据接入", done: false)
-                    Text("后端与核心已实现并在真机验证过；本页尚未接入。")
-                        .font(.footnote).foregroundColor(.secondary)
+                // ── 目的地 ───────────────────────────────────
+                Section {
+                    TextField("纬度,经度（WGS84）", text: $navDestination)
+                        .keyboardType(.numbersAndPunctuation)
+                        .autocorrectionDisabled()
+                    Text("例：39.908700,116.397428（天安门）。取你当前位置为起点。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } header: {
+                    Text("目的地")
+                } footer: {
+                    Text("坐标必须是 **WGS84**（手机定位坐标系）；网关会自动转成高德的 GCJ-02。")
+                }
+
+                // ── 开始 / 停止 ──────────────────────────────
+                Section {
+                    if session.nav.isNavigating {
+                        Button(role: .destructive) {
+                            session.nav.stop()
+                        } label: {
+                            Label("停止导航", systemImage: "stop.circle")
+                        }
+                    } else {
+                        Button {
+                            startNavigation()
+                        } label: {
+                            Label("开始导航", systemImage: "location.north.line")
+                        }
+                        .disabled(!session.bleConnected)
+                    }
+                    if !session.bleConnected {
+                        Text("仪表未连接：请先在「仪表」页连接，导航指引才能下发。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+
+                // ── 网关（开发期配置）────────────────────────
+                Section {
+                    TextField("网关地址", text: $navGateway)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                    SecureField("网关令牌", text: $navToken)
+                    Text("令牌用于向网关证明请求来自本机（网关要求认证，CORS 不是认证）。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } header: {
+                    Text("网关")
+                } footer: {
+                    Text("开发期指向你电脑上的 gateway；手机与电脑需在同一局域网。\n默认 http://192.168.5.188:8080 —— 换成你电脑当前的局域网 IP。")
+                }
+                .onChange(of: navGateway) { _, v in
+                    session.nav.configure(gateway: v, token: navToken)
+                }
+                .onChange(of: navToken) { _, v in
+                    session.nav.configure(gateway: navGateway, token: v)
                 }
             }
             .navigationTitle("导航")
             .toolbar { connectionIndicator }
+            .onAppear {
+                // 界面出现时把已保存的网关配置推给 NavSession（否则首次启动是空的）
+                session.nav.configure(gateway: navGateway, token: navToken)
+            }
         }
         .navigationViewStyle(.stack)
+    }
+
+    /// 导航状态对应的图标（一眼能看出是"在导航"还是"偏航/到达"）
+    private var navStateIcon: String {
+        switch session.nav.snapshot.state {
+        case .active:    return session.nav.snapshot.offRoute ? "exclamationmark.triangle" : "location.north.line"
+        case .rerouting: return "arrow.triangle.2.circlepath"
+        case .arrived:   return "checkmark.circle"
+        case .stale:     return "wifi.exclamationmark"
+        case .idle, .noData: return "location.slash"
+        }
+    }
+
+    /// 解析并开始导航。坐标格式 "纬度,经度"（WGS84）。
+    private func startNavigation() {
+        let parts = navDestination.split(separator: ",").map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
+        guard parts.count == 2,
+              let lat = Double(parts[0]), let lon = Double(parts[1]),
+              (-90...90).contains(lat), (-180...180).contains(lon) else {
+            navInputError = "坐标格式不对，应为「纬度,经度」，例如 39.9087,116.3974"
+            return
+        }
+        navInputError = nil
+        session.nav.configure(gateway: navGateway, token: navToken)
+        session.nav.start(destinationWGS84: GeoPoint(lon: lon, lat: lat))
     }
 
     // MARK: - 各节内容
@@ -393,15 +495,6 @@ struct ContentView: View {
             if let err = session.locationError {
                 Text(err).foregroundColor(.red)
             }
-        }
-    }
-
-    /// 导航页的状态行（✅ / ⬜ + 文字）
-    private func navStatusRow(_ text: String, done: Bool) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: done ? "checkmark.circle.fill" : "circle")
-                .foregroundColor(done ? .green : .secondary)
-            Text(text).font(.subheadline)
         }
     }
 

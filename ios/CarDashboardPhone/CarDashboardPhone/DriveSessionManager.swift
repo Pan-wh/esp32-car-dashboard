@@ -9,6 +9,10 @@ import Combine
 import Foundation
 import CoreLocation
 
+/// ⚠️ 标 `@MainActor`：本类由 SwiftUI 视图创建并调用，且持有 `NavSession`
+/// （它同样是 MainActor 隔离的 —— `NavCore` 不是 Sendable，必须在主线程访问）。
+/// Timer 回调虽然跑在主线程，但编译器不知道，故里面显式跳回 MainActor。
+@MainActor
 final class DriveSessionManager: ObservableObject {
     @Published var isDriving = false
 
@@ -21,9 +25,11 @@ final class DriveSessionManager: ObservableObject {
 
     let location = LocationService()
     let ble = BLEClient()
+    /// 导航会话（定位 → 导航核心 → 下发仪表）。由本类的 tick 驱动，不自起定时器。
+    let nav = NavSession()
 
     /*
-     * ⚠️ 关键：把 ble / location 的 @Published 变化**转发**给本对象。
+     * ⚠️ 关键：把 ble / location / nav 的 @Published 变化**转发**给本对象。
      *
      * 背景（真机踩坑）：ContentView 观察的是 `session`（本类），而 BLE 状态
      * 在 `session.ble` 里。`bleConnected` / `stateText` 都是**普通计算属性**，
@@ -42,10 +48,14 @@ final class DriveSessionManager: ObservableObject {
         location.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+        nav.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
     }
 
     init() {
         forwardChanges()
+        nav.attach(ble: ble) /* 导航下发走同一个 BLE 客户端的遥测特征 */
     }
 
     private var sendTimer: Timer?
@@ -71,7 +81,9 @@ final class DriveSessionManager: ObservableObject {
         location.start()
         ble.scanAndConnect()
         sendTimer = Timer.scheduledTimer(withTimeInterval: Self.sendInterval, repeats: true) { [weak self] _ in
-            self?.tick()
+            // Timer 在主 runloop 上触发（即主线程），但闭包未被推断为 MainActor，
+            // 故显式跳一次，保证 tick() 及其内部的 NavCore 访问都在主线程。
+            Task { @MainActor in self?.tick() }
         }
     }
 
@@ -80,11 +92,29 @@ final class DriveSessionManager: ObservableObject {
         sendTimer?.invalidate()
         sendTimer = nil
         location.stop()
+        /*
+         * 导航也一并停止：定位停了，导航核心就再也收不到 fix，
+         * 仪表上的指引会**冻结在最后一帧**（比显示"未开始导航"更糟）。
+         * stop() 会主动下发一条 idle，让仪表干净地回到初始态。
+         */
+        nav.stop()
     }
 
     private func tick() {
         let now = Date()
         let nowUtcMs = Int64(now.timeIntervalSince1970 * 1000)
+
+        /*
+         * 导航先推进 —— 且**不受"有没有新鲜定位"影响**：
+         * 核心需要靠 tick 来判定"数据已过期"并让仪表显示 STALE。
+         * 若把它放在下面的 guard 之后，没有新定位时核心就不会被推进，
+         * 仪表会一直停留在上一条指引。
+         */
+        if let loc = location.lastLocation {
+            nav.onFix(location: loc, nowMs: nowUtcMs)
+        } else {
+            nav.tick(nowMs: nowUtcMs)
+        }
 
         guard let packet = location.makePacket(nowUtcMs: nowUtcMs) else { return }
 
