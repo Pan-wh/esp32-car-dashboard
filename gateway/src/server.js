@@ -22,7 +22,7 @@
 import http from 'node:http';
 
 import { loadConfig, redact, AMAP_DRIVING_URL } from './config.js';
-import { fetchDrivingRoute } from './amap.js';
+import { fetchDrivingRoute, fetchGeocode } from './amap.js';
 import { normalizeRoute, AmapError } from './normalize.js';
 import { validLonLat } from './coords.js';
 
@@ -96,7 +96,8 @@ export function createServer(config, deps = {}) {
       return sendJson(res, 200, { ok: true, hasKey: config.amapKey.length > 0 });
     }
 
-    if (url.pathname !== '/route') {
+    /* 只放行已知端点；其余一律 404（不暴露内部结构） */
+    if (url.pathname !== '/route' && url.pathname !== '/geocode') {
       return sendJson(res, 404, { error: 'not_found' });
     }
     if (req.method !== 'POST') {
@@ -122,6 +123,41 @@ export function createServer(config, deps = {}) {
     } catch (e) {
       const code = e.code === 'BODY_TOO_LARGE' ? 413 : 400;
       return sendJson(res, code, { error: e.code ?? 'bad_request' });
+    }
+
+    // ---- 地理编码：地址文本 → 坐标（让目的地能填中文地名）----
+    if (url.pathname === '/geocode') {
+      const address = typeof body.address === 'string' ? body.address.trim() : '';
+      if (address.length === 0 || address.length > 120) {
+        return sendJson(res, 400, {
+          error: 'invalid_address',
+          expect: { address: '非空字符串（≤120 字）', city: '可选，限定城市' },
+        });
+      }
+      try {
+        const { results } = await fetchGeocode({
+          key: config.amapKey,
+          address,
+          city: typeof body.city === 'string' ? body.city.trim() : '',
+          timeoutMs: config.upstreamTimeoutMs,
+          fetchImpl,
+        });
+        // 坐标已在 amap.js 里转成 **WGS84**（客户端约定）
+        return sendJson(res, 200, { results });
+      } catch (e) {
+        if (e instanceof AmapError) {
+          log(`[上游错误] ${redact(e.message, secrets)}`);
+          return sendJson(res, 502, {
+            error: 'amap_error', info: e.info, infocode: e.infocode, hint: hintFor(e.infocode),
+          });
+        }
+        const msg = redact(e?.message ?? String(e), secrets);
+        log(`[网关错误] ${msg}`);
+        return sendJson(res, 502, {
+          error: 'upstream_failed',
+          ...(config.verboseErrors ? { detail: msg } : {}),
+        });
+      }
     }
 
     const origin = body.origin;

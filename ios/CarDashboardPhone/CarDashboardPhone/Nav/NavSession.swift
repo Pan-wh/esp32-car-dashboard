@@ -12,8 +12,10 @@
  *
  * 设计要点（都有理由，改动前请先读）：
  *
- *  1. **不自己起 Timer**：由 `DriveSessionManager` 在既有 tick 里调用 `onFix`
- *     与 `tick`，与遥测共用同一条驱动链。两个定时器各自读定位只会互相打架。
+ *  1. **自己起时钟，但不自己读定位**：导航必须能独立于「开始驾驶」工作
+ *     （否则用户只点「开始导航」永远收不到定位 —— 这是最初的实现缺陷）。
+ *     时钟只负责"按节奏推进"，定位仍取 `LocationService.lastLocation` 这个
+ *     已发布的缓存值，因此**不会与驾驶定时器争抢**（两边读的是同一份数据）。
  *
  *  2. **`NavCore` 绝不离开主线程**：它不是 `Sendable`。
  *     网络请求（`GatewayClient.fetchRoute` 是同步实现，会阻塞）放到后台，
@@ -60,6 +62,11 @@ final class NavSession: ObservableObject {
 
     private let core = NavCore()
     private weak var ble: BLEClient?
+    private weak var location: LocationService?
+
+    /// 导航自己的推进时钟（见文件头说明 1）
+    private var clock: Timer?
+    private let clockInterval: TimeInterval = 0.5
 
     /// 网关访问参数（由 UI 设置）
     private var gatewayURL = ""
@@ -81,9 +88,32 @@ final class NavSession: ObservableObject {
 
     // MARK: - 生命周期
 
-    /// 绑定 BLE 客户端（DriveSessionManager 初始化时调用一次即可）
-    func attach(ble: BLEClient) {
+    /// 绑定 BLE 客户端与定位服务（DriveSessionManager 初始化时调用一次即可）
+    func attach(ble: BLEClient, location: LocationService) {
         self.ble = ble
+        self.location = location
+    }
+
+    /// 导航时钟：只做"按节奏取一次最新定位并推进"，不自己调 CLLocationManager
+    private func startClock() {
+        guard clock == nil else { return }
+        clock = Timer.scheduledTimer(withTimeInterval: clockInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.onClock() }
+        }
+    }
+
+    private func stopClock() {
+        clock?.invalidate()
+        clock = nil
+    }
+
+    private func onClock() {
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        if let loc = location?.lastLocation {
+            onFix(location: loc, nowMs: nowMs)
+        } else {
+            tick(nowMs: nowMs) /* 没有定位也要推进：核心据此判定"数据过期" */
+        }
     }
 
     /// 配置网关（UI 修改后调用）
@@ -93,6 +123,17 @@ final class NavSession: ObservableObject {
     }
 
     var isConfigured: Bool { !gatewayURL.isEmpty && !gatewayToken.isEmpty }
+
+    /// 地名 → 坐标（支持中文）。UI 在用户填的是地名而非经纬度时调用。
+    ///
+    /// 这是 `async` 的（用 URLSession 的 async API），可直接从 SwiftUI 的 Task 调用，
+    /// **不会阻塞主线程** —— 与路线请求不同，那个是同步实现必须放后台。
+    func lookup(address: String) async throws -> [GeocodeResult] {
+        guard isConfigured else { throw GatewayError.badURL("网关未配置") }
+        return try await GatewayClient.geocode(gateway: gatewayURL,
+                                               token: gatewayToken,
+                                               address: address)
+    }
 
     /// 开始导航到指定终点（**WGS84**，来自地图选点或定位）。
     /// 这里转成 GCJ-02 后再存 —— NavCore 与网关路线都是 GCJ-02。
@@ -107,7 +148,15 @@ final class NavSession: ObservableObject {
         rerouteInFlight = false
         pendingDestination = Coords.wgs84ToGcj02(destinationWGS84)
         statusText = "等待定位…"
-        /* 若此刻已有可用定位，下一次 onFix 会立刻触发取路线 */
+
+        /*
+         * 导航**独立于「开始驾驶」**：自己拉起定位、自己起时钟。
+         * 否则用户只点「开始导航」会永远停在"等待定位"（最初的实现缺陷）。
+         * 若驾驶已经在跑，这里只是重复调用 start()，LocationService 内部幂等。
+         */
+        location?.start()
+        startClock()
+        /* 若此刻已有定位，下一个时钟节拍就会触发取路线 */
     }
 
     /// 停止导航：清空核心、恢复 IDLE，并让仪表也回到"未开始导航"
@@ -115,6 +164,11 @@ final class NavSession: ObservableObject {
         pendingDestination = nil
         routeRequestInFlight = false
         rerouteInFlight = false
+        stopClock()
+        /*
+         * ⚠️ 这里**不关定位**：定位可能正被「开始驾驶」用着（遥测仍要发速度）。
+         * 谁开的谁关 —— 定位只由 DriveSessionManager / 用户显式停止。
+         */
         core.clear()
         /* 主动下发一条 idle，避免仪表上残留上一次的指引 */
         ble?.sendNav(snapshot: NavSnapshot())

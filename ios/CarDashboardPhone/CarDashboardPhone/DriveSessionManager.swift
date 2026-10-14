@@ -55,7 +55,8 @@ final class DriveSessionManager: ObservableObject {
 
     init() {
         forwardChanges()
-        nav.attach(ble: ble) /* 导航下发走同一个 BLE 客户端的遥测特征 */
+        /* 导航走同一个 BLE 客户端的遥测特征；定位用同一份 LocationService */
+        nav.attach(ble: ble, location: location)
     }
 
     private var sendTimer: Timer?
@@ -105,16 +106,11 @@ final class DriveSessionManager: ObservableObject {
         let nowUtcMs = Int64(now.timeIntervalSince1970 * 1000)
 
         /*
-         * 导航先推进 —— 且**不受"有没有新鲜定位"影响**：
-         * 核心需要靠 tick 来判定"数据已过期"并让仪表显示 STALE。
-         * 若把它放在下面的 guard 之后，没有新定位时核心就不会被推进，
-         * 仪表会一直停留在上一条指引。
+         * 注意：这里**不再驱动导航**。
+         * 导航有自己的时钟（NavSession.startClock）—— 它必须能独立于「开始驾驶」
+         * 工作，否则用户只点「开始导航」永远收不到定位（最初的实现缺陷）。
+         * 两边读的是同一份 `location.lastLocation` 缓存，不存在争抢。
          */
-        if let loc = location.lastLocation {
-            nav.onFix(location: loc, nowMs: nowUtcMs)
-        } else {
-            nav.tick(nowMs: nowUtcMs)
-        }
 
         guard let packet = location.makePacket(nowUtcMs: nowUtcMs) else { return }
 

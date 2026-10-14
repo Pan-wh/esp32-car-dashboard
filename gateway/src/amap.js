@@ -15,8 +15,8 @@
  * 传入**WGS84**（手机定位坐标系），内部自动转 **GCJ-02** 后发给高德；
  * 返回结果中的坐标即 GCJ-02，与手机端后续转换保持一致。
  */
-import { AMAP_DRIVING_URL } from './config.js';
-import { wgs84ToGcj02, formatLonLat } from './coords.js';
+import { AMAP_DRIVING_URL, AMAP_GEOCODE_URL } from './config.js';
+import { wgs84ToGcj02, gcj02ToWgs84, formatLonLat, parseLonLat } from './coords.js';
 import { assertAmapOk, AmapError } from './normalize.js';
 
 /**
@@ -83,3 +83,75 @@ export async function fetchDrivingRoute({
 }
 
 export { AmapError };
+
+/**
+ * 调用地理编码：地址文本 → 坐标。
+ *
+ * @param {object} p
+ * @param {string} p.key             高德 Web 服务 Key
+ * @param {string} p.address         地址/地名（中文）
+ * @param {string} [p.city]          限定城市（可选，能显著提高准确率）
+ * @param {number} [p.timeoutMs]
+ * @param {Function} [p.fetchImpl]
+ * @returns {Promise<{results: Array<{name:string,address:string,lon:number,lat:number}>}>}
+ *          坐标**已转成 WGS84**（见 AMAP_GEOCODE_URL 处的说明）
+ */
+export async function fetchGeocode({
+  key,
+  address,
+  city = '',
+  timeoutMs = 8000,
+  fetchImpl = globalThis.fetch,
+}) {
+  if (!key) throw new Error('fetchGeocode: 缺少 key');
+  if (!address) throw new Error('fetchGeocode: 缺少 address');
+  if (typeof fetchImpl !== 'function') throw new Error('fetchGeocode: 无可用 fetch');
+
+  const url = new URL(AMAP_GEOCODE_URL);
+  url.searchParams.set('key', key);
+  url.searchParams.set('address', address);
+  if (city) url.searchParams.set('city', city);
+
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+
+  let resp;
+  try {
+    resp = await fetchImpl(url, { signal: ac.signal });
+  } catch (e) {
+    throw new Error(`请求高德失败：${e?.name === 'AbortError' ? '超时' : e?.message ?? e}`);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!resp.ok) throw new Error(`高德 HTTP ${resp.status}`);
+
+  let json;
+  try {
+    json = await resp.json();
+  } catch {
+    throw new Error('高德返回的不是合法 JSON');
+  }
+
+  assertAmapOk(json);
+
+  const list = Array.isArray(json.geocodes) ? json.geocodes : [];
+  const results = [];
+  for (const g of list) {
+    if (!g || typeof g.location !== 'string') continue;
+    let gcj;
+    try {
+      gcj = parseLonLat(g.location); /* 高德是 "lon,lat" */
+    } catch {
+      continue; /* 单条坐标不合法就跳过，不让整次请求失败 */
+    }
+    const wgs = gcj02ToWgs84(gcj);
+    results.push({
+      name: g.formatted_address ?? g.location,
+      address: g.formatted_address ?? '',
+      lon: wgs.lon,
+      lat: wgs.lat,
+    });
+  }
+  return { results };
+}
