@@ -143,6 +143,61 @@ public enum GatewayClient {
     }
 }
 
+// MARK: - 地理编码（中文地名 → 坐标）
+
+/// 一条地理编码结果。**坐标是 WGS84**（网关已从高德的 GCJ-02 转回）。
+public struct GeocodeResult: Codable, Identifiable, Sendable {
+    public let name: String
+    public let address: String
+    public let lon: Double
+    public let lat: Double
+    public var id: String { "\(name)|\(lon)|\(lat)" }
+    public var geo: GeoPoint { GeoPoint(lon: lon, lat: lat) }
+}
+
+private struct GeocodeResponse: Codable {
+    let results: [GeocodeResult]
+}
+
+public extension GatewayClient {
+    /// 地址文本 → 坐标（支持中文地名）。
+    ///
+    /// 为什么必须有它：否则用户只能手填经纬度 —— 这不是能用的体验。
+    /// 网关侧限制地址长度并做了限流；这里只负责发请求与解包。
+    ///
+    /// - Returns: 候选列表（可能多个，如"外滩"在不同城市）；空数组表示没找到。
+    /// - Throws: 网络/HTTP/解码错误。**"没找到"不是错误**，返回空数组。
+    static func geocode(gateway: String,
+                        token: String,
+                        address: String,
+                        city: String = "",
+                        timeoutSec: Double = 10) async throws -> [GeocodeResult] {
+        guard let url = URL(string: gateway.hasSuffix("/") ? gateway + "geocode" : gateway + "/geocode") else {
+            throw GatewayError.badURL(gateway)
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
+        req.timeoutInterval = timeoutSec
+        var payload: [String: Any] = ["address": address]
+        if !city.isEmpty { payload["city"] = city }
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else {
+            let detail = String(data: data, encoding: .utf8) ?? ""
+            throw GatewayError.transport("HTTP \(code)：\(detail.prefix(300))")
+        }
+        do {
+            return try JSONDecoder().decode(GeocodeResponse.self, from: data).results
+        } catch {
+            throw GatewayError.decode("\(error)")
+        }
+    }
+}
+
 // MARK: - 路线来源与重算调度
 
 /// 路线来源抽象。**坐标一律 WGS84**（与网关约定一致）。

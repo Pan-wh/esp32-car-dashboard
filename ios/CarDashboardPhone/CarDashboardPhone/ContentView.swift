@@ -63,10 +63,14 @@ struct ContentView: View {
     /// 默认地址是开发机的局域网 IP —— 手机访问不到电脑的 127.0.0.1，必须用局域网地址。
     @AppStorage("navGateway") private var navGateway = "http://192.168.5.188:8080"
     @AppStorage("navToken") private var navToken = ""
-    /// 目的地坐标输入（"纬度,经度"，WGS84）。不持久化：每次导航目的地都不同。
+    /// 目的地坐标输入（中文地名或"纬度,经度"，WGS84）。不持久化：每次目的地都不同。
     @State private var navDestination = ""
-    /// 坐标格式错误的提示
+    /// 坐标格式错误 / 查询失败 / 无结果的提示
     @State private var navInputError: String?
+    /// 地名查询命中的候选（多个时让用户选）
+    @State private var navCandidates: [GeocodeResult] = []
+    /// 是否正在查询地名（禁用按钮、显示进度）
+    @State private var navLookingUp = false
 
     /// 当前选中的**分组**（不是表盘）。分组来自设备上报。
     ///
@@ -200,15 +204,31 @@ struct ContentView: View {
 
                 // ── 目的地 ───────────────────────────────────
                 Section {
-                    TextField("纬度,经度（WGS84）", text: $navDestination)
-                        .keyboardType(.numbersAndPunctuation)
+                    TextField("地名（中文）或 纬度,经度", text: $navDestination)
                         .autocorrectionDisabled()
-                    Text("例：39.908700,116.397428（天安门）。取你当前位置为起点。")
-                        .font(.footnote).foregroundStyle(.secondary)
+                    if !navCandidates.isEmpty {
+                        // 地名可能命中多个（如"外滩"在多个城市）→ 让用户选
+                        ForEach(navCandidates) { c in
+                            Button {
+                                navCandidates = []
+                                navDestination = c.name
+                                session.nav.start(destinationWGS84: c.geo)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(c.name).font(.subheadline)
+                                    Text(String(format: "%.5f, %.5f", c.lat, c.lon))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    if let e = navInputError {
+                        Text(e).font(.footnote).foregroundStyle(.red)
+                    }
                 } header: {
                     Text("目的地")
                 } footer: {
-                    Text("坐标必须是 **WGS84**（手机定位坐标系）；网关会自动转成高德的 GCJ-02。")
+                    Text("两种都支持：\n• 中文地名，如「北京南站」—— 会向网关查询坐标\n• 经纬度，如 39.9087,116.3974（**WGS84**）\n\n查询到的坐标由网关转成高德的 GCJ-02，无需你操心。")
                 }
 
                 // ── 开始 / 停止 ──────────────────────────────
@@ -275,20 +295,47 @@ struct ContentView: View {
         }
     }
 
-    /// 解析并开始导航。坐标格式 "纬度,经度"（WGS84）。
+    /// 解析并开始导航。输入可以是：
+    ///   - "纬度,经度"（WGS84）→ 直接开始
+    ///   - 中文地名 → 先向网关查坐标；命中 1 个直接开始，多个则列出让用户选
     private func startNavigation() {
-        let parts = navDestination.split(separator: ",").map {
-            $0.trimmingCharacters(in: .whitespaces)
-        }
-        guard parts.count == 2,
-              let lat = Double(parts[0]), let lon = Double(parts[1]),
-              (-90...90).contains(lat), (-180...180).contains(lon) else {
-            navInputError = "坐标格式不对，应为「纬度,经度」，例如 39.9087,116.3974"
+        let text = navDestination.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            navInputError = "请填写目的地"
             return
         }
-        navInputError = nil
         session.nav.configure(gateway: navGateway, token: navToken)
-        session.nav.start(destinationWGS84: GeoPoint(lon: lon, lat: lat))
+
+        // 先按"纬度,经度"试解析
+        let parts = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        if parts.count == 2, let lat = Double(parts[0]), let lon = Double(parts[1]),
+           (-90...90).contains(lat), (-180...180).contains(lon) {
+            navInputError = nil
+            navCandidates = []
+            session.nav.start(destinationWGS84: GeoPoint(lon: lon, lat: lat))
+            return
+        }
+
+        // 否则当地名去查
+        navInputError = nil
+        navCandidates = []
+        navLookingUp = true
+        Task {
+            defer { navLookingUp = false }
+            do {
+                let rs = try await session.nav.lookup(address: text)
+                if rs.isEmpty {
+                    navInputError = "没找到「\(text)」。换个说法，或直接填「纬度,经度」。"
+                } else if rs.count == 1 {
+                    navDestination = rs[0].name
+                    session.nav.start(destinationWGS84: rs[0].geo)
+                } else {
+                    navCandidates = rs // 多个候选 → 界面列出让用户点选
+                }
+            } catch {
+                navInputError = "查询失败：\(error)"
+            }
+        }
     }
 
     // MARK: - 各节内容

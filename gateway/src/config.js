@@ -13,6 +13,16 @@
 export const AMAP_DRIVING_URL = 'https://restapi.amap.com/v3/direction/driving';
 
 /**
+ * 高德 Web 服务**地理编码**（v3 基础版）：地址文本 → 坐标。
+ *
+ * 用途：让用户能输入中文地名当目的地（"北京南站"），而不是只能填经纬度。
+ * ⚠️ 返回的 `location` 是 **GCJ-02**，网关必须转回 WGS84 再给客户端 ——
+ * 客户端约定"目的地一律 WGS84"（它内部还会再转 GCJ-02），
+ * 若这里直接透传 GCJ-02 就会**双重转换、偏移数百米**。
+ */
+export const AMAP_GEOCODE_URL = 'https://restapi.amap.com/v3/geocode/geo';
+
+/**
  * 从环境变量构建配置。
  * @param {Record<string,string|undefined>} env
  * @param {{requireKey?: boolean}} [opts] 测试时可关闭 Key 必填
