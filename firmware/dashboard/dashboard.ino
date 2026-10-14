@@ -1429,7 +1429,7 @@ static void inflate_baked_images(void)
   const int n = (int)(sizeof(imgs) / sizeof(imgs[0]));
 
   uint32_t before = ESP.getFreePsram();
-  int ok = ui_img_inflate_all(imgs, NULL, n, psram_alloc);
+  int ok = ui_img_inflate_all(imgs, n, psram_alloc);
   uint32_t after = ESP.getFreePsram();
   Serial.printf("[图] 充气 %d/%d 张，开销 %u KB，PSRAM 空闲 %u KB\n",
                 ok, n, (unsigned)((before - after) / 1024), (unsigned)(after / 1024));

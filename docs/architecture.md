@@ -55,7 +55,6 @@ tools/                        ← 资源与流程脚本
 ├── make_images.py            PNG→LVGL 数组 + 临时底图
 ├── cut_driver_sheet.py       组图切图
 ├── prep_driver_png.py        单张素材预处理
-├── make_nmea_track.py        合成 NMEA 轨迹
 └── sync_firmware.sh          共享源码同步到固件
 ```
 

@@ -41,17 +41,13 @@ make run      # 交互模式：ESC 退出，S 键截图 screenshot.bmp
 | `--offscreen` | 无窗口（软件渲染，CI/验证用） |
 | `--ms N` | 运行 N 毫秒后自动退出 |
 | `--shot PATH` | 退出前截图到 PATH（24bit BMP，含圆形遮罩） |
-| `--nmea FILE` | 回放 NMEA 日志，驱动速度页（无需硬件） |
-| `--nmea-speedup X` | 回放倍速（默认 10） |
+| `--speed KMH` | 直接设定速度页显示的车速（无需硬件） |
+| `--nofix` | 速度页显示"无定位"状态 |
 
-### NMEA 回放（Gnss 链路联调）
-
-```bash
-python3 ../tools/make_nmea_track.py          # 生成 90s 合成轨迹（含隧道断定位段）
-./dashboard_sim --page 2 --nmea ../tests/data/drive_sample.nmea --nmea-speedup 10
-NMEA_REPLAY_VERBOSE=1 ./dashboard_sim --offscreen --ms 3000 --page 2 \
-    --nmea ../tests/data/drive_sample.nmea --nmea-speedup 10 --shot /tmp/a.bmp   # 打印解析值
-```
+> ⚠️ 早期曾有 **NMEA 日志回放**（`--nmea` / `--nmea-speedup` + `tools/make_nmea_track.py`），
+> 用于 GNSS 链路联调。**本板已弃用 GNSS 版本**（数据源改为 iPhone Core Location），
+> 该功能连同 `gnss_*` 模块**已整体移除** —— 上述参数与脚本均不存在，
+> 离屏驱动速度页请改用 `--speed` / `--nofix`。
 
 逻辑测试（不需要硬件）：
 

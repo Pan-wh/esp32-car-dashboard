@@ -74,6 +74,11 @@
 > 数据源改为 iPhone Core Location 经 BLE 下发，GNSS/NMEA 相关代码与文档已删除。
 > 以下内容仅作历史记录保留。
 >
+> 📌 **下方提到的文件均已不存在，不必去找**：`simulator/ui/gnss_nmea.c`、
+> `tests/test_nmea.c`、`simulator/nmea_replay.c`、`tools/make_nmea_track.py`、
+> `docs/gnss.md`，以及模拟器的 `--nmea` / `--nmea-speedup` 参数。
+> 无硬件时驱动速度页请改用 `--speed` / `--nofix`（见 simulator/README.md）。
+>
 > **决策**：NMEA 解析写成**无 LVGL/硬件依赖的纯 C**（`simulator/ui/gnss_nmea.c`），
   配套单元测试（`tests/test_nmea.c`）与**日志回放**（`simulator/nmea_replay.c` +
   `tools/make_nmea_track.py` 合成轨迹）。
