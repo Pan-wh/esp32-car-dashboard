@@ -165,9 +165,12 @@ bool nav_parse(const char *json, size_t len, nav_msg_t *out)
     r.has_state = false;
     r.has_maneuver = false;
     r.has_dist = false;
+    r.has_offset = false;
     r.state = NAV_STATE_NO_DATA;
     r.maneuver = NAV_MANEUVER_UNKNOWN;
     r.distance_m = NAV_DISTANCE_INVALID;
+    r.offset_x_m = 0;
+    r.offset_y_m = 0;
 
     size_t i = 0;
     skip_ws(json, len, &i);
@@ -176,6 +179,9 @@ bool nav_parse(const char *json, size_t len, nav_msg_t *out)
 
     bool is_nav = false;
     long v = 0;
+    /* ox/oy 必须成对出现：各自记一个"已收到且合法"标志 */
+    bool ox_ok = false;
+    bool oy_ok = false;
 
     for (;;) {
         skip_ws(json, len, &i);
@@ -232,6 +238,29 @@ bool nav_parse(const char *json, size_t len, nav_msg_t *out)
                 if (!skip_value(json, len, &i)) return false;
             }
         }
+        /* ---- 自车相对窗口中心的偏移（米）---- */
+        else if ((strcmp(key, "ox") == 0 || strcmp(key, "oy") == 0) &&
+                 i < len && json[i] != '"' && json[i] != 'n') {
+            if (!scan_int(json, len, &i, &v)) return false;
+            /* 窗口半径上限 1500m，超出按无效处理（不夹到边界，避免把车画到边上）*/
+            const bool ok = (v >= -32768 && v <= 32767);
+            if (strcmp(key, "ox") == 0) {
+                r.offset_x_m = ok ? (int)v : 0;
+                ox_ok = ok;
+            }
+            else {
+                r.offset_y_m = ok ? (int)v : 0;
+                oy_ok = ok;
+            }
+            r.has_offset = ox_ok && oy_ok;
+        }
+        else if ((strcmp(key, "ox") == 0 || strcmp(key, "oy") == 0)) {
+            /* null 或字符串：明确表示"本次无偏移"→ 清掉，避免用旧偏移画新窗口 */
+            if (!skip_value(json, len, &i)) return false;
+            r.has_offset = false;
+            ox_ok = false;
+            oy_ok = false;
+        }
         /* ---- 其它字段：忽略（向前兼容，未来加字段不会解析失败）---- */
         else {
             if (!skip_value(json, len, &i)) return false;
@@ -251,8 +280,13 @@ bool nav_parse(const char *json, size_t len, nav_msg_t *out)
 
     if (!is_nav) return false; /* 不是导航消息 */
 
-    /* 至少要有一个有效字段，否则视为无效包（避免空包把状态清掉）*/
-    if (!(r.has_state || r.has_maneuver || r.has_dist)) return false;
+    /*
+     * 至少要有一个有效字段，否则视为无效包（避免空包把状态清掉）。
+     * `has_offset` 也算：偏航重算换窗口后，手机可能只补发一次偏移而不改指引。
+     * 这是安全的 —— 调用方逐字段应用（`if (nm.has_state) …`），
+     * 只带偏移的包不会清掉任何已有指引。
+     */
+    if (!(r.has_state || r.has_maneuver || r.has_dist || r.has_offset)) return false;
 
     *out = r; /* 成功：原子提交 */
     return true;
