@@ -1,0 +1,138 @@
+{
+  "label": "duration-ramp",
+  "timestamp": "2026-10-14 11:42:25",
+  "duration_s": 90,
+  "hz": 2.0,
+  "uptime_start": 10,
+  "uptime_end": 106,
+  "uptime_delta": 96,
+  "reset_reason": "USB",
+  "samples_run": 18,
+  "samples_render": 16,
+  "loop_per_s": {
+    "min": 64,
+    "max": 132,
+    "p50": 82
+  },
+  "redraw_per_s": {
+    "min": 16,
+    "max": 56,
+    "p50": 34
+  },
+  "render_max_ms": {
+    "min": 24,
+    "p50": 26,
+    "p90": 62,
+    "max": 1025
+  },
+  "duty_pct": {
+    "p50": 55,
+    "max": 66
+  },
+  "qspi_max_ms": {
+    "p50": 7,
+    "max": 20
+  },
+  "spikes_gt80": 1,
+  "spikes_gt100": 1,
+  "spikes_gt150": 1,
+  "per_window": [
+    {
+      "render_max_ms": 30,
+      "duty_pct": 32,
+      "qspi_sum_ms": 535,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 28,
+      "duty_pct": 62,
+      "qspi_sum_ms": 1093,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 62,
+      "duty_pct": 48,
+      "qspi_sum_ms": 813,
+      "qspi_max_ms": 19
+    },
+    {
+      "render_max_ms": 62,
+      "duty_pct": 55,
+      "qspi_sum_ms": 945,
+      "qspi_max_ms": 19
+    },
+    {
+      "render_max_ms": 30,
+      "duty_pct": 45,
+      "qspi_sum_ms": 730,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 69,
+      "duty_pct": 59,
+      "qspi_sum_ms": 970,
+      "qspi_max_ms": 20
+    },
+    {
+      "render_max_ms": 25,
+      "duty_pct": 61,
+      "qspi_sum_ms": 1099,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 26,
+      "duty_pct": 53,
+      "qspi_sum_ms": 953,
+      "qspi_max_ms": 6
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 56,
+      "qspi_sum_ms": 1007,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 59,
+      "qspi_sum_ms": 1068,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 26,
+      "duty_pct": 55,
+      "qspi_sum_ms": 1002,
+      "qspi_max_ms": 6
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 53,
+      "qspi_sum_ms": 955,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 53,
+      "qspi_sum_ms": 955,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 1025,
+      "duty_pct": 66,
+      "qspi_sum_ms": 816,
+      "qspi_max_ms": 7
+    },
+    {
+      "render_max_ms": 24,
+      "duty_pct": 55,
+      "qspi_sum_ms": 987,
+      "qspi_max_ms": 6
+    },
+    {
+      "render_max_ms": 25,
+      "duty_pct": 57,
+      "qspi_sum_ms": 1021,
+      "qspi_max_ms": 7
+    }
+  ],
+  "credible": true
+}
