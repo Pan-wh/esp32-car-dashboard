@@ -160,7 +160,7 @@ SPEED_MAX = 200.0
 SPEED_MINOR_CNT = 41
 SPEED_MINOR_LEN = 10.0
 SPEED_MINOR_W = 2.0
-SPEED_MAJOR_CNT = 7
+SPEED_MAJOR_CNT = 6
 SPEED_MAJOR_LEN = 18.0
 SPEED_MAJOR_W = 3.0
 SPEED_LABEL_R = 178.0
@@ -212,13 +212,14 @@ def render_speed_face():
         w = SPEED_MINOR_W + (2.0 if v >= SPEEDING_V else 0.0)
         seg(val_to_angle(v), R_EDGE - SPEED_MINOR_LEN, R_EDGE, speed_color(v), w)
 
-    # 刻度数字：0/40/80/120/160/200，半径 178
+    # 刻度数字：0/40/80/120/160/200。0/200 对称外移，避免被驾驶员肩膀遮住。
     font = _font(26)
     for i in range(6):
         v = 40.0 * i
         a = math.radians(val_to_angle(v))
-        cx = (CENTER + SPEED_LABEL_R * math.cos(a)) * SS
-        cy = (CENTER + SPEED_LABEL_R * math.sin(a)) * SS
+        label_r = 190.0 if i == 0 or i == 5 else SPEED_LABEL_R
+        cx = (CENTER + label_r * math.cos(a)) * SS
+        cy = (CENTER + label_r * math.sin(a)) * SS
         d.text((cx, cy), str(int(v)), font=font, fill=speed_color(v), anchor="mm")
 
     return img.resize((SIZE, SIZE), Image.LANCZOS)

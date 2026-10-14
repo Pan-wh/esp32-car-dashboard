@@ -33,6 +33,7 @@ cd <仓库根目录>
 swiftc -O -o /tmp/nav_sim -framework CoreBluetooth \
   ios/CarDashboardPhone/CarDashboardPhone/Nav/NavCore.swift \
   ios/CarDashboardPhone/CarDashboardPhone/Nav/Coords.swift \
+  ios/CarDashboardPhone/CarDashboardPhone/Nav/GatewayClient.swift \
   tools/nav_sim/NavSimSupport.swift \
   tools/nav_sim/NavSimBLE.swift \
   tools/nav_sim/NavSimMain.swift

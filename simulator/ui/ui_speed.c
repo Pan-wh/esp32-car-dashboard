@@ -110,17 +110,29 @@ static uint32_t status5_color(void)
         default:                   return C_TEXT_DIM_L;
     }
 }
+static int driver_state_for_speed(float speed)
+{
+    if (speed > DRIVER_SPEEDING_V) return UI_DRIVER_SPEEDING;
+    if (speed > DRIVER_SPIRITED_V) return UI_DRIVER_SPIRITED;
+    return UI_DRIVER_NORMAL;
+}
 static int driver_state_from_speed(void)
 {
-    if (!s_valid) return UI_DRIVER_NORMAL;
-    if (s_speed > DRIVER_SPEEDING_V) return UI_DRIVER_SPEEDING;
-    if (s_speed > DRIVER_SPIRITED_V) return UI_DRIVER_SPIRITED;
-    return UI_DRIVER_NORMAL;
+    return s_valid ? driver_state_for_speed(s_speed) : UI_DRIVER_NORMAL;
 }
 /* 当前驾驶员状态：显式设定优先，否则按速度自动 */
 static int current_driver_state(void)
 {
     return (s_driver_state >= 0) ? s_driver_state : driver_state_from_speed();
+}
+
+static void show_driver_state(int state)
+{
+    if (s_driver_img == NULL || state == s_driver_shown) return;
+    s_driver_shown = state;
+    lv_img_set_src(s_driver_img,
+                   state == UI_DRIVER_SPEEDING ? &driver_speeding :
+                   state == UI_DRIVER_SPIRITED ? &driver_spirited : &driver_normal);
 }
 static void speed5_draw_cb(lv_event_t *e)
 {
@@ -237,15 +249,7 @@ static void apply_state(void)
     {
         if (s_meter && s_needle5) lv_meter_set_indicator_value(s_meter, s_needle5, v);
         /* 插画：状态三态只在跨过 90/120 阈值时变化，用已显示状态防止重复 set_src */
-        if (s_driver_img) {
-            int st = current_driver_state();
-            if (st != s_driver_shown) {
-                s_driver_shown = st;
-                lv_img_set_src(s_driver_img,
-                               st == UI_DRIVER_SPEEDING ? &driver_speeding :
-                               st == UI_DRIVER_SPIRITED ? &driver_spirited : &driver_normal);
-            }
-        }
+        show_driver_state(current_driver_state());
         /* 状态标签：同文案不重复 set_text（避免每次 apply_state 都 invalidate） */
         if (s_status5) {
             if ((int)s_status_state != s_status_shown) {
@@ -378,6 +382,7 @@ static void sweep_anim_cb(void *var, int32_t v)
 {
     (void)var;
     if (s_meter && s_needle5) lv_meter_set_indicator_value(s_meter, s_needle5, v);
+    show_driver_state(driver_state_for_speed((float)v));
 }
 
 /* 第一阶段结束：启动回落段 */

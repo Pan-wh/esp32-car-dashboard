@@ -213,6 +213,18 @@ final class BLEClient: NSObject, ObservableObject {
             pendingPacket = data // 暂存，连接后补发
         }
     }
+
+    /// 下发导航消息（与遥测**共用同一个特征**，靠载荷里的 `"t":"nav"` 分流）。
+    ///
+    /// ⚠️ 与 `send(packet:)` 的一处不同：导航消息**不暂存补发**。
+    /// 遥测是"当前状态"，晚一点发仍有意义；而导航指引是**时效性数据**
+    /// （距下一转向 30 米，断开重连后这条早已过期），补发只会显示过期指引。
+    /// 断连时直接丢弃，由 NavSession 在恢复后发新的一条。
+    func sendNav(snapshot: NavSnapshot) {
+        guard let data = try? NavPacket(snapshot: snapshot).encode() else { return }
+        guard let ch = telemetryChar, isConnected else { return }
+        peripheral?.writeValue(data, for: ch, type: .withResponse)
+    }
 }
 
 extension BLEClient: CBCentralManagerDelegate {
