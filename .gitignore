@@ -97,3 +97,8 @@ ios/**/xcuserdata/
 ios/**/*.xcuserstate
 ios/**/DerivedData/
 ios/**/build/
+
+# 设计草稿/临时预览目录：由设计迭代过程反复生成，**全仓库无引用**。
+# 需要长期保存的设计稿请放 design/wireframes/（受跟踪）。
+# 本地文件保留，只是不再入库 —— 避免 git status 长期变脏。
+design/previews/
