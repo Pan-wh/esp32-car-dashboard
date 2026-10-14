@@ -164,6 +164,8 @@ static volatile uint32_t s_render_us_max = 0; /* 窗口内单次 lv_timer_handle
 static volatile uint32_t s_render_us_sum = 0;  /* 窗口内渲染总耗时（算占空比） */
 static volatile uint32_t s_flush_us_sum = 0;   /* 窗口内 QSPI 传输累计耗时（从渲染耗时中区分） */
 static volatile uint32_t s_flush_us_max = 0;   /* 窗口内单次 flush 最大耗时 */
+static volatile uint32_t s_flush_area_max = 0; /* 窗口内单次 flush 最大面积（像素）*/
+static volatile uint32_t s_flush_area_sum = 0; /* 窗口内 flush 面积累计 */
 
 /*
  * 滑动卡顿优化：全帧 PSRAM 绘制缓冲（partial 模式不变）。
@@ -362,6 +364,11 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
     s_flush_cnt++;
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
+  {
+    uint32_t a = w * h;
+    s_flush_area_sum += a;
+    if (a > s_flush_area_max) s_flush_area_max = a;
+  }
 
 #if (LV_COLOR_16_SWAP != 0)
   gfx->draw16bitBeRGBBitmap(area->x1, area->y1, (uint16_t *)&color_p->full, w, h);
@@ -2025,10 +2032,16 @@ void loop()
                   (unsigned)(s_render_us_sum / (dt * 10)),
                   (unsigned long)(s_flush_us_sum / 1000),
                   (unsigned long)(s_flush_us_max / 1000));
+    Serial.printf("       脏区：单次最大 %lu px（占整屏 %u%%），窗口累计 %lu px（整屏 217156）\n",
+                  (unsigned long)s_flush_area_max,
+                  (unsigned)(s_flush_area_max * 100UL / 217156UL),
+                  (unsigned long)s_flush_area_sum);
     s_render_us_max = 0;
     s_render_us_sum = 0;
     s_flush_us_sum = 0;
     s_flush_us_max = 0;
+    s_flush_area_max = 0;
+    s_flush_area_sum = 0;
     last_flush = f;
     last_loop = l;
   }
