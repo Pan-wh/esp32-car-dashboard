@@ -124,16 +124,44 @@ public:
                   uint8_t c1, uint8_t r1, uint8_t c2, uint8_t r2)
       : Arduino_CO5300(b, rst, r, w, h, c1, r1, c2, r2) {}
 
-  /** 设置地址窗口偏移；-1 表示保持当前值 */
+  /** 设置地址窗口偏移（**有符号**）；INT_MIN 表示保持当前值 */
   void setGap(int xo, int yo)
   {
-    if (xo >= 0) _xStart = (uint8_t)xo;
-    if (yo >= 0) _yStart = (uint8_t)yo;
+    if (xo != INT_MIN) _ox = (int16_t)xo;
+    if (yo != INT_MIN) _oy = (int16_t)yo;
     _currentX = -1; /* 强制下一帧重设 CASET/PASET */
     _currentY = -1;
   }
-  int gapX(void) const { return (int)_xStart; }
-  int gapY(void) const { return (int)_yStart; }
+  int gapX(void) const { return (int)_ox; }
+  int gapY(void) const { return (int)_oy; }
+
+  /*
+   * ★ 重写地址窗口写入，改用**有符号**偏移。
+   *
+   * 为什么要重写：库的 `Arduino_CO5300::writeAddrWindow()` 用
+   * `_xStart`/`_yStart`（`uint8_t`）**只能加、不能减**。而硬件旋转后
+   * 需要的偏移很可能是**负值**（面板扫描方向被 MADCTL 反转）——
+   * 这正是"无论怎么调正偏移都修不好边缘"的原因。
+   * 本函数是 `virtual`，故可在子类里替换。
+   */
+  void writeAddrWindow(int16_t x, int16_t y, uint16_t w, uint16_t h) override
+  {
+    if ((x != _currentX) || (w != _currentW) || (y != _currentY) || (h != _currentH)) {
+      _currentX = x;
+      _currentY = y;
+      _currentW = w;
+      _currentH = h;
+      const int32_t xs = (int32_t)x + _ox;
+      const int32_t ys = (int32_t)y + _oy;
+      _bus->writeC8D16D16(CO5300_W_CASET, (uint16_t)xs, (uint16_t)(xs + (int32_t)w - 1));
+      _bus->writeC8D16D16(CO5300_W_PASET, (uint16_t)ys, (uint16_t)(ys + (int32_t)h - 1));
+    }
+    _bus->writeCommand(CO5300_W_RAMWR);
+  }
+
+private:
+  int16_t _ox = 6; /* 有符号偏移，默认 = 库构造值 (6,0)，即 0° 的正确值 */
+  int16_t _oy = 0;
 };
 
 /*
@@ -211,7 +239,7 @@ static bool te_wait_rise(uint32_t timeout_us)
 #define TOUCHROT_PREF_KEY "trot"  /* 触摸坐标变换档位，见 touch_apply_rot() */
 static uint8_t s_hw_rot = 0;
 static uint8_t s_touch_rot = 0;
-static int8_t s_gap_x = 0; /* 硬件旋转下的地址偏移（现场标定）*/
+static int8_t s_gap_x = 0;  /* 硬件旋转下的地址偏移（现场标定，**可为负**）*/
 static int8_t s_gap_y = 6;
 
 
@@ -455,6 +483,19 @@ static void touch_sample_cb(void *)
   uint8_t n = touch.getPoint(touch_x, touch_y, touch.getSupportTouchPoint());
   bool was = s_tp_pressed;
 
+  /*
+   * ⚠️ 临界区里**绝对不能**调用 Serial。
+   *
+   * 本函数是 100Hz 的 esp_timer 回调（高优先级、临界区内中断被关闭）。
+   * `Serial.printf()` 会阻塞等待 UART FIFO，一旦在关中断状态下等待过久
+   * 就会触发**中断看门狗复位** —— 真机表现正是"点一下屏幕就黑屏重启"
+   * （因为只有"抬起且有位移"这一支才会打印）。日志信息故先存本地变量，
+   * 出了临界区再输出。
+   */
+  bool log_release = false, log_flick = false;
+  int log_dx = 0, log_dy = 0, log_raw_dx = 0, log_raw_dy = 0;
+  uint32_t log_dt = 0;
+
   portENTER_CRITICAL(&s_tp_mux);
   if (n > 0) {
       /* 面板原生坐标 → 显示坐标（硬件旋转时两者相差一个旋转）*/
@@ -494,17 +535,33 @@ static void touch_sample_cb(void *)
       if (dt < 600 && adx > 50 && adx > (ady * 12) / 10) {
         s_tp_flick = (dx < 0) ? 1 : -1; /* 左滑 → 下一页 */
         s_tp_flick_cnt++;
-        Serial.printf("[触摸] flick dx=%d dy=%d（原始 %d,%d）dt=%lu ms\n", (int)dx, (int)dy,
-                      raw_dx, raw_dy, (unsigned long)dt);
+        log_release = true;
+        log_flick = true;
       }
       else {
         s_tp_settle = true; /* 缓慢拖拽：按最近页吸附 */
-        Serial.printf("[触摸] 抬起 dx=%d dy=%d（原始 %d,%d）dt=%lu ms（未达 flick 阈值→吸附）\n",
-                      (int)dx, (int)dy, raw_dx, raw_dy, (unsigned long)dt);
+        log_release = true;
       }
+      log_dx = dx;
+      log_dy = dy;
+      log_raw_dx = raw_dx;
+      log_raw_dy = raw_dy;
+      log_dt = dt;
     }
   }
   portEXIT_CRITICAL(&s_tp_mux);
+
+  /* 串口输出：**必须在临界区之外**（见函数开头的说明）*/
+  if (log_release) {
+    if (log_flick) {
+      Serial.printf("[触摸] flick dx=%d dy=%d（原始 %d,%d）dt=%lu ms\n", log_dx, log_dy,
+                    log_raw_dx, log_raw_dy, (unsigned long)log_dt);
+    }
+    else {
+      Serial.printf("[触摸] 抬起 dx=%d dy=%d（原始 %d,%d）dt=%lu ms（未达 flick 阈值→吸附）\n",
+                    log_dx, log_dy, log_raw_dx, log_raw_dy, (unsigned long)log_dt);
+    }
+  }
 }
 
 static void touchpad_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
@@ -1510,6 +1567,27 @@ static void process_command(char *cmd)
       }
     }
   }
+  else if (strncmp(cmd, "swrot", 5) == 0) {
+    /*
+     * 【A/B 对比用】强制走**纯 LVGL 软件旋转**（= 改造前的旧行为）：
+     * MADCTL 归零 + 偏移回到构造值 (6,0) + lv_disp_set_rotation()。
+     * 用于和硬件旋转逐像素对比"显示是否完整"，不再靠猜。
+     */
+    const char *arg = cmd + 5;
+    while (*arg == ' ') arg++;
+    int v = (*arg == '\0') ? 3 : atoi(arg);
+    if (v < 0 || v > 3) v = 3;
+    bus->beginWrite();
+    bus->writeC8D8(0x36, 0x00); /* MADCTL 归零 */
+    bus->endWrite();
+    s_hw_rot = 0;
+    gfx->setGap(6, 0); /* 旧行为：库构造值 */
+    static const lv_disp_rot_t TBL[4] = {LV_DISP_ROT_NONE, LV_DISP_ROT_90, LV_DISP_ROT_180,
+                                         LV_DISP_ROT_270};
+    lv_disp_set_rotation(NULL, TBL[v]);
+    s_display_rot = v * 90;
+    Serial.printf("[旋转] 【旧行为】纯软件旋转 = %d°，MADCTL=0x00，gap=(6,0)%s", v * 90, "\n");
+  }
   else if (strncmp(cmd, "gap", 3) == 0) {
     /*
      * 【标定】直接设置面板地址窗口偏移（绕过库的写死组合）。
@@ -1549,10 +1627,12 @@ static void process_command(char *cmd)
     else {
       const lv_color_t col[4] = {lv_color_hex(0x00FF00), lv_color_hex(0xFFFF00),
                                  lv_color_hex(0xFF0000), lv_color_hex(0x0000FF)};
-      const int16_t X[4] = {0, 0, 0, LCD_WIDTH - 3};
-      const int16_t Y[4] = {0, LCD_HEIGHT - 3, 0, 0};
-      const int16_t W[4] = {LCD_WIDTH, LCD_WIDTH, 3, 3};
-      const int16_t H[4] = {3, 3, LCD_HEIGHT, LCD_HEIGHT};
+      /* 线宽 10px、高饱和 —— 上次 3px 太细导致拍照后判断失误 */
+      const int16_t TK = 10;
+      const int16_t X[4] = {0, 0, 0, LCD_WIDTH - TK};
+      const int16_t Y[4] = {0, LCD_HEIGHT - TK, 0, 0};
+      const int16_t W[4] = {LCD_WIDTH, LCD_WIDTH, TK, TK};
+      const int16_t H[4] = {TK, TK, LCD_HEIGHT, LCD_HEIGHT};
       const char *nm[4] = {"上(绿)", "下(黄)", "左(红)", "右(蓝)"};
       for (int i = 0; i < 4; i++) {
         s_edge[i] = lv_obj_create(lv_scr_act());
@@ -1563,7 +1643,7 @@ static void process_command(char *cmd)
         lv_obj_set_style_bg_opa(s_edge[i], LV_OPA_COVER, 0);
         lv_obj_clear_flag(s_edge[i], LV_OBJ_FLAG_SCROLLABLE);
       }
-      Serial.printf("[标定] 已画四条边线（3px）：%s=%s / %s=%s / %s=%s / %s=%s%s",
+      Serial.printf("[标定] 已画四条边线（10px）：%s=%s / %s=%s / %s=%s / %s=%s%s",
                     nm[0], "y0", nm[1], "yH-1", nm[2], "x0", nm[3], "xW-1", "\n");
     }
   }
