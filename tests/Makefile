@@ -22,6 +22,10 @@ FACE_SRC     := ../ios/CarDashboardPhone/CarDashboardPhone/DeviceFaces.swift
 FACE_BIN     := test_device_faces
 SIM_FIXTURE  := $(abspath ../tools/nav_sim/testdata/route-bundle.json)
 
+# App 侧 BLE 自动连接决策（自动连接 / 手动断开 / 掉线重连）
+BLE_SRC      := ../ios/CarDashboardPhone/CarDashboardPhone/BLEConnectionPolicy.swift
+BLE_BIN      := test_ble_policy
+
 all: $(TESTS)
 
 test_telemetry: test_telemetry.c ../simulator/ui/telemetry.c
@@ -63,6 +67,8 @@ run: $(TESTS)
 	@$(MAKE) --no-print-directory test-nav-sim
 	@echo "--- App 表盘列表解析（Swift）---"
 	@$(MAKE) --no-print-directory test-device-faces
+	@echo "--- App BLE 自动连接决策（Swift，自动连接/手动断开/重连）---"
+	@$(MAKE) --no-print-directory test-ble-policy
 	@echo "--- 导航网关（Node，零依赖，全部离线）---"
 	@if command -v node >/dev/null 2>&1; then \
 		(cd ../gateway && node --test "test/**/*.test.js") ; \
@@ -116,7 +122,17 @@ $(FACE_BIN): $(FACE_SRC) ../tools/test_device_faces.swift
 test-device-faces: $(FACE_BIN)
 	@./$(FACE_BIN)
 
-clean:
-	rm -f $(TESTS) $(NAV_BIN) $(SIM_BIN) $(FACE_BIN)
+$(BLE_BIN): $(BLE_SRC) ../tools/test_ble_policy.swift
+	@if ! command -v swiftc >/dev/null 2>&1; then \
+		echo "  跳过：未找到 swiftc"; \
+		exit 0; \
+	fi
+	swiftc -O -o $(BLE_BIN) $(BLE_SRC) ../tools/test_ble_policy.swift
 
-.PHONY: all run clean test-nav-core test-nav-sim test-device-faces
+test-ble-policy: $(BLE_BIN)
+	@./$(BLE_BIN)
+
+clean:
+	rm -f $(TESTS) $(NAV_BIN) $(SIM_BIN) $(FACE_BIN) $(BLE_BIN)
+
+.PHONY: all run clean test-nav-core test-nav-sim test-device-faces test-ble-policy

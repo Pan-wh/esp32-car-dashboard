@@ -56,7 +56,6 @@ struct ContentView: View {
     ///     4 向旋转，渲染耗时超过面板一帧（16.78 ms）→ 会撕裂，故改走硬件
     /// 方向持久化到仪表 NVS，重启后保持。
     private let rotations = [0, 90, 180, 270]
-    @State private var selectedRotation = 0
 
     // ── 导航页的状态 ────────────────────────────────────────
     /// 网关地址/令牌用 @AppStorage 持久化：开发期反复改会烦，且退出 App 后应保留。
@@ -82,8 +81,29 @@ struct ContentView: View {
     /// 在上报到达时没触发，勾选标记指不到当前表盘。
     /// 教训一致：**能从数据派生的，就不要另存一份状态去同步**。
     @State private var selectedGroup = ""
+    /**
+     亮度 / 息屏：**以设备上报为准**，这里只是"设备还没上报时的暂存值"。
+
+     ⚠️ 不要把它当成"App 记住的用户设置"：设备才是亮度/息屏的所有者
+        （App 关掉、仪表单独上电都要保持）。设备一上报就覆盖这里。
+
+     之前直接用 `@State brightness = 200` 当初始显示值 → 重开 App 显示 200
+     （并非设备真值），用户一碰滑块还把设备改成 200。现在改为：
+     未连接时用本地暂存值显示，连上后立刻被设备上报刷新。
+     */
     @State private var brightness: Double = 200
     @State private var screenOn = true
+    /// 屏幕方向：同上，设备上报为准（设备侧持久化在 NVS，重开 App 也要显示真值）
+    @State private var selectedRotation = 0
+    /**
+     正在把**设备上报的值**写进上面的本地显示状态。
+
+     ⚠️ 必须有这个标志：写入会触发 `onChange`，若不拦截就会把刚收到的值
+        当成"用户操作"**再发回设备**（无效往返；更糟的是可能形成回环）。
+        判断依据是"这次变化来自设备还是来自用户"，而不是比较数值 ——
+        比较数值在"用户改成与设备相同的值"时会漏发。
+     */
+    @State private var applyingDeviceState = false
     /// 防止 onAppear 重复触发自动连接（SwiftUI 可能多次调用）
     @State private var didAutoConnect = false
     /// 当前标签页（0 仪表 / 1 数据 / 2 导航）
@@ -127,6 +147,39 @@ struct ContentView: View {
             guard !didAutoConnect else { return }
             didAutoConnect = true
             session.ble.scanAndConnect()
+            #if DEBUG
+            /*
+             * ⚠️ 必须在 scanAndConnect() **之后**：那个函数会把 autoConnectEnabled
+             *    置回 true（"App 启动应当自动连接"），先设就会被它覆盖掉，
+             *    界面看起来跟没断过一样 —— 演示模式也就失去意义。
+             */
+            if BLEClient.demoDisconnectedEnabled { session.ble.enterDemoDisconnectedState() }
+            #endif
+        }
+        /*
+         * 设备上报到达 → 用**设备的真值**刷新亮度/方向/息屏的显示。
+         *
+         * 这是本次修复的核心：此前这三项用 `@State` 的凭空默认值，App 重开
+         * 显示 200（不是设备的真实亮度），用户一碰滑块还把设备改成 200。
+         * 改为"设备上报 → App 显示"后，重开 App 看到的就是设备上的真值。
+         *
+         * 只在设备**确实上报了**该字段时才覆盖（nil 表示设备没说，保持现值）。
+         */
+        .onChange(of: session.ble.faces) { _, report in
+            /*
+             * 标记"这批变化来自设备"，让下面的 onChange 不要把它们当成
+             * 用户操作再发回设备（否则就是收到什么就回发什么的无效往返）。
+             */
+            applyingDeviceState = true
+            if let b = report.brightness { brightness = Double(b) }
+            if let r = report.rotation { selectedRotation = r }
+            if let s = report.screenOn { screenOn = s }
+            /*
+             * SwiftUI 的 onChange 在**本次视图更新批次内**同步触发，因此这里
+             * 复位是安全的（下面的回调已经跑完）。用 async 再兜一层，
+             * 防止将来把同步改成异步时悄悄失效。
+             */
+            DispatchQueue.main.async { applyingDeviceState = false }
         }
     }
 
@@ -388,6 +441,8 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .onChange(of: selectedRotation) { _, deg in
+                // 来自设备上报的同步 → 不要回发给设备（那是无效往返）
+                guard !applyingDeviceState else { return }
                 _ = session.ble.setRotation(deg)
             }
             // 备注（用户要求写在这里）：说明 90°/270° 为何与另两个角度走不同机制。
@@ -403,14 +458,21 @@ struct ContentView: View {
             HStack {
                 Text("亮度")
                 Slider(value: $brightness, in: 1...255, step: 1) { editing in
-                    // 拖动结束才发送，避免高频写 BLE
-                    if !editing { _ = session.ble.setBrightness(Int(brightness)) }
+                    /*
+                     * 拖动结束才发送，避免高频写 BLE。
+                     * ⚠️ 必须排除"设备上报同步"引起的变化，否则收到一次上报
+                     *    就会回发一次亮度命令。
+                     */
+                    if !editing && !applyingDeviceState {
+                        _ = session.ble.setBrightness(Int(brightness))
+                    }
                 }
                 Text("\(Int(brightness))").monospacedDigit().frame(width: 34)
             }
 
             Toggle("屏幕点亮", isOn: $screenOn)
                 .onChange(of: screenOn) { _, on in
+                    guard !applyingDeviceState else { return }
                     _ = session.ble.setScreen(on: on)
                 }
         } header: {
@@ -510,10 +572,34 @@ struct ContentView: View {
                 Spacer()
                 Text(locationPermissionText)
             }
-            Button(bleConnected ? "已连接 CarDashboard" : "连接仪表") {
-                session.ble.scanAndConnect()
+            /*
+             * 连接 / 断开是一对**互斥动作**，同一位置切换，而不是让"连接"按钮
+             * 在已连接时变灰（那样用户找不到断开入口）。
+             *
+             * 自动连接（BLEClient.connectIfPossible）让用户通常无需点这里；
+             * 但"手动断开"必须留给用户 —— 例如想让仪表断开独占、或省电时。
+             */
+            if bleConnected {
+                Button(role: .destructive) {
+                    session.ble.disconnect()
+                } label: {
+                    Label("断开连接", systemImage: "xmark.circle")
+                }
+            } else {
+                Button {
+                    session.ble.scanAndConnect()
+                } label: {
+                    Label("连接仪表", systemImage: "antenna.radiowaves.left.and.right")
+                }
             }
-            .disabled(bleConnected)
+            /*
+             * 用户主动断开后，自动连接是关着的 —— 必须明确告诉他"现在不会自动连"，
+             * 否则他会以为 App 坏了（此前会自动重连，断开后行为变了）。
+             */
+            if !bleConnected && !session.ble.autoConnectEnabled {
+                Text("已停止自动连接。点「连接仪表」可重新连接（之后会自动保持连接）。")
+                    .font(.footnote).foregroundColor(.orange)
+            }
 
             Button(session.isDriving ? "结束驾驶" : "开始驾驶") {
                 if session.isDriving { session.stopDriving() }
@@ -523,7 +609,7 @@ struct ContentView: View {
         } header: {
             Text("仪表连接")
         } footer: {
-            Text("开始驾驶后，本机会持续把定位与车速通过蓝牙发送给仪表。")
+            Text("蓝牙就绪后本机会自动连接仪表并在掉线后自动重连，无需手动操作；如需断开请点「断开连接」。\n开始驾驶后，本机会持续把定位与车速通过蓝牙发送给仪表。")
         }
     }
 

@@ -188,6 +188,71 @@ func testCurrentFace() {
     }
 }
 
+func testDisplayState() {
+    print("--- 设备显示状态（亮度/方向/息屏）---")
+
+    // 1) 正常上报：三个字段都应解析出来
+    let full = """
+    {"t":"faces","v":1,"count":1,"mask":1,"cur":0,"bright":70,"rot":90,"screen":1,\
+    "faces":[{"id":0,"name":"analog","label":"Analog","group":"clock","on":1}]}
+    """
+    guard let r = DeviceFaceParser.parse(Data(full.utf8)) else {
+        check(false, "解析失败"); return
+    }
+    check(r.brightness == 70, "应解析出亮度 70，实际 \(String(describing: r.brightness))")
+    check(r.rotation == 90, "应解析出方向 90，实际 \(String(describing: r.rotation))")
+    check(r.screenOn == true, "应解析出 screen=1（点亮）")
+
+    // 2) ★ 缺省必须是 nil（"设备没说"），**不能**兜底成默认值。
+    //    这正是"亮度被凭空改回 200"那个 bug 的根源：把"没说"当成"是 200"。
+    let bare = "{\"t\":\"faces\",\"faces\":[{\"id\":0,\"name\":\"a\",\"group\":\"clock\"}]}"
+    if let r2 = DeviceFaceParser.parse(Data(bare.utf8)) {
+        check(r2.brightness == nil, "★ 缺 bright 应为 nil（不得伪造默认值），实际 \(String(describing: r2.brightness))")
+        check(r2.rotation == nil, "★ 缺 rot 应为 nil")
+        check(r2.screenOn == nil, "★ 缺 screen 应为 nil")
+    } else {
+        check(false, "应能解析")
+    }
+
+    // 3) ★ 0 是**有效值**，必须解析成 0 而不是 nil。
+    //    把 0 与"未上报"混为一谈，App 就永远显示不出息屏/亮度 0。
+    let zeros = """
+    {"t":"faces","cur":0,"bright":0,"rot":0,"screen":0,\
+    "faces":[{"id":0,"name":"a","group":"clock","on":1}]}
+    """
+    if let r3 = DeviceFaceParser.parse(Data(zeros.utf8)) {
+        check(r3.brightness == 0, "★ 亮度 0 是有效值，应解析为 0（不是 nil），实际 \(String(describing: r3.brightness))")
+        check(r3.rotation == 0, "★ 方向 0° 是有效值，应解析为 0")
+        check(r3.screenOn == false, "★ screen=0 应解析为 false（息屏），不是 nil")
+    } else {
+        check(false, "应能解析")
+    }
+
+    // 4) 布尔形式也要宽容（不同固件版本可能发 true/false）
+    let boolForm = """
+    {"t":"faces","screen":true,"faces":[{"id":0,"name":"a","group":"clock","on":1}]}
+    """
+    if let r4 = DeviceFaceParser.parse(Data(boolForm.utf8)) {
+        check(r4.screenOn == true, "screen 用布尔 true 也应解析")
+    } else {
+        check(false, "应能解析")
+    }
+
+    // 5) 旧固件（完全没有这三个字段）也应正常解析，只是状态未知
+    let legacy = """
+    {"t":"faces","v":1,"count":2,"mask":3,"cur":1,"faces":[\
+    {"id":0,"name":"analog","label":"Analog","group":"clock","on":1},\
+    {"id":1,"name":"digital","label":"Digital","group":"clock","on":1}]}
+    """
+    if let r5 = DeviceFaceParser.parse(Data(legacy.utf8)) {
+        check(r5.faces.count == 2, "旧格式仍应解析出表盘（向后兼容）")
+        check(r5.brightness == nil && r5.rotation == nil && r5.screenOn == nil,
+              "旧格式下三项状态均为 nil（App 保持原显示值）")
+    } else {
+        check(false, "旧格式应能解析")
+    }
+}
+
 func testFaceSymbols() {
     print("--- 表盘图标映射 ---")
     // 已知表盘应有各自的图标（不能都一样，否则区分不了）
@@ -214,6 +279,7 @@ struct TestDeviceFaces {
         testRejectsBadInput()
         testPartialFieldTolerance()
         testCurrentFace()
+        testDisplayState()
         testFaceSymbols()
         print("结果: \(gPass) 通过, \(gFail) 失败")
         exit(gFail == 0 ? 0 : 1)

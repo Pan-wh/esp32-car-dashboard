@@ -44,6 +44,26 @@ struct DeviceFaceReport: Equatable {
     /// 界面据此标注"正在用哪个"，避免选中态与设备实际状态不一致。
     var currentId: Int = -1
 
+    // ── 设备显示状态（亮度 / 方向 / 息屏）────────────────────────
+    //
+    // 这三项**由设备拥有并上报**，App 只显示、不在连接时下发覆盖。
+    //
+    // 为什么必须这么设计：用户用 App 把亮度调成 70 → 断掉 App 装上车，
+    // 亮度仍是 70；下次仪表单独上电（没开 App）也应保持。
+    // 若 App 连接时下发自己记的值，就会把用户在设备上设好的值悄悄冲掉。
+    //
+    // 用 Optional 而非默认值，是为了区分**"设备没上报"**与**"设备上报了 0"**：
+    //   nil → 设备未告知，App 保持当前显示值（不要伪造一个默认值）
+    //   0   → 设备明确告知就是 0（息屏 / 亮度 0），必须照实显示
+    // 把两者混为一谈正是"亮度被凭空改回默认值"那个 bug 的根源。
+
+    /// 当前亮度 0-255；nil = 设备未上报
+    var brightness: Int?
+    /// 当前屏幕方向（度）；nil = 设备未上报
+    var rotation: Int?
+    /// 是否点亮（false = 息屏）；nil = 设备未上报
+    var screenOn: Bool?
+
     /// 按分组聚合，保持设备给出的顺序（分组首次出现的先后）
     var grouped: [(group: String, faces: [DeviceFace])] {
         var order: [String] = []
@@ -95,6 +115,17 @@ enum DeviceFaceParser {
         report.faces = faces.sorted { $0.id < $1.id } // 按 id 排序即注册顺序
         report.truncated = (root["truncated"] as? Int) == 1
         report.currentId = (root["cur"] as? Int) ?? -1
+        /*
+         * 设备显示状态（可能缺省 → 保持 nil）。
+         *
+         * ⚠️ 这里**不能**用 `?? 默认值` 兜底：设备没上报时填一个 200，
+         *    界面就会显示一个设备上根本不存在的亮度，用户一碰滑块反而把真值改掉。
+         *    缺省就保持 nil，由上层决定"沿用当前显示值"。
+         */
+        report.brightness = root["bright"] as? Int
+        report.rotation = root["rot"] as? Int
+        if let s = root["screen"] as? Int { report.screenOn = (s != 0) }
+        else if let b = root["screen"] as? Bool { report.screenOn = b }
         return report
     }
 }
