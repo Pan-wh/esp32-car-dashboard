@@ -91,6 +91,16 @@ struct ContentView: View {
      */
     @State private var demoSpeed: Double = 0
     @State private var demoOn = false
+    /**
+     上次把演示速度发给仪表的时刻（毫秒）。
+
+     ⚠️ 拖动时 `onChange` 会**按刻度**触发（一秒几十次），每次都写 BLE 会让
+        连接层来不及发（写入被丢弃/合并），表现就是"演示速度卡顿、跟不上手"。
+        所以拖动期间**限频**，松手时再补发一次末值确保一定送达。
+     */
+    @State private var lastDemoSendMs: UInt64 = 0
+    /// 演示速度的发送间隔（毫秒）。100ms ≈ 10Hz，比人手拖动平滑。
+    private static let demoSendIntervalMs: UInt64 = 100
     @State private var screenOn = true
     /// 屏幕方向：同上，设备上报为准（设备侧持久化在 NVS，重开 App 也要显示真值）
     @State private var selectedRotation = 0
@@ -404,11 +414,22 @@ struct ContentView: View {
                 HStack {
                     Text("速度")
                     Slider(value: $demoSpeed, in: 0...240, step: 1) { editing in
-                        /* 拖动结束再补发一次，确保末值一定送达（与亮度同一策略）*/
-                        if !editing { _ = session.ble.sendDemoSpeed(demoSpeed) }
+                        /*
+                         * 松手时补发末值：拖动期间是限频的，最后一个刻度可能
+                         * 恰好被跳过；这里保证"松手后仪表一定停在滑条的位置"。
+                         */
+                        if !editing {
+                            lastDemoSendMs = 0
+                            _ = session.ble.sendDemoSpeed(demoSpeed)
+                        }
                     }
                     .onChange(of: demoSpeed) { _, v in
-                        _ = session.ble.sendDemoSpeed(v)
+                        /* 拖动期间限频（见 lastDemoSendMs 的说明）；松手时上面会补发末值 */
+                        let now = DispatchTime.now().uptimeNanoseconds / 1_000_000
+                        if now &- lastDemoSendMs >= Self.demoSendIntervalMs {
+                            lastDemoSendMs = now
+                            _ = session.ble.sendDemoSpeed(v)
+                        }
                     }
                     Text("\(Int(demoSpeed))").monospacedDigit().frame(width: 34)
                 }

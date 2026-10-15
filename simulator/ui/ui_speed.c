@@ -493,6 +493,19 @@ void ui_speed_set_heading(int deg)
 
 void ui_speed_set_status(ui_speed_status_t st)
 {
+    /*
+     * ⚠️ **演示模式下状态行归演示所有**。
+     *
+     * 固件的遥测路径每 20ms 刷新一次状态（CONNECTING/WAIT GPS/NO FIX/STALE/LIVE），
+     * 不管这里的话它会把 DEMO **冲掉** —— 表现为"状态一直在变、速度也跟着卡"：
+     * ① 状态文字每秒变几十次，每次变化都让状态标签重绘；
+     * ② 用户看到 DEMO 一闪一闪，以为演示没生效。
+     *
+     * 所以演示期间只接受 DEMO；退出演示时 `ui_speed_set_demo(-1)` 已经把
+     * s_demo_on 清掉，随后 20ms 内遥测路径会自然恢复真实状态。
+     */
+    if (s_demo_on && st != UI_STATUS_DEMO) return;
+
     /* 用 COUNT 做上界：往枚举末尾加值不会再被这里夹掉 */
     if ((int)st < 0 || st >= UI_STATUS_COUNT) st = UI_STATUS_CONNECTING;
     if (st == s_status_state) return;
