@@ -104,7 +104,17 @@ void ui_speed_set_demo(float kmh)
     }
     s_demo_on  = true;
     s_demo_kmh = kmh;
-    ui_speed_set_speed(kmh);          /* 直接给指针目标位 */
+    /*
+     * ⚠️ **这里刻意不调用 ui_speed_set_speed()**。
+     *
+     * 真实速度是经 `telemetry_ramp_set_target()` + `telemetry_ramp_step()`
+     * 平滑插值后写指针的。若演示值直接写指针，指针只会**瞬间跳变** ——
+     * 而"看表盘动画"恰恰是演示的唯一目的（用户实测："滑动速度条仪表盘
+     * 没有任何动画"，就是这个原因）。
+     *
+     * 所以演示值由**固件侧把它当作斜坡目标**喂进同一条斜坡，
+     * 指针动画与真实数据完全一致。
+     */
     ui_speed_set_status(UI_STATUS_DEMO);
 }
 

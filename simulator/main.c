@@ -279,7 +279,15 @@ int main(int argc, char **argv)
 
     /* 速度表盘预置状态（GNSS 未接入前由命令行模拟数据） */
     ui_speed_set_speed(speed_kmh);
-    if (demo_speed >= 0.0f) ui_speed_set_demo(demo_speed);
+    if (demo_speed >= 0.0f) {
+        ui_speed_set_demo(demo_speed);
+        /*
+         * 模拟器里没有固件那条速度斜坡（它属于固件主循环），所以这里直接写一次
+         * 指针值，好让截图能同时看到"DEMO 标记 + 指针位置"。
+         * 真机上指针由斜坡驱动 —— 演示值与真实数据走**完全相同**的路径。
+         */
+        ui_speed_set_speed(demo_speed);
+    }
     ui_speed_set_fix(nofix ? false : true, 12);
     if (status_state >= 0) ui_speed_set_status((ui_speed_status_t)status_state);
     ui_speed_set_driver_state(driver_state);
