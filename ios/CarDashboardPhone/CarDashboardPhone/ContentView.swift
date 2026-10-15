@@ -394,21 +394,38 @@ struct ContentView: View {
              *   ③ 固件侧：收到真实遥测 / BLE 断开 → 自己退出
              *      —— App 的命令可能丢，所以安全必须由固件兜底。
              */
-            Toggle(isOn: $demoOn) {
-                HStack {
-                    Text("模拟速度测试")
-                    Spacer()
-                    if demoOn {
-                        Text("DEMO").font(.caption2).bold()
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.orange.opacity(0.25))
-                            .foregroundStyle(.orange)
-                            .clipShape(Capsule())
-                    }
+            /*
+             * ⚠️ 演示速度必须**经由仪表**显示，所以要先把"必须已连接"摆在明面上。
+             *
+             * 之前的版本没连上时只是静默失败：开关能打开、滑条能拖，但仪表毫无反应，
+             * 用户完全看不出是"没连接"还是"功能坏了"（真实反馈就是
+             * "滑动速度并没有显示，仪表盘也没有任何速度动作"）。
+             */
+            HStack {
+                Text("模拟速度测试")
+                Spacer()
+                if !session.bleConnected {
+                    Text("未连接仪表").font(.caption2).bold()
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.red.opacity(0.15))
+                        .foregroundStyle(.red)
+                        .clipShape(Capsule())
+                } else if demoOn {
+                    Text("DEMO").font(.caption2).bold()
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.25))
+                        .foregroundStyle(.orange)
+                        .clipShape(Capsule())
                 }
             }
-            .onChange(of: demoOn) { _, on in
-                _ = session.ble.sendDemoSpeed(on ? demoSpeed : -1)
+            Toggle("启用演示", isOn: $demoOn)
+                .disabled(!session.bleConnected)
+                .onChange(of: demoOn) { _, on in
+                    _ = session.ble.sendDemoSpeed(on ? demoSpeed : -1)
+                }
+            if !session.bleConnected {
+                Text("演示速度要显示在**仪表**上，因此需要先连接仪表（点上方「连接仪表」，或在仪表页点「开始驾驶」）。未连接时开关是禁用的。")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             if demoOn {
                 HStack {
