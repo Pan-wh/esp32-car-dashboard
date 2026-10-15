@@ -40,8 +40,14 @@ extern "C" {
 #define NAV_MAP_MAX_BLDGS 16
 /** 建筑点数上限（跨所有建筑） */
 #define NAV_MAP_MAX_BLDG_PTS 128
-/** 路线折线点数上限 */
-#define NAV_MAP_MAX_ROUTE_PTS 64
+/**
+ * 路线折线点数上限。
+ *
+ * 与 App 的 `MapWindowCodec.maxRoutePoints` 一致。取值要够大，才能让
+ * 手机一次发来"远超屏幕可见范围"的路线段 —— 白线在屏幕中间断掉会被
+ * 误解成"路只到那里"（实测反馈）。
+ */
+#define NAV_MAP_MAX_ROUTE_PTS 96
 /**
  * **单条要素**的点数上限。
  * 与网关的 `maxPointsPerFeature` 一致；网关已保证不超，这里是防御性上限。

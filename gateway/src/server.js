@@ -89,12 +89,52 @@ export function createServer(config, deps = {}) {
   const allow = createRateLimiter(config.rateLimitPerMin);
   const secrets = [config.amapKey, config.authToken];
 
+  /*
+   * ── 高德调用计数（用户关心"免费额度够不够用"）──────────────────────
+   *
+   * **只统计真正打到高德的请求**（路线 + 地理编码）。周边地图走 OpenFreeMap，
+   * **完全不消耗高德额度** —— 这是选它做环境图层的原因之一。
+   *
+   * 按"自然日"分桶，跨天自动归零（高德的日配额也是 0:00 重置）。
+   * 通过 GET /health 暴露，方便随时查看自己的消耗。
+   */
+  const usage = { day: '', route: 0, geocode: 0, mapwindow: 0 };
+  const today = () => new Date().toISOString().slice(0, 10);
+  /** 跨天则清零（高德的日配额也是 0:00 重置，对齐它的口径）*/
+  const ensureDay = () => {
+    const d = today();
+    if (usage.day !== d) {
+      usage.day = d;
+      usage.route = 0;
+      usage.geocode = 0;
+      usage.mapwindow = 0;
+    }
+    return d;
+  };
+  const bump = (kind) => {
+    ensureDay();
+    usage[kind] += 1;
+  };
+
   const handler = async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
 
     if (req.method === 'GET' && url.pathname === '/health') {
       // 只暴露"是否已配置"，绝不回显 Key
-      return sendJson(res, 200, { ok: true, hasKey: config.amapKey.length > 0 });
+      ensureDay(); /* 跨天先归零，保证显示的是"今天"的量 */
+      return sendJson(res, 200, {
+        ok: true,
+        hasKey: config.amapKey.length > 0,
+        /* 今日高德实际消耗（地图窗口不消耗高德额度）*/
+        amapCallsToday: {
+          date: usage.day,
+          route: usage.route,
+          geocode: usage.geocode,
+          total: usage.route + usage.geocode,
+        },
+        /* 仅作参考：本网关自身处理的请求数 */
+        mapWindowRequestsToday: usage.mapwindow,
+      });
     }
 
     /* 只放行已知端点；其余一律 404（不暴露内部结构） */
@@ -140,6 +180,7 @@ export function createServer(config, deps = {}) {
       const radiusM = Number.isFinite(body.radiusM)
         ? Math.min(Math.max(body.radiusM, 100), 1500) : 500;
       try {
+        bump('mapwindow'); /* 不消耗高德额度 */
         const w = await fetchMapWindow({
           lon, lat, radiusM, cacheDir: config.mapCacheDir, fetchImpl,
         });
@@ -164,6 +205,7 @@ export function createServer(config, deps = {}) {
         });
       }
       try {
+        bump('geocode');
         const { results } = await fetchGeocode({
           key: config.amapKey,
           address,
@@ -201,6 +243,7 @@ export function createServer(config, deps = {}) {
 
     // ---- 调用上游 ----
     try {
+      bump('route'); /* 真正打到高德了才计数 */
       const { raw, originGcj, destinationGcj } = await fetchDrivingRoute({
         key: config.amapKey,
         origin,

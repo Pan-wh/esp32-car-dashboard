@@ -109,8 +109,14 @@ final class NavSession: ObservableObject {
     private let mapMoveThresholdM = 100.0
     /// 即使没怎么动，也至少这么久刷新一次（毫秒）
     private let mapRefreshIntervalMs: Int64 = 15000
-    /// 路线只发自车前方这么远的部分（设备窗口半径 500m，留些余量）
-    private let routeAheadM = 600.0
+    /**
+     * 路线只发自车前方这么远的部分。
+     *
+     * ⚠️ 必须**明显大于屏幕可见范围**（`NAV_MAP_VIEW_RADIUS_M` = 300m）：
+     * 否则白线会在屏幕中间就断掉，让人误以为"路就修到这儿"（实测反馈）。
+     * 取 2000m 可保证任何缩放/航向下都超出屏幕边缘，由设备自行裁掉多余部分。
+     */
+    private let routeAheadM = 2000.0
 
     /// 上次已发布的快照，用于"只有变化才赋值"
     private var lastPublished = NavSnapshot()

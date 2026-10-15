@@ -303,10 +303,27 @@ static void begin_window(void)
 static void end_window(void)
 {
     if (!s_building) return;
+    s_building = false;
+
+    /*
+     * 空窗口（一个要素都没有）视为**清除地图**，而不是"一张空白地图"。
+     *
+     * 为什么：手机停止导航时会发一对 `mw`+`me` 明确要求清空（见 NavSession.stop）。
+     * 若把空窗口当成有效地图，地图层会显示为一片纯黑，同时把导航指引挤到
+     * 紧凑布局 —— 用户看到的是"界面坏了"，而不是"回到了无地图状态"。
+     * 按"无地图"处理则会自动回退到原来的大字卡片，语义正确。
+     */
+    const bool empty = (s_build.n_roads == 0 && s_build.n_bldgs == 0 && s_build.n_route == 0);
+    if (empty) {
+        s_active_valid = false;
+        s_veh_set = false; /* 窗口没了，偏移失去参照系 */
+        s_drops++;         /* 计入"丢弃"便于诊断：这不是一次有效的窗口切换 */
+        return;
+    }
+
     s_active = s_build; /* 整体切换：结构赋值，约 2.7KB，主循环内可接受 */
     s_active_valid = true;
     s_active_ms = s_now_ms;
-    s_building = false;
     s_windows++;
 }
 

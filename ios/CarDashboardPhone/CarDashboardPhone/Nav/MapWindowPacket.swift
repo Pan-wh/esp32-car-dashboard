@@ -86,8 +86,13 @@ public enum MapWindowCodec {
     /// 这里留出余量；网关已把单条要素限制在 16 点（约 120 字节）。
     public static let maxMessageBytes = 180
 
-    /// 路线折线在设备侧的点数上限（与固件 `NAV_MAP_MAX_ROUTE_PTS` 一致）
-    public static let maxRoutePoints = 64
+    /**
+     * 路线折线在设备侧的点数上限（与固件 `NAV_MAP_MAX_ROUTE_PTS` 一致）。
+     *
+     * 2000m 前视距离 ÷ 96 点 ≈ 21m 一点：在 0.78 px/m 的缩放下约 16px 一段，
+     * 足够平滑，同时保证白线一定超出屏幕边缘。
+     */
+    public static let maxRoutePoints = 96
     /// 单条消息的点数上限（与固件 `NAV_MAP_PTS_PER_FEATURE` 一致）
     public static let maxPointsPerFeature = 16
 
