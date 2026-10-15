@@ -348,15 +348,15 @@ final class NavSession: ObservableObject {
             if let r = try? await GatewayClient.fetchRegeo(
                 gateway: gateway, token: token, positionWGS84: vehicleWGS84) {
                 await MainActor.run {
-                    let road = r.road.isEmpty ? r.address : r.road
-                    self?.currentRoadName = road.isEmpty ? nil : String(road.prefix(20))
+                    let t = r.displayText
+                    self?.currentRoadName = t.isEmpty ? nil : String(t.prefix(20))
                 }
             }
             /* 路况 */
             if let t = try? await GatewayClient.fetchTraffic(
                 gateway: gateway, token: token, positionWGS84: vehicleWGS84) {
                 await MainActor.run {
-                    if let sp = t.speedKmh {
+                    if let sp = t.averageSpeedKmh {
                         self?.trafficText = String(format: "%@（均速 %.0f km/h）", t.status, sp)
                     } else {
                         self?.trafficText = t.status
