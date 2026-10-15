@@ -116,7 +116,7 @@
   [nav-backend.md](nav-backend.md)
 - **状态（2026-10-13 更新）**：**已实现** —— 网关（[gateway/](../gateway/README.md)）
   与 iOS 导航核心均已落地，并用真实 Key 完成端到端验证；
-  ⬜ 仅剩 App 侧接入（需 iPhone）。详见 [test-results.md](test-results.md)。
+  ✅ **App 侧接入已于 2026-10-14 完成**（定位 → 导航核心 → BLE 下发仪表）。详见 [nav-backend.md](nav-backend.md) §3.4 与 [test-results.md](test-results.md)。
 
 ## D-009 参考项目只学设计、不复制代码
 
@@ -138,7 +138,7 @@
   1. **周边地图数据不走设备 SD 卡**。地图走"**手机/网关侧持有数据 → 只把当前位置
      附近约 500 米的几何窗口经 BLE 发给设备**"这条路线（阶段 1 用网关在线矢量瓦片；
      若日后需要离线，再做手机侧区域离线包）。
-  2. **设备 SD 卡（8GB，已实测可用）的用途是中文字模**、图片素材、行程日志等
+  2. **设备 SD 卡（实测 SDHC 7.3 GB，可用 5.74 GB）的用途是中文字模**、图片素材、行程日志等
      **设备本地资源**，而不是地图。
 - **决定性原因**：**本板无 GNSS**（`ESP32-S3-Touch-AMOLED-1.75`，非 `-G` 版），
   位置数据 **100% 来自 iPhone**（见 [hardware.md](hardware.md)）。

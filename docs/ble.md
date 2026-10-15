@@ -153,7 +153,9 @@ nav 1 2 500 68
 - 手机在**移动超过 100 米**、或距上次更新超过 **15 秒**、或路线重算后重新请求窗口
 - 设备把 `mw…me` 之间的消息**累积到"待用缓冲"**，收到 `me` 才整体切换 ——
   避免画面出现"画了一半"的中间态
-- **超时丢弃**：若 3 秒内没等到 `me`，丢弃本次累积（视为传输中断）
+- **超时丢弃**：`NAV_MAP_BUILD_TIMEOUT_MS = 5000`（5 秒）**内一条地图消息都没收到**才丢弃本次累积
+  （视为传输中断）。这是**「无消息」计时**：从**最后一条消息**重新起算，
+  **不是**从 `mw` 起算 —— 逐条应答的正常传输不会因窗口总量大而被误判
 - 窗口**过期**：超过 60 秒未更新则视为过期（手机断连 / 无网），此时隐藏地图层，
   保留路线与转向提示（那部分仍来自 `nav` 消息）
 
@@ -165,7 +167,7 @@ nav 1 2 500 68
 |----|------|
 | 背景道路 | 24 条 / 192 点 |
 | 建筑 | 16 栋 / 128 点 |
-| 路线折线 | 64 点（设备侧上限）|
+| 路线折线 | 96 点（设备侧上限）|
 
 ### 署名义务（必须保留）
 
@@ -202,7 +204,7 @@ swift tools/ble_command_test.swift '{"t":"mr","c":3,"p":[[0,0],[100,0],[100,100]
 - `course_deg` 地面行进方向 0..360（不是磁罗盘）；无有效值传 `null` 或缺省。
 - 经纬度/精度可为空（传 `null`），**不得伪装成 0**；缺省字段以 `has_*` 标志区分。
 - 缺省 `speed_valid`/`location_valid` 为 false（保守）。
-- 解析器 `simulator/ui/telemetry.{c,h}`（纯 C，46 项单测），只解析受控扁平 schema，不做通用 JSON。
+- 解析器 `simulator/ui/telemetry.{c,h}`（纯 C，107 项单测），只解析受控扁平 schema，不做通用 JSON。
 
 ## MTU 与分包
 
@@ -266,7 +268,7 @@ swift tools/ble_command_test.swift '{"t":"mr","c":3,"p":[[0,0],[100,0],[100,100]
 - `firmware/dashboard/ble_telemetry.{h,cpp}` —— BLE Peripheral + 重组 + 线程安全
 - `firmware/dashboard/dashboard.ino` —— `ble_poll()` / `ble_check_stale()` 装配
 - `tools/ble_client_test.swift` —— macOS BLE Central 测试客户端
-- `tests/test_telemetry.c` —— 46 项解析单测
+- `tests/test_telemetry.c` —— 107 项解析单测
 
 ## 设备控制（下行命令特征）
 
@@ -289,7 +291,19 @@ swift tools/ble_command_test.swift '{"t":"mr","c":3,"p":[[0,0],[100,0],[100,100]
 {"cmd":"rotate","value":90}        // 屏幕方向 0/90/180/270（度）
 {"cmd":"face_enabled","value":3,"on":0}   // 隐藏表盘 3（on 也接受 "on"/"off"）
 {"cmd":"face_enabled","value":3,"on":1}   // 启用表盘 3
+{"cmd":"demo_speed","value":45}           // 演示车速 45 km/h（App「模拟速度测试」滑块）
+{"cmd":"demo_speed","value":-1}           // 退出演示（value < 0 即退出）
 ```
+
+`demo_speed` 是**调试/演示**用途（无真实遥测时看动画），安全语义如下：
+
+| 项 | 行为 |
+|----|------|
+| 状态标识 | 仪表状态行显示 **`DEMO`**（琥珀色 `0xFFB020`），与真实数据的绿色 `LIVE` **明显区分** |
+| 收到真实遥测 | **固件自动退出演示**（不依赖 App 发 `-1`）—— 演示值让位给真实数据 |
+| BLE 断开 | **固件自动退出演示**（App 可能已经不在了）|
+
+> 这两条自动退出是**固件侧**的安全保证：否则命令一丢，演示速度就会在真正开车时继续显示。
 
 `face_enabled` 的两条**设备侧规则**（App 无需重复判断，但界面上要能解释）：
 
@@ -424,8 +438,13 @@ App 侧据此实现为：**能解析成完整 JSON 就用，解析失败就重�
 - **仅接受 90 的整数倍**；其它值（如 `45`）会被**明确拒绝**
   （固件统计里"拒绝"+1），不会静默转到意外方向
 - 超范围值按 `mod 360` 归一：`-90` → `270`，`450` → `90`
-- 实现：LVGL 软件旋转（`lv_disp_set_rotation`）。本屏为**圆形**，旋转后仍是
-  同一个圆，无长宽比/布局副作用；触摸坐标由 LVGL 自动逆变换
+- 实现：**90°/270° 走面板硬件旋转（CO5300 MADCTL）**，LVGL 保持 `LV_DISP_ROT_NONE`
+  （`set_display_rotation()` 写 `mad = (deg == 270) ? 0x60 : 0xA0`）；
+  **只有 0°/180° 用 LVGL 软件旋转**（`lv_disp_set_rotation`）
+- 本屏为**圆形**，旋转后仍是同一个圆，无长宽比/布局副作用
+- 触摸坐标**由固件自己在采样层补偿**（`touch_apply_rot()`），
+  **不是** LVGL 自动逆变换 —— 这样 LVGL indev 与 flick 手势判定都自动正确
+- 取舍与真机数据见 [rotation-hardware-vs-software.md](rotation-hardware-vs-software.md)
 - **方向持久化到仪表 NVS，重启后保持**
 - 开销：0° 无开销；180° 约 +13ms；90°/270° 约 +20ms（整屏重绘时）。
   详见 [`troubleshooting.md`](troubleshooting.md#2026-10-13-屏幕旋转可行更正-2026-10-11-的错误结论)
@@ -439,6 +458,8 @@ App 侧据此实现为：**能解析成完整 JSON 就用，解析失败就重�
 | 0 | `analog` | 模拟指针时钟（烘焙表盘 + 三针）|
 | 1 | `digital` | 数字时钟（138px 时间 + 日期 + 同步状态）|
 | 2 | `speed` | 速度表（烘焙表盘 + 插画 + 指针 + 航向/行程 HUD）|
+| 3 | `color` | 多彩时钟（Apple StandBy 风格四位数字 + 彩色字位）|
+| 4 | `nav` | 导航卡片（转向提示 + 地图窗口）|
 
 注册顺序即 id 顺序，也与 `ui_page_t` 一一对应。新增表盘只需在
 `ui_pages_init()` 里多注册一项（例如功能②的「图片背景 + 时钟」），
@@ -467,4 +488,4 @@ screen on       亮屏
 ble             查看控制命令统计（成功/拒绝次数）
 ```
 
-解析层是纯 C（`simulator/ui/control.c`），带 28 项单元测试（`tests/test_control.c`）。
+解析层是纯 C（`simulator/ui/control.c`），带 58 项单元测试（`tests/test_control.c`）。

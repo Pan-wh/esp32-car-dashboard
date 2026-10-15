@@ -241,7 +241,7 @@ handle(fix:nowMs:) -> NavOutcome { snapshot, commands }
 
 **网关职责**：接收 App 请求 → 附加 Key → 调高德 → 转换坐标 → 返回精简 RouteBundle。
 
-> ✅ **本项已实现**：代码在 [`gateway/`](../gateway/README.md)（Node，**零依赖**）。
+> ✅ **本项已实现**：代码在 [`gateway/`](../gateway/README.md)（Node ≥ 18，**2 个依赖** `@mapbox/vector-tile` + `pbf`，需 `npm install`）。
 > 已含坐标转换、高德客户端、响应归一化、认证、限流、无缓存。
 > 下面保留设计说明作为验收对照；具体用法见 gateway README。
 
@@ -269,8 +269,10 @@ handle(fix:nowMs:) -> NavOutcome { snapshot, commands }
 **环境变量（Key 绝不入库、绝不进 App）**：
 
 ```bash
-AMAP_KEY=你的Web服务Key          # 只存在于服务端环境变量
-PORT=8080
+AMAP_KEY=你的Web服务Key          # 只存在于服务端环境变量（必填）
+GATEWAY_TOKEN=自己生成的UUID      # 必填；缺失即启动失败。App 用它做 Bearer 认证
+PORT=8080                        # 可选，默认 8080
+HOST=127.0.0.1                   # 可选，默认只回环。**要让手机访问必须设 0.0.0.0**
 ALLOWED_ORIGIN=                 # 空表示不启用 CORS（见 §3.5）
 RATE_LIMIT_PER_MIN=60           # 按自用规模设置
 ```
@@ -456,10 +458,10 @@ curl -s http://127.0.0.1:8080/health
 
 ## 五、后续开发任务
 
-> 用户 2026-10-14 提出。**§5.3 地图界面已实现（代码完成、模拟器已验证），
-> 待真机联调**；§5.1 路显仍是待办。
+> 用户 2026-10-14 提出。**§5.3 地图界面已于 2026-10-15 真机验证通过**；
+> §5.1 路显仍是待办。
 
-### 5.3 地图导航界面（参考项目那种）✅ 代码完成，待真机验证
+### 5.3 地图导航界面（参考项目那种）✅ 已真机验证
 
 **目标**：深色底图 + 灰色路网/建筑 + 白色路线 + 固定车头箭头 + 航向朝上。
 
@@ -546,8 +548,9 @@ curl -s http://127.0.0.1:8080/health
 
 ### 5.4 路线方案选择与目的地搜索（✅ 2026-10-15 实现）
 
-**背景**：网关已有 6 个端点（`/routes`、`/tips`、`/around`、`/regeo`、`/traffic`、
-`/bicycling`），App 侧本轮接入了其中 5 个（骑行暂未用）。
+**背景**：网关端点共 9 个（权威清单见 `gateway/src/server.js` 的 `KNOWN_PATHS`：
+`/route`、`/routes`、`/geocode`、`/regeo`、`/traffic`、`/around`、`/tips`、
+`/bicycling`、`/mapwindow`），App 侧本轮接入了其中 5 个（骑行暂未用）。
 
 #### `/routes` —— 多方案路线（**端点存在的原因值得记住**）
 
@@ -603,7 +606,9 @@ arduino-cli compile --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=ap
   --libraries reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/libraries firmware/dashboard
 arduino-cli upload -p /dev/cu.usbmodem101 --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" firmware/dashboard
 
-# 2. 启动网关（手机要能访问，注意是局域网 IP）
+# 2. 启动网关（手机要能访问）
+#    ⚠️ 网关默认 HOST=127.0.0.1 = 只回环，**手机/局域网访问不到**。
+#       要让手机连上，必须在 gateway/.env 里显式设 HOST=0.0.0.0 后重启网关。
 cd gateway && npm start
 curl -s http://<你的Mac IP>:8080/health     # 应返回 {"ok":true,"hasKey":true}
 
@@ -644,7 +649,7 @@ xcrun devicectl device install app --device <设备UDID> /tmp/dd/Build/Products/
 | 重算灵敏度 | 同文件的 `NAV_MAP_REDRAW_DEG` / `NAV_MAP_REDRAW_M` |
 | 配色/线宽 | `simulator/ui/ui_nav_map.c` 顶部的 `MAP_COLOR_*` 与 `road_width()` |
 | 窗口半径 | App `NavSession.mapMoveThresholdM` / 网关 `radiusM`（上限 1500）|
-| 路线前视距离 | App `NavSession.routeAheadM`（默认 600m）|
+| 路线前视距离 | App `NavSession.routeAheadM`（默认 **2000m**）|
 
 > ⚠️ 改 `simulator/ui/` 下任何文件后**必须先 `tools/sync_firmware.sh`** 再编译固件
 > —— `simulator/ui/` 是唯一真源，固件目录是同步产物。

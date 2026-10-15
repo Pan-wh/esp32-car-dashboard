@@ -41,11 +41,11 @@
 - [x] **阶段2 时间同步**：BLE `ts_utc_ms` → 系统时钟 + PCF85063 RTC（UTC+8），屏幕 `TIME SYNC→SYNCED`
 - [x] **阶段3 iPhone 前台 App**：`ios/CarDashboardPhone/`（SwiftUI + Core Location + Core Bluetooth）；
       已生成 `.xcodeproj`；**已在 iPhone 12（iOS 27）真机安装运行**，BLE 连接与遥测链路验证通过
-- [x] **阶段4 后台代码**：`requestBackground()`（始终授权 + 后台定位，`#if os(iOS)` 门控）；未实机验证
+- [x] **阶段 4 后台驾驶会话**：`requestBackground()`（始终授权 + 后台定位，`#if os(iOS)` 门控）；**已真机验证**（后台 / 锁屏均持续 2Hz）
 - [x] **阶段5（部分）**：速度页五态 `BT OFF / WAIT GPS / NO FIX / STALE / LIVE`（真机逐态实测）；
       固件连续运行 21min+ 无崩溃、空闲堆平稳
 - [x] **真机运行 iPhone App**（iPhone 12 / iOS 27，签名与安装通过）
-- [ ] 后台 / 锁屏 / 30min 整链路验收（任务书 §9，需实机驾驶，见 `docs/test-results.md`）
+- [x] 后台 / 锁屏 / 整链路验收（任务书 §9 测试矩阵 **12/12 通过**、DoD **8/8**，见 `docs/test-results.md`）
 - [x] 设备控制（亮度/息屏）+ 可更换表盘系统（BLE 端到端验证通过）
 - [x] 航向显示 + 行程统计（里程/最高速/均速）
 
@@ -59,7 +59,7 @@ esp32-car-dashboard/
 ├── design/              # 线框图与设计资源（含许可说明）
 ├── firmware/dashboard/  # 实际固件工程（Arduino）
 ├── ios/                 # iPhone App（Swift/SwiftUI）
-├── gateway/             # 导航网关（Node，零依赖）：代理高德，Key 只在服务端
+├── gateway/             # 导航网关（Node ≥18，2 个依赖）：代理高德，Key 只在服务端
 ├── reference/           # 微雪官方仓库（gitignore，按需克隆，独立参考依赖）
 ├── tests/               # 可自动化测试（统一入口：make run）
 └── tools/               # 辅助脚本
@@ -98,4 +98,4 @@ esp32-car-dashboard/
 | 息屏 / 亮屏 | BLE `{"cmd":"screen","value":"off"\|"on"}` / 串口 `screen on\|off` | 仅关显示，触摸仍可唤醒（由固件决定）|
 | 航向显示 | 遥测 `course_deg` 自动驱动 | 速度页底部显示「NE 45°」（选在指针扫不到的扇区）|
 | 行程统计 | 串口 `trip` / `trip reset` | 里程、最高速、加权均速；**仅链路 LIVE 且速度有效时累积**（失效不计入）|
-| 表盘切换 | BLE `{"cmd":"face","value":N}` | 命令通路已就绪，多表盘实现中（功能③）|
+| 表盘切换 | BLE `{"cmd":"face","value":N}` | ✅ **5 个表盘已实现**（模拟/数字/速度/多彩/导航），可滑动或远程切换 |

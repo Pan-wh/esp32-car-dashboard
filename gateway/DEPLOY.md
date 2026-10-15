@@ -423,8 +423,16 @@ authorization: Bearer <GATEWAY_TOKEN>
 | `POST` | `/bicycling` | 骑行路线规划 | ✅ |
 | `POST` | `/mapwindow` | 周边地图窗口（路网几何） | ❌ 走 OSM |
 
-> **所有接口的入参与返回坐标一律 WGS84** —— 网关内部负责往返 GCJ-02 转换，
-> 调用方不需要知道 GCJ-02 的存在。
+> **入参一律 WGS84** —— 网关内部负责转 GCJ-02，调用方不需要知道 GCJ-02 的存在。
+>
+> ⚠️ **返回坐标的坐标系数不统一**（这是历史原因，调用方必须知道）：
+>
+> | 接口 | 返回的坐标 |
+> |------|-----------|
+> | `/route`、`/routes`、`/bicycling` | **GCJ-02**（`origin`/`destination`/`polyline` 都是）|
+> | `/regeo`、`/traffic`、`/around`、`/tips`、`/mapwindow` | **WGS84** |
+>
+> `/mapwindow` 另外会在顶层给出 `crs: "GCJ-02"` 与 `centerGcj` 供交叉核对。
 
 ### 认证与错误码
 
@@ -434,7 +442,7 @@ authorization: Bearer <GATEWAY_TOKEN>
 | 400 | `invalid_coordinates` | 缺坐标或格式不对（响应里的 `expect` 会说明期望字段） |
 | 429 | `rate_limited` | 超过 `RATE_LIMIT_PER_MIN` |
 | 502 | `amap_error` | 高德返回业务错误（响应带 `info` / `infocode` 便于排查） |
-| 504 | `upstream_timeout` | 请求高德超时（可调 `UPSTREAM_TIMEOUT_MS`） |
+| 502 | `upstream_failed` | 请求高德超时 / 网络失败（**超时也走 502**，不单列 504）。可调 `UPSTREAM_TIMEOUT_MS`；`VERBOSE_ERRORS=1` 时带细节 |
 
 ### `/health` 的返回
 
