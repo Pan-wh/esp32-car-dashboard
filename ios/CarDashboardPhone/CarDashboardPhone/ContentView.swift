@@ -70,6 +70,14 @@ struct ContentView: View {
     @State private var navCandidates: [GeocodeResult] = []
     /// 是否正在查询地名（禁用按钮、显示进度）
     @State private var navLookingUp = false
+    /* ---- 网关新增能力（2026-10-15）---- */
+    /// 输入提示候选（边打字边给）
+    @State private var navTips: [PlaceSuggestion] = []
+    /// 输入提示的防抖任务（连打字时不要每次都请求）
+    @State private var navTipsTask: Task<Void, Never>?
+    /// 周边搜索结果
+    @State private var navNearby: [PlaceSuggestion] = []
+    @State private var navNearbyQuery = ""
     /// 「开始导航」是否**顺带**启动了驾驶（连蓝牙 + 定位 + 遥测）。
     /// 记住它是为了停止导航时能对称收尾：若驾驶本来是用户自己开的，就不要替他关掉。
     @State private var navStartedDriving = false
@@ -262,11 +270,35 @@ struct ContentView: View {
                 Section {
                     TextField("地名（中文）或 纬度,经度", text: $navDestination)
                         .autocorrectionDisabled()
+                        /*
+                         * 输入提示：边打字边向网关 /tips 查询候选。
+                         * 用 300ms 防抖 —— 连打字时每个字符都请求会既慢又浪费额度。
+                         */
+                        .onChange(of: navDestination) { _, v in
+                            scheduleTips(for: v)
+                        }
+                    if !navTips.isEmpty {
+                        ForEach(navTips) { t in
+                            Button {
+                                navTips = []
+                                navDestination = t.name
+                                navCandidates = []
+                                Task { await loadCandidates(for: t.geo, name: t.name) }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(t.name).font(.subheadline)
+                                    if !t.address.isEmpty {
+                                        Text(t.address).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if !navCandidates.isEmpty {
                         // 地名可能命中多个（如"外滩"在多个城市）→ 让用户选
                         ForEach(navCandidates) { c in
                             Button {
-                                beginNavigation(destination: c.geo, name: c.name)
+                                Task { await loadCandidates(for: c.geo, name: c.name) }
                             } label: {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(c.name).font(.subheadline)
@@ -282,7 +314,81 @@ struct ContentView: View {
                 } header: {
                     Text("目的地")
                 } footer: {
-                    Text("两种都支持：\n• 中文地名，如「北京南站」—— 会向网关查询坐标\n• 经纬度，如 39.9087,116.3974（**WGS84**）\n\n查询到的坐标由网关转成高德的 GCJ-02，无需你操心。")
+                    Text("两种都支持：\n• 中文地名 —— 打字时给出候选（网关 /tips）\n• 经纬度，如 39.9087,116.3974（**WGS84**）\n\n选定后会自动查「路线方案」让你挑。")
+                }
+
+                // ── 路线方案（多方案选路）────────────────────
+                if session.nav.candidatesLoading || !session.nav.routeCandidates.isEmpty {
+                    Section {
+                        if session.nav.candidatesLoading {
+                            HStack { ProgressView(); Text("正在取路线方案…") }
+                        }
+                        ForEach(session.nav.routeCandidates) { c in
+                            Button {
+                                session.nav.start(with: c)
+                                navStartedDriving = true
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(c.label).font(.subheadline)
+                                        Text(Self.fmtDistance(c.distanceM))
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(Self.fmtDuration(c.durationS))
+                                        .font(.callout).monospacedDigit()
+                                    if session.nav.activeCandidateId == c.strategy {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                    }
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("路线方案")
+                    } footer: {
+                        Text("来自网关 /routes：用「速度优先 / 距离最短 / 不走高速」三个策略各取一条并去重，**一次请求**就拿到真正不同的几条路，选完直接开跑（不再请求网关）。")
+                    }
+                }
+
+                // ── 周边搜索 ─────────────────────────────────
+                Section {
+                    HStack {
+                        TextField("如 加油站 / 停车场", text: $navNearbyQuery)
+                            .autocorrectionDisabled()
+                        Button("搜索") { Task { await searchNearby() } }
+                            .disabled(navNearbyQuery.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    ForEach(navNearby) { p in
+                        Button {
+                            navNearby = []
+                            navDestination = p.name
+                            Task { await loadCandidates(for: p.geo, name: p.name) }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(p.name).font(.subheadline)
+                                if !p.address.isEmpty {
+                                    Text(p.address).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("周边搜索")
+                } footer: {
+                    Text("在当前位置附近按关键词找地点（网关 /around），选中后同样会查路线方案。")
+                }
+
+                // ── 当前道路 / 路况 ───────────────────────────
+                if session.nav.currentRoadName != nil || session.nav.trafficText != nil {
+                    Section("当前道路 / 路况") {
+                        if let r = session.nav.currentRoadName {
+                            Label(r, systemImage: "road.lanes")
+                        }
+                        if let t = session.nav.trafficText {
+                            Label(t, systemImage: "car.2")
+                        }
+                    }
                 }
 
                 // ── 开始 / 停止 ──────────────────────────────
@@ -358,6 +464,67 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - 网关新增能力的辅助（2026-10-15）
+
+    /// 输入提示的防抖调度：取消上一个任务，300ms 后再查。
+    private func scheduleTips(for text: String) {
+        navTipsTask?.cancel()
+        let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        /* 太短不查（一个字符的结果噪音太大），纯坐标也不查 */
+        guard q.count >= 2, !q.contains(",") else {
+            navTips = []
+            return
+        }
+        navTipsTask = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if Task.isCancelled { return }
+            guard session.nav.isConfigured else { return }
+            let list = (try? await GatewayClient.fetchInputTips(
+                gateway: navGateway, token: navToken, keywords: q,
+                near: nil)) ?? []
+            if Task.isCancelled { return }
+            await MainActor.run { navTips = list }
+        }
+    }
+
+    /// 取多方案路线（成功后由界面上的「路线方案」区展示）
+    private func loadCandidates(for destination: GeoPoint, name: String) async {
+        navInputError = nil
+        navCandidates = []
+        navTips = []
+        navDestination = name
+        session.nav.configure(gateway: navGateway, token: navToken)
+        let n = await session.nav.loadRouteCandidates(destinationWGS84: destination)
+        if n == 0, let e = session.nav.lastError {
+            navInputError = e
+        }
+    }
+
+    /// 周边搜索（/around）
+    private func searchNearby() async {
+        let q = navNearbyQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        session.nav.configure(gateway: navGateway, token: navToken)
+        do {
+            navNearby = try await GatewayClient.fetchAround(
+                gateway: navGateway, token: navToken, keywords: q,
+                near: session.nav.currentPositionWGS84)
+            navInputError = navNearby.isEmpty ? "附近没找到「\(q)」" : nil
+        } catch {
+            navInputError = "周边搜索失败：\(error)"
+        }
+    }
+
+    /// 距离/耗时格式化（列表里要紧凑）
+    static func fmtDistance(_ m: Double) -> String {
+        m >= 1000 ? String(format: "%.1f km", m / 1000) : String(format: "%.0f m", m)
+    }
+    static func fmtDuration(_ s: Double) -> String {
+        let min = Int(s / 60)
+        if min >= 60 { return "\(min / 60) 小时 \(min % 60) 分" }
+        return "\(min) 分钟"
+    }
+
     /// 开始导航。
     ///
     /// ⚠️ 「开始导航」**等同于「开始驾驶」**：导航需要定位，而定位与 BLE 连接
@@ -398,8 +565,9 @@ struct ContentView: View {
         let parts = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         if parts.count == 2, let lat = Double(parts[0]), let lon = Double(parts[1]),
            (-90...90).contains(lat), (-180...180).contains(lon) {
-            beginNavigation(destination: GeoPoint(lon: lon, lat: lat),
-                            name: String(format: "%.5f,%.5f", lat, lon))
+            /* 坐标直填：跳过地名查询，直接取路线方案 */
+            Task { await loadCandidates(for: GeoPoint(lon: lon, lat: lat),
+                                        name: String(format: "%.5f,%.5f", lat, lon)) }
             return
         }
 
@@ -415,7 +583,7 @@ struct ContentView: View {
                 if rs.isEmpty {
                     navInputError = "没找到「\(text)」。换个说法，或直接填「纬度,经度」。"
                 } else if rs.count == 1 {
-                    beginNavigation(destination: rs[0].geo, name: rs[0].name)
+                    await loadCandidates(for: rs[0].geo, name: rs[0].name)
                 } else {
                     navCandidates = rs // 多个候选 → 界面列出让用户点选
                 }

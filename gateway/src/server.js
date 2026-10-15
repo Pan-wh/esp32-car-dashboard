@@ -32,7 +32,7 @@ import {
   fetchBicyclingRoute,
 } from './amap.js';
 import { fetchMapWindow } from './mapwindow.js';
-import { normalizeRoute, normalizeBicycling, AmapError } from './normalize.js';
+import { normalizeRoute, mergeRouteCandidates, normalizeBicycling, AmapError } from './normalize.js';
 import { validLonLat } from './coords.js';
 
 const MAX_BODY_BYTES = 8 * 1024; // 请求体上限：本接口只需两个坐标
@@ -50,6 +50,7 @@ const KNOWN_PATHS = new Set([
   '/around',
   '/tips',
   '/bicycling',
+  '/routes',
 ]);
 
 /** 简易滑窗限流（单进程内存态；自用规模足够） */
@@ -437,6 +438,65 @@ export function createServer(config, deps = {}) {
       }
     }
 
+    // ---- 多方案路线：用几个策略各取一条，去重后一次返回（见 /routes 的说明）----
+    if (url.pathname === '/routes') {
+      const origin = body.origin;
+      const destination = body.destination;
+      if (!validLonLat(origin) || !validLonLat(destination)) {
+        return sendJson(res, 400, {
+          error: 'invalid_coordinates',
+          expect: { origin: '{lon,lat}', destination: '{lon,lat}', note: 'WGS84 坐标' },
+        });
+      }
+      /*
+       * 策略选择：只取**实测有效**且**确实会给出不同路线**的三个。
+       * ⚠️ 高德对单账号有 QPS 限制（实测快速连打会返回
+       *    10021 CUQPS_HAS_EXCEEDED_THE_LIMIT），所以这里**串行**请求、
+       *    并在两次之间留出间隔；数量也刻意压到 3 个。
+       */
+      const STRATEGIES = [0 /* 速度优先 */, 2 /* 距离最短 */, 6 /* 不走高速 */];
+      const results = [];
+      try {
+        for (let k = 0; k < STRATEGIES.length; k++) {
+          if (k > 0) await new Promise((r) => setTimeout(r, 350)); /* 拉开 QPS */
+          const st = STRATEGIES[k];
+          try {
+            bump('route');
+            const { raw, originGcj, destinationGcj } = await fetchDrivingRoute({
+              key: config.amapKey, origin, destination, strategy: st,
+              timeoutMs: config.upstreamTimeoutMs, fetchImpl,
+            });
+            results.push({
+              strategy: st,
+              path: normalizeRoute(raw, { origin: originGcj, destination: destinationGcj }),
+            });
+          } catch (e) {
+            /* 单个策略失败（如权限不足 / QPS）不应让整个选路失败 ——
+               有几个成功的就给几个，全失败才报错。 */
+            log(`[多方案] 策略 ${st} 失败：${redact(e?.message ?? String(e), secrets)}`);
+          }
+        }
+      } catch (e) {
+        return sendUpstreamError(res, e);
+      }
+
+      const candidates = mergeRouteCandidates(results);
+      if (candidates.length === 0) {
+        return sendJson(res, 502, {
+          error: 'no_route_candidate',
+          hint: '所有策略都未取到路线（可能配额/QPS 受限或起终点不可达）',
+        });
+      }
+      return sendJson(res, 200, {
+        origin: results[0]?.path?.origin ?? null,
+        destination: results[0]?.path?.destination ?? null,
+        candidates,
+        /** 实际尝试了几个策略、成功几个（诊断用）*/
+        triedStrategies: STRATEGIES,
+        okStrategies: results.map((r) => r.strategy),
+      });
+    }
+
     const origin = body.origin;
     const destination = body.destination;
     if (!validLonLat(origin) || !validLonLat(destination)) {
@@ -463,6 +523,9 @@ export function createServer(config, deps = {}) {
         origin: originGcj,
         destination: destinationGcj,
         routeId: typeof body.routeId === 'string' ? body.routeId : null,
+        /* 选第几条候选（0 = 第一条）。越界自动回落到 0，不报错 ——
+           "换一条"点到头时应该只是原地不动，而不是整个导航失败。 */
+        pathIndex: Number.isInteger(body.pathIndex) ? body.pathIndex : 0,
       });
 
       return sendJson(res, 200, bundle);

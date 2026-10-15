@@ -164,7 +164,20 @@ export function normalizeRoute(json, meta = {}) {
     throw new AmapError('响应中没有可用路径（paths 为空）', json.infocode, json);
   }
 
-  const first = normalizePath(paths[0], 0);
+  /*
+   * 把所有候选路径都归一化。
+   *
+   * 为什么要一次全返回：用户"选路线"若需要第二次请求，就会**多消耗一次
+   * 高德额度**，而且要多等一个来回。高德一次请求本来就把所有 paths 都给了，
+   * 这里只是把它透出来 —— 手机端因此可以在**一次请求**内完成"列方案 + 选定"。
+   *
+   * 代价是响应体变大（每条路径都带完整折线）。自用规模下完全可接受。
+   */
+  const all = paths.map((p, i) => normalizePath(p, i));
+
+  const idx = Number.isInteger(meta.pathIndex) && meta.pathIndex >= 0
+                  && meta.pathIndex < all.length ? meta.pathIndex : 0;
+  const first = all[idx];
 
   if (first.polyline.length === 0 && first.steps.length === 0) {
     throw new AmapError('路径既无折线也无步骤，视为无效', json.infocode, json);
@@ -172,15 +185,70 @@ export function normalizeRoute(json, meta = {}) {
 
   return {
     routeId: meta.routeId ?? null,
+    /** 本响应顶层这一条是**第几条**候选（手机端据此高亮）*/
+    pathIndex: idx,
     distanceM: first.distanceM,
     durationS: first.durationS,
     origin: meta.origin ?? null,
     destination: meta.destination ?? null,
     steps: first.steps,
     polyline: first.polyline,
-    // 备用路线数量（手机端可提供"换一条"）
-    alternativeCount: paths.length - 1,
+    /** 候选总数（含顶层这条）*/
+    pathCount: all.length,
+    /** 备用路线数量（保留旧字段，语义不变）*/
+    alternativeCount: all.length - 1,
+    /**
+     * 其余候选（**不含**顶层这条，避免重复传输）。
+     * 每项与顶层同构（index/distanceM/durationS/steps/polyline），
+     * 并额外带 `index` 标明它在高德 paths[] 中的原始下标。
+     */
+    alternatives: all
+      .map((p, i) => ({ index: i, distanceM: p.distanceM, durationS: p.durationS,
+                        steps: p.steps, polyline: p.polyline }))
+      .filter((p) => p.index !== idx),
   };
+}
+
+/**
+ * 从**多次策略请求**的结果里挑出互不相同的候选路线。
+ *
+ * ## 为什么需要它
+ *
+ * 高德 v3 驾车 API 一次**只返回 1 条**路径（实测 strategy 0/1/2/6/8/35/36/37
+ * 全是 `route.paths.length === 1`），所以"多方案对比"不能靠它一次给。
+ * 但**换 strategy 会得到真正不同的路线**（实测：速度优先 16847m/2350s、
+ * 距离优先 15173m/2832s、策略 6 为 16056m/2362s）。
+ *
+ * 因此做法是：网关用几个策略各请求一次，再把结果**按距离+耗时去重**后返回 ——
+ * 很多策略给出的其实是同一条路（实测 0/1/8/35/36/37 完全一样），
+ * 不去重的话用户会看到三条一模一样的"选项"。
+ *
+ * @param {Array<{strategy:number, path:object|null}>} results
+ * @returns {Array<{strategy:number, distanceM:number, durationS:number,
+ *                  steps:Array, polyline:Array}>}
+ */
+export function mergeRouteCandidates(results) {
+  const seen = new Set();
+  const out = [];
+  for (const r of results) {
+    if (!r || !r.path) continue;
+    const p = r.path;
+    if (!Array.isArray(p.polyline) || p.polyline.length < 2) continue;
+    /* 去重键：距离 + 耗时。同一条路在不同策略下这两个值完全相同。 */
+    const key = `${p.distanceM}|${p.durationS}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      strategy: r.strategy,
+      distanceM: p.distanceM,
+      durationS: p.durationS,
+      steps: p.steps,
+      polyline: p.polyline,
+    });
+  }
+  /* 按耗时排序：用户最关心"哪条更快" */
+  out.sort((a, b) => a.durationS - b.durationS);
+  return out;
 }
 
 /**
