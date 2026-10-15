@@ -46,6 +46,39 @@ public struct RouteBundle: Codable {
     public let steps: [RouteBundleStep]
     public let polyline: [RouteBundlePoint]
     public let alternativeCount: Int?
+    /// 顶层这条是第几条候选（网关 `/routes` 才有意义）
+    public let pathIndex: Int?
+    /// 候选总数
+    public let pathCount: Int?
+
+    /**
+     显式初始化。
+
+     为什么要它：`RouteBundle` 全是 `let`，默认的 memberwise init 是 internal 且
+     参数必须写全 8 个 —— 从"候选路线"构造时（`RouteCandidate.toBundle()`）
+     既啰嗦又容易被字段增删改坏。这里给全默认值，只写关心的字段。
+     */
+    public init(routeId: String? = nil,
+                distanceM: Double? = nil,
+                durationS: Double? = nil,
+                origin: RouteBundlePoint? = nil,
+                destination: RouteBundlePoint? = nil,
+                steps: [RouteBundleStep] = [],
+                polyline: [RouteBundlePoint] = [],
+                alternativeCount: Int? = nil,
+                pathIndex: Int? = nil,
+                pathCount: Int? = nil) {
+        self.routeId = routeId
+        self.distanceM = distanceM
+        self.durationS = durationS
+        self.origin = origin
+        self.destination = destination
+        self.steps = steps
+        self.polyline = polyline
+        self.alternativeCount = alternativeCount
+        self.pathIndex = pathIndex
+        self.pathCount = pathCount
+    }
 
     /// 转换为导航核心使用的 NavRoute。
     ///
@@ -242,6 +275,246 @@ public extension GatewayClient {
         } catch {
             throw GatewayError.decode("\(error)")
         }
+    }
+}
+
+// MARK: - 路线候选（多方案选择）
+
+/// 一条候选路线（与网关 `/routes` 的 `candidates[]` 对应）
+public struct RouteCandidate: Codable, Identifiable, Sendable {
+    /// 高德策略号（0 速度优先 / 2 距离最短 / 6 不走高速）
+    public let strategy: Int
+    public let distanceM: Double
+    public let durationS: Double
+    public let steps: [RouteBundleStep]
+    public let polyline: [RouteBundlePoint]
+
+    public var id: Int { strategy }
+
+    /// 策略的中文说明（UI 显示用）
+    public var label: String {
+        switch strategy {
+        case 0: return "速度优先"
+        case 2: return "距离最短"
+        case 6: return "不走高速"
+        default: return "方案 \(strategy)"
+        }
+    }
+
+    /// 转成 RouteBundle，便于复用既有的 toNavRoute()
+    public func toBundle() -> RouteBundle {
+        RouteBundle(distanceM: distanceM, durationS: durationS,
+                    steps: steps, polyline: polyline)
+    }
+}
+
+private struct RoutesResponse: Codable {
+    let candidates: [RouteCandidate]
+}
+
+public extension GatewayClient {
+    /**
+     取**多方案**路线（一次请求拿到若干条真正不同的路）。
+
+     ## 为什么需要单独一个端点
+
+     高德 v3 驾车 API **一次只返回 1 条**路径（实测 strategy 0/1/2/6/8/35/36/37
+     全是 `paths.length == 1`），所以"多方案对比"没法靠它一次给。
+     但**换 strategy 会得到真正不同的路线** —— 于是网关用几个策略各取一次、
+     按"距离+耗时"去重后合并返回。**一次 App 请求 = 网关上 3 次高德请求**，
+     换来的是"真正可选的多条路 + 不需要二次请求"。
+
+     - Throws: 网络/解码错误。**所有策略都失败**时抛 `.transport`。
+     */
+    static func fetchRouteCandidates(gateway: String,
+                                     token: String,
+                                     originWGS84: GeoPoint,
+                                     destinationWGS84: GeoPoint,
+                                     timeoutSec: Double = 25) async throws -> [RouteCandidate] {
+        guard let url = URL(string: gateway.hasSuffix("/") ? gateway + "routes" : gateway + "/routes") else {
+            throw GatewayError.badURL(gateway)
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
+        /* 网关要串行请求 3 个策略并留间隔（避开高德 QPS），超时给足 */
+        req.timeoutInterval = timeoutSec
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "origin": ["lon": originWGS84.lon, "lat": originWGS84.lat],
+            "destination": ["lon": destinationWGS84.lon, "lat": destinationWGS84.lat],
+        ])
+
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else {
+            let detail = String(data: data, encoding: .utf8) ?? ""
+            throw GatewayError.transport("HTTP \(code)：\(detail.prefix(300))")
+        }
+        do {
+            return try JSONDecoder().decode(RoutesResponse.self, from: data).candidates
+        } catch {
+            throw GatewayError.decode("\(error)")
+        }
+    }
+}
+
+// MARK: - 目的地搜索（输入提示 / 周边搜索）
+
+/// 一条地点候选（`/tips` 与 `/around` 共用）
+public struct PlaceSuggestion: Codable, Identifiable, Sendable {
+    public let name: String
+    public let address: String
+    public let lon: Double
+    public let lat: Double
+
+    public var id: String { "\(name)|\(lon)|\(lat)" }
+    public var geo: GeoPoint { GeoPoint(lon: lon, lat: lat) }
+}
+
+private struct PlacesResponse: Codable {
+    let places: [PlaceSuggestion]
+}
+
+public extension GatewayClient {
+    /**
+     输入提示：边打字边给候选（比"打完再查"体验好得多）。
+
+     - Returns: 候选列表（可能为空，表示没有匹配）。
+     */
+    static func fetchInputTips(gateway: String,
+                               token: String,
+                               keywords: String,
+                               city: String = "",
+                               near: GeoPoint? = nil,
+                               timeoutSec: Double = 10) async throws -> [PlaceSuggestion] {
+        try await postPlaces(path: "tips", gateway: gateway, token: token,
+                             body: {
+                                 var b: [String: Any] = ["keywords": keywords]
+                                 if !city.isEmpty { b["city"] = city }
+                                 if let n = near { b["location"] = ["lon": n.lon, "lat": n.lat] }
+                                 return b
+                             }(), timeoutSec: timeoutSec)
+    }
+
+    /**
+     周边搜索：按关键词在城市/坐标附近找地点（如"加油站""停车场"）。
+     */
+    static func fetchAround(gateway: String,
+                            token: String,
+                            keywords: String,
+                            near: GeoPoint? = nil,
+                            radiusM: Double = 3000,
+                            timeoutSec: Double = 12) async throws -> [PlaceSuggestion] {
+        try await postPlaces(path: "around", gateway: gateway, token: token,
+                             body: {
+                                 var b: [String: Any] = ["keywords": keywords, "radius": radiusM]
+                                 if let n = near { b["location"] = ["lon": n.lon, "lat": n.lat] }
+                                 return b
+                             }(), timeoutSec: timeoutSec)
+    }
+
+    /// `/tips` 与 `/around` 的公共 POST 逻辑（两者响应形状一致）
+    private static func postPlaces(path: String,
+                                   gateway: String,
+                                   token: String,
+                                   body: [String: Any],
+                                   timeoutSec: Double) async throws -> [PlaceSuggestion] {
+        guard let url = URL(string: gateway.hasSuffix("/") ? gateway + path : gateway + "/" + path) else {
+            throw GatewayError.badURL(gateway)
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
+        req.timeoutInterval = timeoutSec
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else {
+            let detail = String(data: data, encoding: .utf8) ?? ""
+            throw GatewayError.transport("HTTP \(code)：\(detail.prefix(300))")
+        }
+        do {
+            return try JSONDecoder().decode(PlacesResponse.self, from: data).places
+        } catch {
+            throw GatewayError.decode("\(error)")
+        }
+    }
+}
+
+// MARK: - 逆地理编码 / 路况
+
+/// 逆地理编码结果（坐标 → 可读地址，用于显示"当前所在道路"）
+public struct ReverseGeocodeResult: Codable, Sendable {
+    public let address: String
+    /// 所在道路名（可能为空）
+    public let road: String
+    /// 结构化地址组分（省/市/区/街道…）
+    public let components: [String: String]?
+
+    private enum CodingKeys: String, CodingKey {
+        case address, road, components
+    }
+}
+
+/// 路况（`/traffic`）
+public struct TrafficStatus: Codable, Sendable {
+    /// 总体描述，如 "畅通" / "缓行" / "拥堵"
+    public let status: String
+    /// 该区域的平均车速（km/h），未知为 nil
+    public let speedKmh: Double?
+
+    public var isCongested: Bool { status.contains("拥堵") }
+}
+
+private struct RegeoResponse: Codable {
+    let result: ReverseGeocodeResult?
+}
+private struct TrafficResponse: Codable {
+    let traffic: TrafficStatus?
+}
+
+public extension GatewayClient {
+    /// 坐标 → 可读地址（WGS84 入参，网关内部转 GCJ-02）
+    static func fetchRegeo(gateway: String, token: String,
+                           positionWGS84: GeoPoint,
+                           timeoutSec: Double = 10) async throws -> ReverseGeocodeResult? {
+        let json = try await postJSON(path: "regeo", gateway: gateway, token: token,
+                                      body: ["lon": positionWGS84.lon, "lat": positionWGS84.lat],
+                                      timeoutSec: timeoutSec)
+        return try? JSONDecoder().decode(RegeoResponse.self, from: json).result
+    }
+
+    /// 查询某点周边的路况
+    static func fetchTraffic(gateway: String, token: String,
+                             positionWGS84: GeoPoint,
+                             timeoutSec: Double = 10) async throws -> TrafficStatus? {
+        let json = try await postJSON(path: "traffic", gateway: gateway, token: token,
+                                      body: ["lon": positionWGS84.lon, "lat": positionWGS84.lat],
+                                      timeoutSec: timeoutSec)
+        return try? JSONDecoder().decode(TrafficResponse.self, from: json).traffic
+    }
+
+    /// 简单的 POST → Data（供上面两个用；它们不需要复杂的解码错误信息）
+    private static func postJSON(path: String, gateway: String, token: String,
+                                 body: [String: Any], timeoutSec: Double) async throws -> Data {
+        guard let url = URL(string: gateway.hasSuffix("/") ? gateway + path : gateway + "/" + path) else {
+            throw GatewayError.badURL(gateway)
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
+        req.timeoutInterval = timeoutSec
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else {
+            throw GatewayError.transport("HTTP \(code)")
+        }
+        return data
     }
 }
 

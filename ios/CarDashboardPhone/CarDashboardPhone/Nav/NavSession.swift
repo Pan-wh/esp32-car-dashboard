@@ -103,6 +103,36 @@ final class NavSession: ObservableObject {
     private var mapQueryInFlight = false
     /// 已下发的窗口次数（诊断用，UI 可见）
     @Published private(set) var mapWindowCount = 0
+
+    // MARK: - 多方案选路（网关 /routes）
+
+    /// 已取得的路线候选（空 = 没有候选，UI 不显示选择区）
+    @Published private(set) var routeCandidates: [RouteCandidate] = []
+    /// 是否正在取候选（禁用按钮、显示进度）
+    @Published private(set) var candidatesLoading = false
+    /// 是否正在导航某条候选（用于高亮）
+    @Published private(set) var activeCandidateId: Int?
+
+    /// 当前所在道路名（逆地理编码，可能为空）
+    @Published private(set) var currentRoadName: String?
+    /// 当前路况（如 "畅通"）
+    @Published private(set) var trafficText: String?
+
+    /// 最近一次定位（WGS84）。取候选与逆地理编码都要用它做起点。
+    private var lastVehicleWGS84: GeoPoint?
+    /// 上次查逆地理/路况的时刻（毫秒）
+    private var lastEnvQueryMs: Int64 = 0
+    /**
+     * 逆地理/路况的查询间隔（毫秒）。
+     *
+     * ⚠️ 刻意取 60 秒：这两项都是**纯展示**信息，却各自消耗一次高德额度
+     *    （逆地理编码 + 交通态势）。跟着 2Hz 的导航时钟去查会瞬间吃光配额，
+     *    所以只在"导航中 + 距上次超过 60 秒"时才查。
+     */
+    private let envQueryIntervalMs: Int64 = 60000
+
+    /// 供 UI 使用：最近一次 WGS84 定位（周边搜索要以"当前位置"为中心）
+    var currentPositionWGS84: GeoPoint? { lastVehicleWGS84 }
     /**
      * 最近一次采纳的**自车 GCJ-02 位置**。
      *
@@ -222,6 +252,12 @@ final class NavSession: ObservableObject {
         mapBundle = nil
         mapOriginGcj = nil
         lastVehicleGCJ = nil
+        lastVehicleWGS84 = nil
+        routeCandidates = []
+        activeCandidateId = nil
+        currentRoadName = nil
+        trafficText = nil
+        lastEnvQueryMs = 0
         lastMapQueryPos = nil
         lastMapWindowPos = nil
         lastMapQueryMs = 0
@@ -265,6 +301,7 @@ final class NavSession: ObservableObject {
                          courseDeg: location.course >= 0 ? location.course : nil,
                          timestampMs: fixMs)
         lastVehicleGCJ = fix.position
+        lastVehicleWGS84 = wgs
         handle(core.handle(fix: fix, nowMs: nowMs), nowMs: nowMs)
 
         /*
@@ -272,6 +309,7 @@ final class NavSession: ObservableObject {
          * 只有"在导航中且有路线"时才取 —— 没路线时圆屏画底图也没有意义。
          */
         maybeRefreshMapWindow(vehicleWGS84: wgs, vehicleGCJ: fix.position, nowMs: nowMs)
+        maybeRefreshEnvironment(vehicleWGS84: wgs, nowMs: nowMs)
     }
 
     /// 没有新定位时推进（数据过期判定 / 到达确认等）
@@ -295,6 +333,108 @@ final class NavSession: ObservableObject {
     }
 
     // MARK: - 地图窗口
+
+    // MARK: - 当前道路 / 路况（纯展示，低频）
+
+    /// 按间隔查询逆地理编码与路况。见 `envQueryIntervalMs` 的说明。
+    private func maybeRefreshEnvironment(vehicleWGS84: GeoPoint, nowMs: Int64) {
+        guard isNavigating, isConfigured else { return }
+        guard nowMs - lastEnvQueryMs >= envQueryIntervalMs else { return }
+        lastEnvQueryMs = nowMs
+
+        let gateway = gatewayURL, token = gatewayToken
+        Task { [weak self] in
+            /* 逆地理：坐标 → 道路名（失败只是不显示，不影响导航）*/
+            if let r = try? await GatewayClient.fetchRegeo(
+                gateway: gateway, token: token, positionWGS84: vehicleWGS84) {
+                await MainActor.run {
+                    let road = r.road.isEmpty ? r.address : r.road
+                    self?.currentRoadName = road.isEmpty ? nil : String(road.prefix(20))
+                }
+            }
+            /* 路况 */
+            if let t = try? await GatewayClient.fetchTraffic(
+                gateway: gateway, token: token, positionWGS84: vehicleWGS84) {
+                await MainActor.run {
+                    if let sp = t.speedKmh {
+                        self?.trafficText = String(format: "%@（均速 %.0f km/h）", t.status, sp)
+                    } else {
+                        self?.trafficText = t.status
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - 多方案选路
+
+    /**
+     取多方案路线候选（供用户挑选）。
+
+     与 `start` 的区别：`start` 直接取一条就开跑；这里先取**若干条真正不同的路**
+     让用户选。用户选定后再调 `start(with:)`，**不会再请求网关**（候选里已带
+     完整几何），因此选路不额外消耗高德额度。
+
+     - Returns: 候选条数（0 表示失败或没有定位）。
+     */
+    @discardableResult
+    func loadRouteCandidates(destinationWGS84: GeoPoint) async -> Int {
+        guard isConfigured else {
+            lastError = "网关未配置（请填写地址与令牌）"
+            return 0
+        }
+        guard let origin = lastVehicleWGS84 else {
+            lastError = "还没有定位，无法规划路线"
+            return 0
+        }
+        candidatesLoading = true
+        defer { candidatesLoading = false }
+        do {
+            let list = try await GatewayClient.fetchRouteCandidates(
+                gateway: gatewayURL, token: gatewayToken,
+                originWGS84: origin, destinationWGS84: destinationWGS84)
+            routeCandidates = list
+            lastError = nil
+            statusText = list.isEmpty ? "没有可用路线" : "请选择路线（\(list.count) 条）"
+            return list.count
+        } catch {
+            lastError = "取路线方案失败：\(error)"
+            routeCandidates = []
+            return 0
+        }
+    }
+
+    /**
+     用**已取到的候选**开始导航（不再请求网关）。
+
+     - Parameter candidate: `loadRouteCandidates` 返回列表中的一条。
+     */
+    func start(with candidate: RouteCandidate) {
+        core.setRoute(candidate.toBundle().toNavRoute())
+        pendingDestination = nil          /* 已经有路线了，不必再等定位去取 */
+        routeRequestInFlight = false
+        activeCandidateId = candidate.strategy
+        isNavigating = true
+        rerouteCount = 0
+        lastError = nil
+        routeSummary = Self.summary(bundle: candidate.toBundle())
+        updateStatusText(core.snapshot)
+        statusText = "导航中（\(candidate.label)）"
+        update(snapshot: core.snapshot, force: true)
+
+        /* 与 start() 一致：自己拉起定位与时钟，并重置地图窗口 */
+        location?.start()
+        startClock()
+        lastMapQueryPos = nil
+        lastMapWindowPos = nil
+        lastMapQueryMs = 0
+    }
+
+    /// 清空候选（换目的地 / 停止导航时调用）
+    func clearCandidates() {
+        routeCandidates = []
+        activeCandidateId = nil
+    }
 
     /// 自车相对窗口原点的偏移（米）。没有窗口时返回 nil（此时不下发 ox/oy）。
     ///
