@@ -135,6 +135,23 @@ final class NavSession: ObservableObject {
     var currentPositionWGS84: GeoPoint? { lastVehicleWGS84 }
 
     /**
+     直接从 `LocationService` 取当前位置（不经过导航时钟）。
+
+     ⚠️ **为什么不能只看 `lastVehicleWGS84`**：
+     那个字段只在 `onFix` 里赋值，而 `onFix` 由**导航时钟**驱动 ——
+     时钟又只在"开始驾驶/开始导航"之后才起。于是"取路线前要等定位"这件事
+     就变成了：定位服务明明已经在跑、`LocationService.lastLocation` 也有值，
+     但没人把它抄出来 → 等 10 秒也等不到 → 误报"拿不到定位"。
+
+     这是本项目第二次踩"定位只在时钟里流动"的坑（第一次是"还没有定位"），
+     所以这里直接读源头。
+     */
+    private func readLocationServicePosition() -> GeoPoint? {
+        guard let loc = location?.lastLocation else { return nil }
+        return GeoPoint(lon: loc.coordinate.longitude, lat: loc.coordinate.latitude)
+    }
+
+    /**
      确保定位在跑并尽量拿到一个位置（给"周边搜索"等非导航场景用）。
 
      - Returns: 拿到（或已有）的位置；10 秒内仍拿不到则返回 nil。
@@ -146,7 +163,11 @@ final class NavSession: ObservableObject {
         statusText = "正在获取定位…"
         for _ in 0..<50 {
             try? await Task.sleep(nanoseconds: 200_000_000)
-            if let p = lastVehicleWGS84 { return p }
+            /* 直接读源头，而不是等导航时钟喂 lastVehicleWGS84 */
+            if let p = readLocationServicePosition() {
+                lastVehicleWGS84 = p /* 顺手同步，后续逻辑不必再等一次 */
+                return p
+            }
         }
         return nil
     }
@@ -416,12 +437,18 @@ final class NavSession: ObservableObject {
 
         location?.requestWhenInUse()   /* 权限未定时会弹系统框；已授权时是空操作 */
         location?.start()
+        if lastVehicleWGS84 == nil, let p = readLocationServicePosition() {
+            lastVehicleWGS84 = p /* 已经有定位了，不必等 */
+        }
         if lastVehicleWGS84 == nil {
             statusText = "正在获取定位…"
             /* 最多等 10 秒（定位冷启动可能要几秒）*/
             for _ in 0..<50 {
                 try? await Task.sleep(nanoseconds: 200_000_000)
-                if lastVehicleWGS84 != nil { break }
+                if let p = readLocationServicePosition() {
+                    lastVehicleWGS84 = p
+                    break
+                }
             }
         }
         guard let origin = lastVehicleWGS84 else {
@@ -434,7 +461,12 @@ final class NavSession: ObservableObject {
             case .notDetermined:
                 lastError = "尚未授权定位：请在弹出的系统提示里选择「使用 App 时允许」"
             default:
-                lastError = "拿不到定位：请到窗边或室外再试（室内可能搜不到卫星/基站定位）"
+                /*
+                 * 走到这里说明权限没问题、但 10 秒内没有定位回调。
+                 * 室内其实**通常也能定位**（iOS 会融合 Wi-Fi/基站），
+                 * 所以不要把责任推给环境 —— 提示要覆盖多种可能。
+                 */
+                lastError = "定位服务已启动但 10 秒内没收到位置：可先到窗边试试；若仍不行请检查系统定位服务是否开启"
             }
             statusText = "等待定位…"
             return 0
