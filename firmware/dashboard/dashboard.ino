@@ -1305,6 +1305,30 @@ static void process_command(char *cmd)
                       w->roads[0].pts[0].x, w->roads[0].pts[0].y);
       }
     }
+    {
+      Serial.printf("[地图] 提交瞬间 build=%u/%u/%u → active=%u/%u/%u\n",
+                    (unsigned)g_nav_map_dbg_build[0], (unsigned)g_nav_map_dbg_build[1],
+                    (unsigned)g_nav_map_dbg_build[2],
+                    (unsigned)g_nav_map_dbg_commit[0], (unsigned)g_nav_map_dbg_commit[1],
+                    (unsigned)g_nav_map_dbg_commit[2]);
+      const uint8_t *ord = NULL;
+      const uint32_t on = nav_map_order(&ord);
+      if (on > 0) {
+        Serial.print("[地图] 消息顺序：");
+        for (uint32_t i = 0; i < on; i++) {
+          Serial.print((char)('0' + ord[i])); /* 1=mw 2=mr 3=mb 4=mp 5=me */
+          if (i + 1 < on) Serial.print(' ');
+        }
+        Serial.println();
+      }
+      uint32_t cb, cr, cbld, crt, ce, rfull, rpts, bfull, bpts;
+      nav_map_counts(&cb, &cr, &cbld, &crt, &ce);
+      nav_map_rejects(&rfull, &rpts, &bfull, &bpts);
+      Serial.printf("[地图] 收到分类：mw=%u mr=%u mb=%u mp=%u me=%u\n",
+                    (unsigned)cb, (unsigned)cr, (unsigned)cbld, (unsigned)crt, (unsigned)ce);
+      Serial.printf("[地图] 被拒：道路满=%u 道路点数=%u 建筑满=%u 建筑点数=%u\n",
+                    (unsigned)rfull, (unsigned)rpts, (unsigned)bfull, (unsigned)bpts);
+    }
     Serial.printf("[地图] 地图层重算=%u 次\n", (unsigned)ui_nav_map_redraw_count());
     if (has_off) {
       Serial.printf("[地图] 自车偏移=(%d,%d) 米\n", ox, oy);

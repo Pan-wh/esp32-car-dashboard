@@ -23,7 +23,18 @@ static nav_map_window_t s_active;
 static bool s_active_valid;
 /** 是否正在累积（收到 `mw` 到 `me` 之间） */
 static bool s_building;
-static uint32_t s_build_start_ms;
+/**
+ * **最近一次收到地图消息的时刻**（不是"窗口开始时刻"）。
+ *
+ * ⚠️ 这个区别是踩坑换来的：超时若按"窗口开始到现在"，那么**慢但在推进**的
+ *    传输会被误判为中断。实测 iPhone 等应答逐条发送时，一个 50 条消息的窗口
+ *    要接近 3 秒 —— 正好踩中超时，`s_building` 被清成 false，下一条消息于是
+ *    走进"没有 mw"的容错分支调用 begin_window()，**把已收到的整批道路清空**。
+ *    症状极其迷惑：条数统计显示道路收到过、且因"满"拒绝了后续几条，
+ *    但提交时窗口里道路恒为 0。
+ *    改为按"无消息"计时后，只要还在收数据就永远不会超时。
+ */
+static uint32_t s_build_last_ms;
 static uint32_t s_active_ms; /* 最近一次完成切换的时刻 */
 static uint32_t s_now_ms;    /* 由 nav_map_tick 更新，供 handle 使用 */
 
@@ -34,6 +45,20 @@ static bool s_veh_set;
 
 /* 统计 */
 static uint32_t s_msgs;
+/* 分类计数：排查"某一类消息收不到"时是关键线索（实测踩过：道路恒为 0）*/
+static uint32_t s_cnt_begin, s_cnt_road, s_cnt_bldg, s_cnt_route, s_cnt_end;
+static uint32_t s_rej_road_full, s_rej_road_pts, s_rej_bldg_full, s_rej_bldg_pts;
+
+/*
+ * 最近收到的消息**类型顺序**（环形，最多 64 条）。
+ *
+ * 为什么需要它：定位"某一类要素在窗口里恒为 0"时，光看各类**条数**不够 ——
+ * 条数正常但窗口内容为空，说明该要素在 `mw` 之前就到了（被 begin_window 清掉）。
+ * 顺序记录能一眼看出这类乱序问题。
+ * 取值：0=无 1=mw 2=mr 3=mb 4=mp 5=me
+ */
+static uint8_t s_order[64];
+static uint8_t s_order_n;
 static uint32_t s_windows;
 static uint32_t s_drops;
 
@@ -266,12 +291,15 @@ void nav_map_init(void)
     memset(&s_active, 0, sizeof(s_active));
     s_active_valid = false;
     s_building = false;
-    s_build_start_ms = 0;
+    s_build_last_ms = 0;
     s_active_ms = 0;
     s_now_ms = 0;
     s_msgs = 0;
+    s_order_n = 0;
     s_windows = 0;
     s_drops = 0;
+    s_cnt_begin = s_cnt_road = s_cnt_bldg = s_cnt_route = s_cnt_end = 0;
+    s_rej_road_full = s_rej_road_pts = s_rej_bldg_full = s_rej_bldg_pts = 0;
     s_veh_x = 0;
     s_veh_y = 0;
     s_veh_set = false;
@@ -297,13 +325,20 @@ static void begin_window(void)
     memset(&s_build, 0, sizeof(s_build));
     s_build.used = true;
     s_building = true;
-    s_build_start_ms = s_now_ms;
+    s_build_last_ms = s_now_ms;
 }
+
+/* 提交瞬间的内容快照（诊断用；排查完可删）*/
+uint32_t g_nav_map_dbg_build[3];
+uint32_t g_nav_map_dbg_commit[3];
 
 static void end_window(void)
 {
     if (!s_building) return;
     s_building = false;
+    g_nav_map_dbg_build[0] = s_build.n_roads;
+    g_nav_map_dbg_build[1] = s_build.n_bldgs;
+    g_nav_map_dbg_build[2] = s_build.n_route;
 
     /*
      * 空窗口（一个要素都没有）视为**清除地图**，而不是"一张空白地图"。
@@ -325,6 +360,9 @@ static void end_window(void)
     s_active_valid = true;
     s_active_ms = s_now_ms;
     s_windows++;
+    g_nav_map_dbg_commit[0] = s_active.n_roads;
+    g_nav_map_dbg_commit[1] = s_active.n_bldgs;
+    g_nav_map_dbg_commit[2] = s_active.n_route;
 }
 
 bool nav_map_handle(const char *json, size_t len)
@@ -335,13 +373,17 @@ bool nav_map_handle(const char *json, size_t len)
     if (kind == NAV_MAP_MSG_NONE) return false;
 
     s_msgs++;
+    s_build_last_ms = s_now_ms; /* 有消息进来就不算超时（见 s_build_last_ms 的说明）*/
+    if (s_order_n < sizeof(s_order)) s_order[s_order_n++] = (uint8_t)kind;
 
     /* `mw` / `me` 没有需要解析的字段 */
     if (kind == NAV_MAP_MSG_BEGIN) {
+        s_cnt_begin++;
         begin_window();
         return true;
     }
     if (kind == NAV_MAP_MSG_END) {
+        s_cnt_end++;
         end_window();
         return true;
     }
@@ -353,7 +395,8 @@ bool nav_map_handle(const char *json, size_t len)
     if (!find_field(json, len, "p", &i)) return true; /* 认了但不完整：不污染其它解析器 */
 
     if (kind == NAV_MAP_MSG_ROAD) {
-        if (s_build.n_roads >= NAV_MAP_MAX_ROADS) return true; /* 超预算：丢弃该条 */
+        s_cnt_road++;
+        if (s_build.n_roads >= NAV_MAP_MAX_ROADS) { s_rej_road_full++; return true; }
 
         long c = 0;
         size_t ci = 0;
@@ -366,10 +409,10 @@ bool nav_map_handle(const char *json, size_t len)
         int room = (int)NAV_MAP_MAX_ROAD_PTS;
         for (int k = 0; k < s_build.n_roads; k++) room -= s_build.roads[k].n;
         if (room > NAV_MAP_PTS_PER_FEATURE) room = NAV_MAP_PTS_PER_FEATURE;
-        if (room < 2) return true;
+        if (room < 2) { s_rej_road_pts++; return true; }
 
         const int n = parse_points(json, len, &i, r->pts, room);
-        if (n < 2) return true; /* 少于两点画不出线 */
+        if (n < 2) { s_rej_road_pts++; return true; } /* 少于两点画不出线 */
         r->cls = cls;
         r->n = (uint8_t)n;
         s_build.n_roads++;
@@ -377,21 +420,23 @@ bool nav_map_handle(const char *json, size_t len)
     }
 
     if (kind == NAV_MAP_MSG_BLDG) {
-        if (s_build.n_bldgs >= NAV_MAP_MAX_BLDGS) return true;
+        s_cnt_bldg++;
+        if (s_build.n_bldgs >= NAV_MAP_MAX_BLDGS) { s_rej_bldg_full++; return true; }
         nav_map_bldg_t *b = &s_build.bldgs[s_build.n_bldgs];
         int room = (int)NAV_MAP_MAX_BLDG_PTS;
         for (int k = 0; k < s_build.n_bldgs; k++) room -= s_build.bldgs[k].n;
         if (room > NAV_MAP_PTS_PER_FEATURE) room = NAV_MAP_PTS_PER_FEATURE;
-        if (room < 3) return true; /* 多边形至少三点 */
+        if (room < 3) { s_rej_bldg_pts++; return true; } /* 多边形至少三点 */
 
         const int n = parse_points(json, len, &i, b->pts, room);
-        if (n < 3) return true;
+        if (n < 3) { s_rej_bldg_pts++; return true; }
         b->n = (uint8_t)n;
         s_build.n_bldgs++;
         return true;
     }
 
     /* kind == NAV_MAP_MSG_ROUTE */
+    s_cnt_route++;
     {
         int room = (int)NAV_MAP_MAX_ROUTE_PTS - (int)s_build.n_route;
         if (room > NAV_MAP_PTS_PER_FEATURE) room = NAV_MAP_PTS_PER_FEATURE;
@@ -413,8 +458,12 @@ void nav_map_tick(uint32_t now_ms)
 {
     s_now_ms = now_ms;
 
-    /* 累积超时：丢弃半截窗口，避免把混合了两次请求的几何画出来 */
-    if (s_building && (uint32_t)(now_ms - s_build_start_ms) > NAV_MAP_BUILD_TIMEOUT_MS) {
+    /*
+     * 累积超时：**以"最后一条消息"为基准**，只有真的收不到数据了才丢弃。
+     * 见 s_build_last_ms 的说明 —— 按"窗口开始时刻"计时会在慢速传输中途
+     * 误判超时，进而清空半截窗口。
+     */
+    if (s_building && (uint32_t)(now_ms - s_build_last_ms) > NAV_MAP_BUILD_TIMEOUT_MS) {
         s_building = false;
         s_drops++;
     }
@@ -428,6 +477,34 @@ void nav_map_tick(uint32_t now_ms)
          */
         s_veh_set = false;
     }
+}
+
+/** 分类计数（排查用）：依次写入 begin/road/bldg/route/end 的条数 */
+void nav_map_counts(uint32_t *begin, uint32_t *road, uint32_t *bldg,
+                    uint32_t *route, uint32_t *end)
+{
+    if (begin) *begin = s_cnt_begin;
+    if (road) *road = s_cnt_road;
+    if (bldg) *bldg = s_cnt_bldg;
+    if (route) *route = s_cnt_route;
+    if (end) *end = s_cnt_end;
+}
+
+/** 被拒条数（排查用）：道路满/道路点数不足/建筑满/建筑点数不足 */
+void nav_map_rejects(uint32_t *road_full, uint32_t *road_pts,
+                     uint32_t *bldg_full, uint32_t *bldg_pts)
+{
+    if (road_full) *road_full = s_rej_road_full;
+    if (road_pts) *road_pts = s_rej_road_pts;
+    if (bldg_full) *bldg_full = s_rej_bldg_full;
+    if (bldg_pts) *bldg_pts = s_rej_bldg_pts;
+}
+
+/** 最近收到的消息类型顺序（排查乱序用）。返回写入的条数。 */
+uint32_t nav_map_order(const uint8_t **out)
+{
+    if (out) *out = s_order;
+    return s_order_n;
 }
 
 uint32_t nav_map_msg_count(void)

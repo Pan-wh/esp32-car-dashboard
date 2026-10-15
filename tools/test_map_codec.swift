@@ -55,29 +55,63 @@ enum MapWindowCodec {
         return out
     }
 
+    /// 折线切段：每段实际字节数不超过 maxMessageBytes，相邻段重叠一个点
+    static func pointRanges(prefix: String, pts: [(x: Int, y: Int)]) -> [(start: Int, end: Int)] {
+        guard pts.count >= 2 else { return [] }
+        var out: [(start: Int, end: Int)] = []
+        var start = 0
+        while start < pts.count - 1 {
+            var end = start + 1
+            while end + 1 < pts.count {
+                let probe = prefix + pointsJSON(Array(start...(end + 1)).map { pts[$0] }) + "}"
+                if probe.utf8.count > maxMessageBytes { break }
+                end += 1
+            }
+            out.append((start, end))
+            if end >= pts.count - 1 { break }
+            start = end
+        }
+        return out
+    }
+
+    static func message(prefix: String, pts: [(x: Int, y: Int)], start: Int, end: Int) -> String {
+        prefix + pointsJSON(Array(start...end).map { pts[$0] }) + "}"
+    }
+
     static func messages(bundle: MapWindowBundle, routeGCJ: [GeoPoint]) -> [String] {
         var out: [String] = []
         out.append("{\"t\":\"mw\"}")
         for r in bundle.roads {
-            var pts = r.p.compactMap { a -> (x: Int, y: Int)? in
+            let pts = r.p.compactMap { a -> (x: Int, y: Int)? in
                 a.count >= 2 ? (a[0], a[1]) : nil
             }
             guard pts.count >= 2 else { continue }
-            pts = decimate(pts, to: maxPointsPerFeature)
-            out.append("{\"t\":\"mr\",\"c\":\(r.c),\"p\":\(pointsJSON(pts))}")
+            let capped = decimate(pts, to: maxPointsPerFeature)
+            let prefix = "{\"t\":\"mr\",\"c\":\(r.c),\"p\":"
+            for rg in pointRanges(prefix: prefix, pts: capped) {
+                out.append(message(prefix: prefix, pts: capped, start: rg.start, end: rg.end))
+            }
         }
         for b in bundle.buildings {
-            var pts = b.p.compactMap { a -> (x: Int, y: Int)? in
+            let pts = b.p.compactMap { a -> (x: Int, y: Int)? in
                 a.count >= 2 ? (a[0], a[1]) : nil
             }
             guard pts.count >= 3 else { continue }
-            pts = decimate(pts, to: maxPointsPerFeature)
-            out.append("{\"t\":\"mb\",\"p\":\(pointsJSON(pts))}")
+            var capped = decimate(pts, to: maxPointsPerFeature)
+            let prefix = "{\"t\":\"mb\",\"p\":"
+            while capped.count > 3,
+                  prefix.utf8.count + pointsJSON(capped).utf8.count + 1 > maxMessageBytes {
+                capped = decimate(capped, to: max(3, capped.count - 2))
+            }
+            out.append(prefix + pointsJSON(capped) + "}")
         }
         if routeGCJ.count >= 2 {
             let local = routeGCJ.map { LocalProjection.toMeters($0, origin: bundle.centerGcj) }
             let sliced = decimate(local, to: maxRoutePoints)
-            out.append("{\"t\":\"mp\",\"p\":\(pointsJSON(sliced))}")
+            let prefix = "{\"t\":\"mp\",\"p\":"
+            for rg in pointRanges(prefix: prefix, pts: sliced) {
+                out.append(message(prefix: prefix, pts: sliced, start: rg.start, end: rg.end))
+            }
         }
         out.append("{\"t\":\"me\"}")
         return out
@@ -128,6 +162,9 @@ func CHECK(_ cond: Bool, _ msg: String) {
     if cond { gPass += 1 }
     else { gFail += 1; print("  ✗ \(msg)") }
 }
+
+/// 某纬度处 1 米对应的经度差
+func mLonAt(_ lat: Double) -> Double { 111320.0 * cos(lat * .pi / 180) }
 
 func mkBundle(roads: [(Int, [[Int]])], bldgs: [[[Int]]] = [],
               centerGcj: GeoPoint = GeoPoint(lon: 116.4037, lat: 39.9106)) -> MapWindowBundle {
@@ -193,21 +230,49 @@ do {
     CHECK(msgs[4].contains("\"p\":[[0,0],"), "路线首点投影为 (0,0)：\(msgs[4])")
 }
 
-// ---- 3) 字节上限（BLE 单包约 185 字节）----
-print("--- 字节上限 ---")
+// ---- 3) 字节上限（**这是踩过的坑**：96 点的路线消息达 892 字节，超限 4.8 倍）----
+print("--- 字节上限（关键回归）---")
 do {
-    var pts: [[Int]] = []
-    for k in 0..<40 { pts.append([k * 7 - 140, k * 3 - 60]) } /* 故意超长且多位数 */
-    let bundle = mkBundle(roads: [(0, pts)])
-    let msgs = MapWindowCodec.messages(bundle: bundle, routeGCJ: [])
+    /* 造一条超长路线：2000m 前视、96 点上限，坐标是多位数 */
+    var route: [GeoPoint] = []
+    for k in 0..<400 {
+        let mLat = 111320.0
+        route.append(GeoPoint(lon: 116.4037 + Double(k) * 30.0 / (mLonAt(39.91)),
+                              lat: 39.9106 + Double(k) * 30.0 / mLat))
+    }
+    /* 道路也造一批多位数坐标 */
+    var rp: [[Int]] = []
+    for k in 0..<40 { rp.append([k * 37 - 800, k * 23 - 500]) }
+    let bundle = mkBundle(roads: [(0, rp), (2, rp)], bldgs: [rp, rp, rp])
+    let msgs = MapWindowCodec.messages(bundle: bundle, routeGCJ: route)
+
     let longest = msgs.map { $0.utf8.count }.max() ?? 0
     CHECK(longest <= MapWindowCodec.maxMessageBytes,
-          "最长消息 \(longest) 字节 ≤ \(MapWindowCodec.maxMessageBytes)")
-    // 40 点应被降到 16
-    let mr = msgs.first { $0.hasPrefix("{\"t\":\"mr\"") } ?? ""
-    let n = mr.components(separatedBy: "[").count - 2 /* 粗略：每个点一个 [ */
-    CHECK(mr.contains("],[") , "降采样后仍是点序列")
-    CHECK(n <= MapWindowCodec.maxPointsPerFeature + 1, "点数被降到上限内（粗算 \(n)）")
+          "最长消息 \(longest) 字节 ≤ \(MapWindowCodec.maxMessageBytes)（超限会被 BLE 静默丢弃）")
+
+    /* 逐条检查，并打印超限的那条内容开头，便于定位 */
+    for m in msgs where m.utf8.count > MapWindowCodec.maxMessageBytes {
+        CHECK(false, "超限消息（\(m.utf8.count) 字节）：\(m.prefix(60))…")
+    }
+    /* 路线被切成多段，且每段都以 mp 开头（设备端会首尾相接）*/
+    let mps = msgs.filter { $0.hasPrefix("{\"t\":\"mp\"") }
+    CHECK(mps.count >= 1, "路线至少 1 段（实际 \(mps.count) 段）")
+    CHECK(mps.allSatisfy { $0.utf8.count <= MapWindowCodec.maxMessageBytes }, "所有路线段都在限额内")
+    print("  路线 \(mps.count) 段，最长单条 \(longest) 字节")
+}
+
+// ---- 3b) 切段重叠：相邻段共享一个点，设备端画出来才连续 ----
+print("--- 切段连续性 ---")
+do {
+    let prefix = "{\"t\":\"mp\",\"p\":"
+    let demoPts = (0..<96).map { (x: $0 * 37 - 800, y: $0 * 23 - 500) }
+    let ranges = MapWindowCodec.pointRanges(prefix: prefix, pts: demoPts)
+    CHECK(ranges.count >= 2, "96 点被切成多段（实际 \(ranges.count)）")
+    CHECK(ranges.first!.start == 0, "首段从 0 开始")
+    CHECK(ranges.last!.end == 95, "末段到最后一个点")
+    var contiguous = true
+    for i in 1..<ranges.count where ranges[i].start != ranges[i - 1].end { contiguous = false }
+    CHECK(contiguous, "相邻段重叠一个点（否则画出来会有一格空隙）")
 }
 
 // ---- 4) 降采样保留首尾 ----

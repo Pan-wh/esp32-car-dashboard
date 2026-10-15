@@ -250,6 +250,32 @@ int main(void)
     feed_min_window();
     CHECK(nav_map_active() != NULL, "空窗口之后仍可建立新窗口");
 
+    /* ---- 慢速传输：只要持续有消息，就不应超时（实测踩过的坑）---- */
+    printf("--- 慢速传输不超时 ---\n");
+    nav_map_init();
+    nav_map_tick(0);
+    H("{\"t\":\"mw\"}");
+    for (int k = 0; k < 6; k++) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "{\"t\":\"mr\",\"c\":1,\"p\":[[%d,0],[%d,10]]}", k, k + 1);
+        H(buf);
+        /* 每次间隔 2 秒（小于 5 秒超时，但累计已超过 5 秒）*/
+        nav_map_tick((uint32_t)((k + 1) * 2000));
+    }
+    H("{\"t\":\"me\"}");
+    w = nav_map_active();
+    CHECK(w != NULL, "慢速传输仍能提交（按无消息计时，不是按窗口开始计时）");
+    CHECK(w && w->n_roads == 6, "6 条道路全部保留（实际 %d）", w ? w->n_roads : -1);
+
+    /* 真正的中断：中间静默超过超时 → 丢弃 */
+    nav_map_init();
+    nav_map_tick(0);
+    H("{\"t\":\"mw\"}");
+    H("{\"t\":\"mr\",\"c\":1,\"p\":[[0,0],[1,1]]}");
+    nav_map_tick(NAV_MAP_BUILD_TIMEOUT_MS + 100);
+    H("{\"t\":\"me\"}");
+    CHECK(nav_map_active() == NULL, "真静默超时后不再提交");
+
     printf("\n结果: %d 通过, %d 失败\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

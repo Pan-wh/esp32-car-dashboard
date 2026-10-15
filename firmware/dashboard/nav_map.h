@@ -55,10 +55,13 @@ extern "C" {
 #define NAV_MAP_PTS_PER_FEATURE 16
 
 /**
- * 累积超时（毫秒）：收到 `mw` 后这么久仍未收到 `me`，则丢弃本次累积。
- * 防止把"两次请求混合的半截几何"画到屏幕上。
+ * 累积超时（毫秒）：**连续这么久没有收到任何地图消息**才丢弃本次累积
+ * （注意是"无消息"计时，不是"从 mw 起计时" —— 见 nav_map.c 里的说明）。
+ *
+ * 取 5 秒：iPhone 等应答逐条发送时，一个约 50 条的窗口要 2~3 秒，
+ * 留一倍余量避免把正常传输误判成中断。
  */
-#define NAV_MAP_BUILD_TIMEOUT_MS 3000u
+#define NAV_MAP_BUILD_TIMEOUT_MS 5000u
 
 /**
  * 窗口过期（毫秒）：这么久没有新窗口，则认为手机断连或无网，
@@ -135,6 +138,20 @@ void nav_map_set_vehicle_offset(int ox_m, int oy_m);
  * @return true 表示已设置过
  */
 bool nav_map_get_vehicle_offset(int *ox_m, int *oy_m);
+
+/** 分类计数（调试用）：各类消息各收到多少条 */
+void nav_map_counts(uint32_t *begin, uint32_t *road, uint32_t *bldg,
+                    uint32_t *route, uint32_t *end);
+/** 被拒条数（调试用）：道路满/道路点数不足/建筑满/建筑点数不足 */
+void nav_map_rejects(uint32_t *road_full, uint32_t *road_pts,
+                     uint32_t *bldg_full, uint32_t *bldg_pts);
+
+/** 诊断：提交瞬间 s_build / s_active 的 (道路,建筑,路线) 条数（排查完可删）*/
+extern uint32_t g_nav_map_dbg_build[3];
+extern uint32_t g_nav_map_dbg_commit[3];
+
+/** 最近收到的消息类型顺序（排查乱序/顺序问题用）。返回条数并写出首地址。 */
+uint32_t nav_map_order(const uint8_t **out);
 
 /** 统计：收到的地图消息条数（调试用） */
 uint32_t nav_map_msg_count(void);

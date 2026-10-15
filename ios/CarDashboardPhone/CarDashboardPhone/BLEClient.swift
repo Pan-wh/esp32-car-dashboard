@@ -38,6 +38,22 @@ final class BLEClient: NSObject, ObservableObject {
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var telemetryChar: CBCharacteristic?
+    /// 地图窗口的待发队列（见 sendMapMessages 的说明：必须等应答再发下一条）
+    private var mapQueue: [Data] = []
+    private var mapSending = false
+    /**
+     * 正在发送期间到来的**新窗口**（只保留最新一个）。
+     *
+     * ⚠️ 不能直接覆盖 `mapQueue`：一个窗口约 50 条消息，发送要 1~2 秒，
+     *    期间导航时钟会再次取窗口。若直接覆盖，队列里**最前面那批**
+     *    （也就是道路 `mr`）会被丢掉，而后面还没入队的建筑/路线反而能在下一次
+     *    发送中存活 —— 实测症状正是"道路恒为 0 条，建筑和路线正常"。
+     */
+    private var pendingMap: [Data]?
+    /// 队列最近一次推进的时刻（看门狗用，见 pumpMapQueue）
+    private var mapLastProgress = Date.distantPast
+    /// 看门狗定时器（见 watchMapQueue）
+    private var mapWatchdog: Timer?
     private var statusChar: CBCharacteristic?
     private var facesChar: CBCharacteristic?
     private var commandChar: CBCharacteristic?
@@ -66,6 +82,7 @@ final class BLEClient: NSObject, ObservableObject {
     }
 
     func scanAndConnect() {
+        startMapWatchdog()
         /*
          * 已连接时直接返回，**不要覆盖 lastNotice**。
          *
@@ -256,14 +273,88 @@ final class BLEClient: NSObject, ObservableObject {
      */
     @discardableResult
     func sendMapMessages(_ messages: [String]) -> Int {
-        guard let ch = telemetryChar, isConnected else { return 0 }
-        var sent = 0
-        for m in messages {
-            guard let data = m.data(using: .utf8) else { continue }
-            peripheral?.writeValue(data, for: ch, type: .withResponse)
-            sent += 1
+        guard telemetryChar != nil, isConnected else { return 0 }
+        /*
+         * ⚠️ **不能一口气连发**。
+         *
+         * 一次地图窗口约 40 条消息。曾用 for 循环直接连发 —— CoreBluetooth 的
+         * 内部发送队列会溢出，**静默丢弃**中间的写入。实测现象：
+         * 约 70% 的窗口因收不到结束标记而被固件按超时丢弃，且丢的总是**前面**
+         * 那批（道路/路线），后面的建筑反而存活 —— 因为队列从前往后溢出。
+         *
+         * 正确做法是"发一条、等 `didWriteValueFor`、再发下一条"，
+         * 让 peripherals 的应答来限速（见 pumpMapQueue）。
+         */
+        watchMapQueue() /* 先兜底：若上一次发送卡死，这里就恢复 */
+
+        let data = messages.compactMap { $0.data(using: .utf8) }
+        if mapSending {
+            /* 正在发上一个窗口：不要打断（打断会丢掉已排队的道路消息）*/
+            pendingMap = data
+            return 0
         }
-        return sent
+        mapQueue = data
+        pumpMapQueue()
+        return data.count
+    }
+
+    /// 从队列取一条发出。每发的下一条都由 `didWriteValueFor` 驱动。
+    /// 启动看门狗定时器（幂等）。每 2 秒检查一次队列是否卡死。
+    private func startMapWatchdog() {
+        guard mapWatchdog == nil else { return }
+        mapWatchdog = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.watchMapQueue()
+        }
+    }
+
+    /// 重置地图发送队列（断连、写入失败、看门狗超时时调用）
+    fileprivate func resetMapQueue(reason: String) {
+        if mapSending || !mapQueue.isEmpty || pendingMap != nil {
+            print("[BLE] 地图队列重置（\(reason)）：剩余 \(mapQueue.count)+\(pendingMap?.count ?? 0) 条")
+        }
+        mapQueue.removeAll()
+        pendingMap = nil
+        mapSending = false
+    }
+
+    /**
+     看门狗：由**定时器**驱动，而不是由写入回调驱动。
+     
+     ⚠️ 这一点很关键：曾经把它写在 `pumpMapQueue()` 里 —— 而那个函数只由
+        `didWriteValueFor` 调用。一旦某次应答丢失（或发送中途断连），
+        `mapSending` 会永远停在 true：既不再发新数据，看门狗也永远不会跑，
+        形成**死锁**。表现就是"网关日志显示 App 一直在取窗口、导航/遥测正常，
+        但设备一条地图消息都收不到" —— 排查了很久。
+     
+     现在改为：断连时立即重置 + 定时器每 2 秒兜底检查一次。
+     */
+    fileprivate func watchMapQueue() {
+        guard mapSending else { return }
+        if Date().timeIntervalSince(mapLastProgress) > 4.0 {
+            resetMapQueue(reason: "发送超时未推进")
+        }
+    }
+
+    fileprivate func pumpMapQueue() {
+        mapLastProgress = Date()
+
+        /* 当前窗口发完 → 若有更新的窗口在等，接着发它 */
+        if mapQueue.isEmpty {
+            if let next = pendingMap {
+                pendingMap = nil
+                mapQueue = next
+            } else {
+                mapSending = false
+                return
+            }
+        }
+        guard let ch = telemetryChar, isConnected else {
+            resetMapQueue(reason: "未连接")
+            return
+        }
+        mapSending = true
+        let data = mapQueue.removeFirst()
+        peripheral?.writeValue(data, for: ch, type: .withResponse)
     }
 
     func sendNav(snapshot: NavSnapshot, vehicleOffset: (x: Int, y: Int)? = nil) {
@@ -322,6 +413,11 @@ extension BLEClient: CBCentralManagerDelegate {
         lastNotice = "已断开，正在尝试重连…"
         telemetryChar = nil
         statusChar = nil
+        /*
+         * ⚠️ 必须重置地图队列：若断连发生在发送途中，`mapSending` 会停在 true，
+         *    之后的窗口只会写进 pendingMap 而永远发不出去（静默失效）。
+         */
+        resetMapQueue(reason: "连接断开")
         // 自动重连（固件断连后会重新广播）
         central.scanForPeripherals(withServices: [serviceUUID], options: nil)
     }
@@ -364,6 +460,23 @@ extension BLEClient: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        /*
+         * 地图窗口：写一条成功后再发下一条（限速，防止队列溢出）。
+         *
+         * ⚠️ **必须按 UUID 比较，不能比较对象**。
+         * CoreBluetooth 在（重新）发现服务时会给特征创建**新的** CBCharacteristic
+         * 实例，`characteristic == telemetryChar` 会恒为 false ——
+         * 于是队列停在第一条再也不推进，表现为"导航/遥测正常，但地图一条都发不出去"。
+         * 本文件其余地方（如 Status 特征）也是按 uuid 比较的，此处保持一致。
+         */
+        if characteristic.uuid == telemetryUUID {
+            if let e = error {
+                print("[BLE] 地图消息写入失败：\(e.localizedDescription)")
+                resetMapQueue(reason: "写入失败")
+            } else {
+                pumpMapQueue()
+            }
+        }
         // 写入确认（阶段3前台可打点/日志；断连重试由 didDisconnect 处理）
     }
 
