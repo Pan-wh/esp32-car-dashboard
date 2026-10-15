@@ -83,6 +83,14 @@ struct ContentView: View {
      未连接时用本地暂存值显示，连上后立刻被设备上报刷新。
      */
     @State private var brightness: Double = 200
+    /**
+     演示速度（仅用于"看速度表盘的动画"）。
+
+     ⚠️ 它是**演示**，不是数据通路：固件会显示 DEMO 标记，且收到真实遥测
+        或 BLE 断开就自动退出。这里不持久化 —— 每次进入 App 都从"未演示"开始。
+     */
+    @State private var demoSpeed: Double = 0
+    @State private var demoOn = false
     @State private var screenOn = true
     /// 屏幕方向：同上，设备上报为准（设备侧持久化在 NVS，重开 App 也要显示真值）
     @State private var selectedRotation = 0
@@ -364,6 +372,50 @@ struct ContentView: View {
                 Text("\(Int(brightness))").monospacedDigit().frame(width: 34)
             }
 
+            /*
+             * ── 演示：模拟速度测试（用户需求）──
+             *
+             * 拖动速度条即可让仪表上的速度表盘动起来，用来演示/验收表盘动画，
+             * 不必真去开车。放在亮度下方，与其它"整机设置"在一起。
+             *
+             * 退出演示有三重保证（缺一不可）：
+             *   ① 用户关掉这个开关
+             *   ② **点「开始驾驶」时 App 主动退出**（用户明确要求的时点）
+             *   ③ 固件侧：收到真实遥测 / BLE 断开 → 自己退出
+             *      —— App 的命令可能丢，所以安全必须由固件兜底。
+             */
+            Toggle(isOn: $demoOn) {
+                HStack {
+                    Text("模拟速度测试")
+                    Spacer()
+                    if demoOn {
+                        Text("DEMO").font(.caption2).bold()
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.25))
+                            .foregroundStyle(.orange)
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+            .onChange(of: demoOn) { _, on in
+                _ = session.ble.sendDemoSpeed(on ? demoSpeed : -1)
+            }
+            if demoOn {
+                HStack {
+                    Text("速度")
+                    Slider(value: $demoSpeed, in: 0...240, step: 1) { editing in
+                        /* 拖动结束再补发一次，确保末值一定送达（与亮度同一策略）*/
+                        if !editing { _ = session.ble.sendDemoSpeed(demoSpeed) }
+                    }
+                    .onChange(of: demoSpeed) { _, v in
+                        _ = session.ble.sendDemoSpeed(v)
+                    }
+                    Text("\(Int(demoSpeed))").monospacedDigit().frame(width: 34)
+                }
+                Text("仅用于演示表盘动画：仪表状态行会显示 DEMO（琥珀色）。开始驾驶、收到真实定位或蓝牙断开时会自动退出。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+
             Toggle("屏幕点亮", isOn: $screenOn)
                 .onChange(of: screenOn) { _, on in
                     guard !applyingDeviceState else { return }
@@ -496,8 +548,21 @@ struct ContentView: View {
             }
 
             Button(session.isDriving ? "结束驾驶" : "开始驾驶") {
-                if session.isDriving { session.stopDriving() }
-                else { session.requestPermissions(); session.startDriving() }
+                if session.isDriving {
+                    session.stopDriving()
+                } else {
+                    /*
+                     * ⚠️ 开始驾驶前**必须退出演示**（用户明确要求）：
+                     * 否则演示速度会和真实遥测抢同一个指针（固件虽有兜底，
+                     * 但主动退出能让切换立刻生效）。
+                     */
+                    if demoOn {
+                        demoOn = false
+                        _ = session.ble.sendDemoSpeed(-1)
+                    }
+                    session.requestPermissions()
+                    session.startDriving()
+                }
             }
             .foregroundColor(session.isDriving ? .red : .blue)
         } header: {

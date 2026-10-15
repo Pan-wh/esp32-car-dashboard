@@ -68,10 +68,45 @@ typedef enum {
     UI_STATUS_WAIT_LOC,       /* 已连接，尚未收到定位           → "WAIT GPS"*/
     UI_STATUS_INVALID,        /* 收到数据但定位/速度无效          → "NO FIX"  */
     UI_STATUS_STALE,          /* 数据超时（超过 BLE_STALE_MS）    → "STALE"   */
-    UI_STATUS_OK              /* 正常（有新鲜有效数据）           → "LIVE"    */
+    UI_STATUS_OK,             /* 正常（有新鲜有效数据）           → "LIVE"    */
+    /*
+     * 演示模式（App 的"模拟速度测试"滑块驱动）。
+     * **必须与真实状态明显区分** —— 演示速度显示为 "DEMO" 且用琥珀色，
+     * 沿用项目 §6.3 的原则：绝不让非真实数据看起来像真实数据。
+     */
+    UI_STATUS_DEMO,
+    /*
+     * ⚠️ 仅用于**范围检查**，不是真实状态。
+     *
+     * 这里踩过一次：原先两处守卫写成 `st > UI_STATUS_OK` 来挡非法值，
+     * 我在末尾加了 UI_STATUS_DEMO 之后，它就被这些守卫**夹回了 CONNECTING**
+     * —— 表现为"演示模式下状态行显示 BT OFF"。往枚举末尾加值必须同时
+     * 检查所有"用某个具体值当上界"的地方；用 COUNT 才是稳的。
+     */
+    UI_STATUS_COUNT
 } ui_speed_status_t;
 
 void ui_speed_set_status(ui_speed_status_t st);
+
+/*
+ * 演示速度（App 的"模拟速度测试"滑块）。
+ *
+ * @param kmh 目标车速（km/h，>= 0）；**负数 = 退出演示**。
+ *
+ * 语义与安全约束：
+ *   - 进入演示后状态行显示 "DEMO"（琥珀色），与 LIVE/NO FIX 明显区分 ——
+ *     沿用项目 §6.3：绝不让非真实数据看起来像真实数据；
+ *   - 演示期间**不接受遥测斜坡的覆盖**（否则滑块和遥测会互相打架）；
+ *   - 调用方（固件）必须在**收到真实遥测**或**BLE 断开**时退出演示 ——
+ *     不能依赖 App 一定发出退出命令。
+ */
+void ui_speed_set_demo(float kmh);
+
+/** 当前是否处于演示模式 */
+bool ui_speed_demo_active(void);
+
+/** 当前演示车速（未演示时为 0）*/
+float ui_speed_demo_kmh(void);
 
 #ifdef __cplusplus
 }

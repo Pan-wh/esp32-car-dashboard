@@ -275,6 +275,21 @@ final class BLEClient: NSObject, ObservableObject {
         sendCommand("{\"cmd\":\"brightness\",\"value\":\(max(0, min(255, value)))}")
     }
 
+    /**
+     演示速度（App 的「模拟速度测试」滑块）。
+
+     - Parameter kmh: 目标车速；**负数 = 退出演示**。
+
+     ⚠️ 这只是**演示**用途：固件会把它显示为状态行 "DEMO"（琥珀色），
+        并且**只要收到真实遥测 / BLE 断开就自动退出** —— 不让演示速度
+        看起来像真实车速。App 在「开始驾驶」时也主动发一次退出，
+        让切换立刻生效。
+     */
+    @discardableResult
+    func sendDemoSpeed(_ kmh: Double) -> Bool {
+        sendCommand("{\"cmd\":\"demo_speed\",\"value\":\(Int(kmh.rounded()))}")
+    }
+
     /// 便捷方法：息屏 / 亮屏
     @discardableResult
     func setScreen(on: Bool) -> Bool {

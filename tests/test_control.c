@@ -145,6 +145,28 @@ int main(void)
     CHECK(control_clamp_brightness(200) == 200, "亮度 200 保持");
     CHECK(control_clamp_brightness(255) == 255, "亮度 255 保持");
     CHECK(control_clamp_brightness(300) == 255, "亮度越界 → 255");
+    /* ---- 演示速度命令（App 的"模拟速度测试"滑块）---- */
+    printf("--- 演示速度命令 ---\n");
+    {
+        control_cmd_t c;
+        CHECK(control_parse("{\"cmd\":\"demo_speed\",\"value\":45}", 33, &c)
+              && c.kind == CONTROL_DEMO_SPEED && c.value == 45,
+              "demo_speed(45) → CONTROL_DEMO_SPEED / value=45");
+        CHECK(control_parse("{\"cmd\":\"demo_speed\",\"value\":-1}", 33, &c)
+              && c.kind == CONTROL_DEMO_SPEED && c.value == -1,
+              "demo_speed(-1) → 退出演示（负数语义）");
+        CHECK(control_parse("{\"cmd\":\"demo_speed\",\"value\":0}", 32, &c)
+              && c.kind == CONTROL_DEMO_SPEED && c.value == 0,
+              "demo_speed(0) → 合法的 0 km/h（不是「退出」）");
+        CHECK(control_parse("{\"cmd\":\"demo_speed\",\"value\":240}", 34, &c)
+              && c.value == 240,
+              "demo_speed 不限幅（量程交给 ui_speed，解析层只管语法）");
+        CHECK(!control_parse("{\"cmd\":\"demo_speed\"}", 21, &c),
+              "缺 value → 解析失败（不能默认成 0 而误进演示）");
+        CHECK(!control_parse("{\"cmd\":\"demo_speed_x\",\"value\":1}", 31, &c),
+              "相近但不存在的命令名 → 失败（不做前缀匹配）");
+    }
+
 
     printf("结果: %d 通过, %d 失败\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

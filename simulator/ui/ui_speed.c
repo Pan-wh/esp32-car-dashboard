@@ -87,6 +87,30 @@ static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font,
 }
 
 /* ------------------------------------------------------------------ */
+/* 演示模式状态（应用户需求：App 上拖速度条看仪表动画）*/
+static bool  s_demo_on  = false;
+static float s_demo_kmh = 0.0f;
+
+void ui_speed_set_demo(float kmh)
+{
+    if (kmh < 0.0f) {
+        s_demo_on  = false;
+        s_demo_kmh = 0.0f;
+        /* 退出演示后**立即**把状态交还给链路状态机持有的值：
+           这里先落到"未连接"，下一帧 ble_poll/遥测路径会刷新为真值，
+           避免"退出演示后还显示 DEMO"这种瞬时假象。*/
+        ui_speed_set_status(UI_STATUS_CONNECTING);
+        return;
+    }
+    s_demo_on  = true;
+    s_demo_kmh = kmh;
+    ui_speed_set_speed(kmh);          /* 直接给指针目标位 */
+    ui_speed_set_status(UI_STATUS_DEMO);
+}
+
+bool  ui_speed_demo_active(void) { return s_demo_on; }
+float ui_speed_demo_kmh(void)    { return s_demo_on ? s_demo_kmh : 0.0f; }
+
 /* V5 链路状态 → 文案（ASCII，内置 12px 字体即可，无新增字体资源） */
 static const char *status5_text(void)
 {
@@ -96,6 +120,7 @@ static const char *status5_text(void)
         case UI_STATUS_INVALID:    return "NO FIX";
         case UI_STATUS_STALE:      return "STALE";
         case UI_STATUS_OK:         return "LIVE";
+        case UI_STATUS_DEMO:      return "DEMO";
         default:                   return "";
     }
 }
@@ -107,6 +132,8 @@ static uint32_t status5_color(void)
         case UI_STATUS_INVALID:    return C_WARN;       /* 橙  */
         case UI_STATUS_STALE:      return 0xFF3B30;     /* 红  */
         case UI_STATUS_OK:         return 0x34C759;     /* 绿  */
+        /* 琥珀色：比"绿=真实"更扎眼，一眼能看出这不是真实数据 */
+        case UI_STATUS_DEMO:       return 0xFFB020;     /* 琥珀（演示）*/
         default:                   return C_TEXT_DIM_L;
     }
 }
@@ -466,7 +493,8 @@ void ui_speed_set_heading(int deg)
 
 void ui_speed_set_status(ui_speed_status_t st)
 {
-    if ((int)st < 0 || st > UI_STATUS_OK) st = UI_STATUS_CONNECTING;
+    /* 用 COUNT 做上界：往枚举末尾加值不会再被这里夹掉 */
+    if ((int)st < 0 || st >= UI_STATUS_COUNT) st = UI_STATUS_CONNECTING;
     if (st == s_status_state) return;
     s_status_state = st;
     apply_state();
