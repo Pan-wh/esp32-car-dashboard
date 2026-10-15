@@ -163,9 +163,16 @@ int main(void)
     CHECK(H("{\"t\":\"mr\",\"p\":[[a,b],[1,1]]}"), "非数字坐标安全");
     CHECK(H("{\"t\":\"mr\",\"c\":\"x\",\"p\":[[0,0],[1,1]]}"), "c 不是数字安全");
     CHECK(H("{\"t\":\"mw\"}"), "再来一次 mw 重置累积");
+    /*
+     * 用"一条有效道路 + 一个坏多边形"来验证坏多边形被忽略。
+     * 不能只发坏多边形：那样窗口会变成**空窗口**，而空窗口现在的语义是
+     * "清除地图"（见下面的空窗口测试），拿不到 nav_map_active() 来断言。
+     */
+    H("{\"t\":\"mr\",\"c\":1,\"p\":[[0,0],[10,0]]}");
     H("{\"t\":\"mb\",\"p\":[[0,0],[1,0]]}");
     H("{\"t\":\"me\"}");
     w = nav_map_active();
+    CHECK(w && w->n_roads == 1, "有效道路仍在");
     CHECK(w && w->n_bldgs == 0, "只有 2 点的多边形被忽略");
 
     /* ---- 未知字段（向前兼容） ---- */
@@ -225,6 +232,23 @@ int main(void)
     H("{\"t\":\"me\"}");
     w = nav_map_active();
     CHECK(w && w->n_roads == 1, "缺 mw 也能成立（容错）");
+
+    /* ---- 空窗口 = 清除地图（手机停止导航时会发 mw+me）---- */
+    printf("--- 空窗口语义 ---\n");
+    feed_min_window();
+    CHECK(nav_map_active() != NULL, "先有一个有效窗口");
+    {
+        const uint32_t w_before = nav_map_window_count();
+        H("{\"t\":\"mw\"}");
+        H("{\"t\":\"me\"}");
+        CHECK(nav_map_active() == NULL, "空窗口应清除地图（而不是显示一张空白地图）");
+        CHECK(nav_map_window_count() == w_before, "空窗口不计入有效窗口数");
+        int ox = 0, oy = 0;
+        CHECK(!nav_map_get_vehicle_offset(&ox, &oy), "空窗口后自车偏移失效");
+    }
+    /* 空窗口后仍能正常建立新窗口 */
+    feed_min_window();
+    CHECK(nav_map_active() != NULL, "空窗口之后仍可建立新窗口");
 
     printf("\n结果: %d 通过, %d 失败\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
