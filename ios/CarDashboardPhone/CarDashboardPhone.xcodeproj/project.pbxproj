@@ -15,6 +15,7 @@
 		3325EE76B686D6EB495C914E /* BLEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DE0D4C728A95FAA998B576A /* BLEClient.swift */; };
 		46438450E48C6B4345A8C6CB /* GatewayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56BCEAC1DF235542021ED285 /* GatewayClient.swift */; };
 		6D129BD34FA989ACFB811F22 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3C19D2B63E27756D16449A70 /* Assets.xcassets */; };
+		7AF96BA573D86CC751645EA3 /* NavTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28AC99650DBBF2D68B82014D /* NavTabView.swift */; };
 		7E4EACB073A1F46147DC479B /* TelemetryQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32314E9EB764F0A3F2BBE843 /* TelemetryQuality.swift */; };
 		8A92648D6950FAAFF357B954 /* BLEStateUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568C2317847C250D5E170B6D /* BLEStateUITests.swift */; };
 		8CD13893D8207814F5D90067 /* CarDashboardPhoneUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0D22E82D27FEF70D93C0BC2 /* CarDashboardPhoneUITests.swift */; };
@@ -25,6 +26,7 @@
 		DB5F7B6B36949BC4316036DE /* BLEConnectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43AF101E01CE990CAB51551D /* BLEConnectionPolicy.swift */; };
 		E6D1D8986CC6A5AF1EBD96A7 /* LocationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A77792F272247B65306766CE /* LocationService.swift */; };
 		ED2CF185151F8E4F62825E63 /* CarDashboardPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90328C9C31C539EC52E1A87D /* CarDashboardPhoneApp.swift */; };
+		F1113ED7DB3204F0330C15D1 /* NavUIState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38D9088E29925DEDE2D2DA71 /* NavUIState.swift */; };
 		F569284BEE2E71612370E64B /* NavPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EA857645CD0BF1BA8BC01A5 /* NavPacket.swift */; };
 		FD59496AF200E46DED289C71 /* MapWindowPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF05B783835A0124086B067A /* MapWindowPacket.swift */; };
 /* End PBXBuildFile section */
@@ -40,7 +42,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		28AC99650DBBF2D68B82014D /* NavTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavTabView.swift; sourceTree = "<group>"; };
 		32314E9EB764F0A3F2BBE843 /* TelemetryQuality.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryQuality.swift; sourceTree = "<group>"; };
+		38D9088E29925DEDE2D2DA71 /* NavUIState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavUIState.swift; sourceTree = "<group>"; };
 		3B5F263755A2A9A3BD832304 /* CarDashboardPhoneUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CarDashboardPhoneUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3C19D2B63E27756D16449A70 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		41E0AF98E7F8E07D4F845669 /* TelemetryPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryPacket.swift; sourceTree = "<group>"; };
@@ -86,6 +90,8 @@
 				91126479FAA3F00C2B901B2D /* NavCore.swift */,
 				7EA857645CD0BF1BA8BC01A5 /* NavPacket.swift */,
 				B0F08529A4B704779DCBA324 /* NavSession.swift */,
+				28AC99650DBBF2D68B82014D /* NavTabView.swift */,
+				38D9088E29925DEDE2D2DA71 /* NavUIState.swift */,
 			);
 			path = Nav;
 			sourceTree = "<group>";
@@ -233,6 +239,8 @@
 				175EAD92F2639AC5C012ADFD /* NavCore.swift in Sources */,
 				F569284BEE2E71612370E64B /* NavPacket.swift in Sources */,
 				1C5E05BEF4B31F6822AF15AB /* NavSession.swift in Sources */,
+				7AF96BA573D86CC751645EA3 /* NavTabView.swift in Sources */,
+				F1113ED7DB3204F0330C15D1 /* NavUIState.swift in Sources */,
 				BC1731E6285D1D59745CC0CB /* TelemetryPacket.swift in Sources */,
 				7E4EACB073A1F46147DC479B /* TelemetryQuality.swift in Sources */,
 			);

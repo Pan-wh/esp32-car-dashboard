@@ -57,30 +57,11 @@ struct ContentView: View {
     /// 方向持久化到仪表 NVS，重启后保持。
     private let rotations = [0, 90, 180, 270]
 
-    // ── 导航页的状态 ────────────────────────────────────────
-    /// 网关地址/令牌用 @AppStorage 持久化：开发期反复改会烦，且退出 App 后应保留。
+    // ── 导航网关（设置页与导航页共用同一个 @AppStorage 键）──────
+    /// 用 @AppStorage 持久化：开发期反复改会烦，且退出 App 后应保留。
     /// 默认地址是开发机的局域网 IP —— 手机访问不到电脑的 127.0.0.1，必须用局域网地址。
     @AppStorage("navGateway") private var navGateway = "http://192.168.5.188:8080"
     @AppStorage("navToken") private var navToken = ""
-    /// 目的地坐标输入（中文地名或"纬度,经度"，WGS84）。不持久化：每次目的地都不同。
-    @State private var navDestination = ""
-    /// 坐标格式错误 / 查询失败 / 无结果的提示
-    @State private var navInputError: String?
-    /// 地名查询命中的候选（多个时让用户选）
-    @State private var navCandidates: [GeocodeResult] = []
-    /// 是否正在查询地名（禁用按钮、显示进度）
-    @State private var navLookingUp = false
-    /* ---- 网关新增能力（2026-10-15）---- */
-    /// 输入提示候选（边打字边给）
-    @State private var navTips: [PlaceSuggestion] = []
-    /// 输入提示的防抖任务（连打字时不要每次都请求）
-    @State private var navTipsTask: Task<Void, Never>?
-    /// 周边搜索结果
-    @State private var navNearby: [PlaceSuggestion] = []
-    @State private var navNearbyQuery = ""
-    /// 「开始导航」是否**顺带**启动了驾驶（连蓝牙 + 定位 + 遥测）。
-    /// 记住它是为了停止导航时能对称收尾：若驾驶本来是用户自己开的，就不要替他关掉。
-    @State private var navStartedDriving = false
 
     /// 当前选中的**分组**（不是表盘）。分组来自设备上报。
     ///
@@ -130,9 +111,12 @@ struct ContentView: View {
             dataTab
                 .tag(1)
                 .tabItem { Label("数据", systemImage: "location.fill") }
-            navTab
+            NavTabView(session: session)
                 .tag(2)
                 .tabItem { Label("导航", systemImage: "location.north.line") }
+            settingsTab
+                .tag(3)
+                .tabItem { Label("设置", systemImage: "gearshape") }
         }
         /*
          * App 启动即尝试连接仪表（#bug 修复）：
@@ -224,6 +208,53 @@ struct ContentView: View {
         .navigationViewStyle(.stack)
     }
 
+    // MARK: - 标签页 4：设置（开发期配置不占主流程）
+
+    /**
+     设置页。
+
+     ⚠️ 为什么把网关配置挪到这里（P2-1）：
+     它是**开发期一次性配置**，却在改造前占着导航页整整一个 Section ——
+     用户每次导航都要从它旁边划过去。设置页只在需要时打开。
+     */
+    private var settingsTab: some View {
+        NavigationView {
+            Form {
+                Section {
+                    TextField("网关地址", text: $navGateway)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                    SecureField("网关令牌", text: $navToken)
+                } header: {
+                    Text("导航网关")
+                } footer: {
+                    Text("开发期指向你电脑上的 gateway；手机与电脑需在同一局域网。\n默认 http://192.168.5.188:8080 —— 换成你电脑当前的局域网 IP。\n\n⚠️ 网关必须监听 0.0.0.0（默认只监听 127.0.0.1，手机访问不到）。")
+                }
+                .onChange(of: navGateway) { _, v in
+                    session.nav.configure(gateway: v, token: navToken)
+                }
+                .onChange(of: navToken) { _, v in
+                    session.nav.configure(gateway: navGateway, token: v)
+                }
+
+                Section {
+                    LabeledContent("网关状态",
+                                   value: session.nav.isConfigured ? "已配置" : "未配置")
+                    LabeledContent("导航会话",
+                                   value: session.nav.isNavigating ? "导航中" : "空闲")
+                } header: {
+                    Text("状态")
+                } footer: {
+                    Text("导航页进入时会自动把这里的配置推给导航会话。")
+                }
+            }
+            .navigationTitle("设置")
+            .toolbar { connectionIndicator }
+        }
+        .navigationViewStyle(.stack)
+    }
+
     // MARK: - 标签页 2：数据（观察：发送状态 / 定位 / 诊断）
 
     private var dataTab: some View {
@@ -236,365 +267,6 @@ struct ContentView: View {
             .toolbar { connectionIndicator }
         }
         .navigationViewStyle(.stack)
-    }
-
-    // MARK: - 标签页 3：导航
-
-    private var navTab: some View {
-        NavigationView {
-            Form {
-                // ── 实时状态 ─────────────────────────────────
-                Section("导航状态") {
-                    HStack {
-                        Label(session.nav.statusText,
-                              systemImage: navStateIcon)
-                        Spacer()
-                        if session.nav.isNavigating {
-                            Text("\(Int(session.nav.snapshot.remainingDistanceM)) m")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }
-                    }
-                    if let s = session.nav.routeSummary {
-                        Text("全程 \(s)").font(.footnote).foregroundStyle(.secondary)
-                    }
-                    if session.nav.rerouteCount > 0 {
-                        Text("已重新规划 \(session.nav.rerouteCount) 次")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                    if let e = session.nav.lastError {
-                        Text(e).font(.footnote).foregroundStyle(.red)
-                    }
-                }
-
-                // ── 目的地 ───────────────────────────────────
-                Section {
-                    TextField("地名（中文）或 纬度,经度", text: $navDestination)
-                        .autocorrectionDisabled()
-                        /*
-                         * 输入提示：边打字边向网关 /tips 查询候选。
-                         * 用 300ms 防抖 —— 连打字时每个字符都请求会既慢又浪费额度。
-                         */
-                        .onChange(of: navDestination) { _, v in
-                            scheduleTips(for: v)
-                        }
-                    if !navTips.isEmpty {
-                        ForEach(navTips) { t in
-                            Button {
-                                navTips = []
-                                navDestination = t.name
-                                navCandidates = []
-                                Task { await loadCandidates(for: t.geo, name: t.name) }
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(t.name).font(.subheadline)
-                                    if !t.address.isEmpty {
-                                        Text(t.address).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if !navCandidates.isEmpty {
-                        // 地名可能命中多个（如"外滩"在多个城市）→ 让用户选
-                        ForEach(navCandidates) { c in
-                            Button {
-                                Task { await loadCandidates(for: c.geo, name: c.name) }
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(c.name).font(.subheadline)
-                                    Text(String(format: "%.5f, %.5f", c.lat, c.lon))
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                    if let e = navInputError {
-                        Text(e).font(.footnote).foregroundStyle(.red)
-                    }
-                } header: {
-                    Text("目的地")
-                } footer: {
-                    Text("两种都支持：\n• 中文地名 —— 打字时给出候选（网关 /tips）\n• 经纬度，如 39.9087,116.3974（**WGS84**）\n\n选定后会自动查「路线方案」让你挑。")
-                }
-
-                // ── 路线方案（多方案选路）────────────────────
-                if session.nav.candidatesLoading || !session.nav.routeCandidates.isEmpty {
-                    Section {
-                        if session.nav.candidatesLoading {
-                            HStack { ProgressView(); Text("正在取路线方案…") }
-                        }
-                        ForEach(session.nav.routeCandidates) { c in
-                            Button {
-                                session.nav.start(with: c)
-                                navStartedDriving = true
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(c.label).font(.subheadline)
-                                        Text(Self.fmtDistance(c.distanceM))
-                                            .font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Text(Self.fmtDuration(c.durationS))
-                                        .font(.callout).monospacedDigit()
-                                    if session.nav.activeCandidateId == c.strategy {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(.green)
-                                    }
-                                }
-                            }
-                        }
-                    } header: {
-                        Text("路线方案")
-                    } footer: {
-                        Text("来自网关 /routes：用「速度优先 / 距离最短 / 不走高速」三个策略各取一条并去重，**一次请求**就拿到真正不同的几条路，选完直接开跑（不再请求网关）。")
-                    }
-                }
-
-                // ── 周边搜索 ─────────────────────────────────
-                Section {
-                    HStack {
-                        TextField("如 加油站 / 停车场", text: $navNearbyQuery)
-                            .autocorrectionDisabled()
-                        Button("搜索") { Task { await searchNearby() } }
-                            .disabled(navNearbyQuery.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                    ForEach(navNearby) { p in
-                        Button {
-                            navNearby = []
-                            navDestination = p.name
-                            Task { await loadCandidates(for: p.geo, name: p.name) }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(p.name).font(.subheadline)
-                                if !p.address.isEmpty {
-                                    Text(p.address).font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                } header: {
-                    Text("周边搜索")
-                } footer: {
-                    Text("在当前位置附近按关键词找地点（网关 /around），选中后同样会查路线方案。")
-                }
-
-                // ── 当前道路 / 路况 ───────────────────────────
-                if session.nav.currentRoadName != nil || session.nav.trafficText != nil {
-                    Section("当前道路 / 路况") {
-                        if let r = session.nav.currentRoadName {
-                            Label(r, systemImage: "road.lanes")
-                        }
-                        if let t = session.nav.trafficText {
-                            Label(t, systemImage: "car.2")
-                        }
-                    }
-                }
-
-                // ── 开始 / 停止 ──────────────────────────────
-                Section {
-                    if session.nav.isNavigating {
-                        Button(role: .destructive) {
-                            endNavigation()
-                        } label: {
-                            Label("停止导航", systemImage: "stop.circle")
-                        }
-                    } else {
-                        Button {
-                            startNavigation()
-                        } label: {
-                            Label(navLookingUp ? "查询中…" : "开始导航",
-                                  systemImage: "location.north.line")
-                        }
-                        .disabled(navLookingUp)
-                    }
-                    /*
-                     * 不要求"先连蓝牙"：点开始导航会**自动**启动驾驶（含连蓝牙 + 定位）。
-                     * 这里只做提示，不拦着用户 —— 拦着他也不知道该去哪儿点。
-                     */
-                    if !session.bleConnected {
-                        Text("点「开始导航」会自动连接仪表并开始定位（等同「开始驾驶」）。")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                    if navStartedDriving {
-                        Text("本次驾驶是随「开始导航」一起启动的；点「停止导航」会一并结束。")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                }
-
-                // ── 网关（开发期配置）────────────────────────
-                Section {
-                    TextField("网关地址", text: $navGateway)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                    SecureField("网关令牌", text: $navToken)
-                    Text("令牌用于向网关证明请求来自本机（网关要求认证，CORS 不是认证）。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                } header: {
-                    Text("网关")
-                } footer: {
-                    Text("开发期指向你电脑上的 gateway；手机与电脑需在同一局域网。\n默认 http://192.168.5.188:8080 —— 换成你电脑当前的局域网 IP。")
-                }
-                .onChange(of: navGateway) { _, v in
-                    session.nav.configure(gateway: v, token: navToken)
-                }
-                .onChange(of: navToken) { _, v in
-                    session.nav.configure(gateway: navGateway, token: v)
-                }
-            }
-            .navigationTitle("导航")
-            .toolbar { connectionIndicator }
-            .onAppear {
-                // 界面出现时把已保存的网关配置推给 NavSession（否则首次启动是空的）
-                session.nav.configure(gateway: navGateway, token: navToken)
-            }
-        }
-        .navigationViewStyle(.stack)
-    }
-
-    /// 导航状态对应的图标（一眼能看出是"在导航"还是"偏航/到达"）
-    private var navStateIcon: String {
-        switch session.nav.snapshot.state {
-        case .active:    return session.nav.snapshot.offRoute ? "exclamationmark.triangle" : "location.north.line"
-        case .rerouting: return "arrow.triangle.2.circlepath"
-        case .arrived:   return "checkmark.circle"
-        case .stale:     return "wifi.exclamationmark"
-        case .idle, .noData: return "location.slash"
-        }
-    }
-
-    // MARK: - 网关新增能力的辅助（2026-10-15）
-
-    /// 输入提示的防抖调度：取消上一个任务，300ms 后再查。
-    private func scheduleTips(for text: String) {
-        navTipsTask?.cancel()
-        let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        /* 太短不查（一个字符的结果噪音太大），纯坐标也不查 */
-        guard q.count >= 2, !q.contains(",") else {
-            navTips = []
-            return
-        }
-        navTipsTask = Task {
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            if Task.isCancelled { return }
-            guard session.nav.isConfigured else { return }
-            let list = (try? await GatewayClient.fetchInputTips(
-                gateway: navGateway, token: navToken, keywords: q,
-                near: nil)) ?? []
-            if Task.isCancelled { return }
-            await MainActor.run { navTips = list }
-        }
-    }
-
-    /// 取多方案路线（成功后由界面上的「路线方案」区展示）
-    private func loadCandidates(for destination: GeoPoint, name: String) async {
-        navInputError = nil
-        navCandidates = []
-        navTips = []
-        navDestination = name
-        session.nav.configure(gateway: navGateway, token: navToken)
-        let n = await session.nav.loadRouteCandidates(destinationWGS84: destination)
-        if n == 0, let e = session.nav.lastError {
-            navInputError = e
-        }
-    }
-
-    /// 周边搜索（/around）
-    private func searchNearby() async {
-        let q = navNearbyQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return }
-        session.nav.configure(gateway: navGateway, token: navToken)
-        /* 周边搜索要以"当前位置"为中心 —— 没定位就先拉起来等一会（见 ensurePositionWGS84）*/
-        guard let near = await session.nav.ensurePositionWGS84() else {
-            navInputError = session.nav.lastError ?? "拿不到定位，无法搜索附近"
-            return
-        }
-        do {
-            navNearby = try await GatewayClient.fetchAround(
-                gateway: navGateway, token: navToken, keywords: q, near: near)
-            navInputError = navNearby.isEmpty ? "附近没找到「\(q)」" : nil
-        } catch {
-            navInputError = "周边搜索失败：\(error)"
-        }
-    }
-
-    /// 距离/耗时格式化（列表里要紧凑）
-    static func fmtDistance(_ m: Double) -> String {
-        m >= 1000 ? String(format: "%.1f km", m / 1000) : String(format: "%.0f m", m)
-    }
-    static func fmtDuration(_ s: Double) -> String {
-        let min = Int(s / 60)
-        if min >= 60 { return "\(min / 60) 小时 \(min % 60) 分" }
-        return "\(min) 分钟"
-    }
-
-    /// 开始导航。
-    ///
-    /// ⚠️ 「开始导航」**等同于「开始驾驶」**：导航需要定位，而定位与 BLE 连接
-    /// 都归驾驶会话管。若用户此刻没在驾驶，这里替他启动（并在停止时对称收尾），
-    /// 否则会出现"点了开始导航却一直等待定位"——用户无从知道还得再去点开始驾驶。
-    private func beginNavigation(destination: GeoPoint, name: String) {
-        navInputError = nil
-        navCandidates = []
-        session.nav.configure(gateway: navGateway, token: navToken)
-        if !session.isDriving {
-            session.startDriving()
-            navStartedDriving = true
-        }
-        navDestination = name
-        session.nav.start(destinationWGS84: destination)
-    }
-
-    /// 停止导航（并列回收尾：只关掉"导航顺手开的"那次驾驶）
-    private func endNavigation() {
-        session.nav.stop()
-        if navStartedDriving {
-            session.stopDriving()
-            navStartedDriving = false
-        }
-    }
-
-    /// 解析并开始导航。输入可以是：
-    ///   - "纬度,经度"（WGS84）→ 直接开始
-    ///   - 中文地名 → 先向网关查坐标；命中 1 个直接开始，多个则列出让用户选
-    private func startNavigation() {
-        let text = navDestination.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else {
-            navInputError = "请填写目的地"
-            return
-        }
-
-        // 先按"纬度,经度"试解析
-        let parts = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-        if parts.count == 2, let lat = Double(parts[0]), let lon = Double(parts[1]),
-           (-90...90).contains(lat), (-180...180).contains(lon) {
-            /* 坐标直填：跳过地名查询，直接取路线方案 */
-            Task { await loadCandidates(for: GeoPoint(lon: lon, lat: lat),
-                                        name: String(format: "%.5f,%.5f", lat, lon)) }
-            return
-        }
-
-        // 否则当地名去查
-        navInputError = nil
-        navCandidates = []
-        navLookingUp = true
-        session.nav.configure(gateway: navGateway, token: navToken)
-        Task {
-            defer { navLookingUp = false }
-            do {
-                let rs = try await session.nav.lookup(address: text)
-                if rs.isEmpty {
-                    navInputError = "没找到「\(text)」。换个说法，或直接填「纬度,经度」。"
-                } else if rs.count == 1 {
-                    await loadCandidates(for: rs[0].geo, name: rs[0].name)
-                } else {
-                    navCandidates = rs // 多个候选 → 界面列出让用户点选
-                }
-            } catch {
-                navInputError = "查询失败：\(error)"
-            }
-        }
     }
 
     // MARK: - 各节内容
