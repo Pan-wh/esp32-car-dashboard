@@ -87,7 +87,65 @@ static void inline store_msg(const telemetry_msg_t *m)
     }
 }
 
-/* 收到一段字节：重组直到完整 JSON（以 '{' 开头、'}' 结尾），再解析入库 */
+/* 解析并入库一条完整消息（分流：导航 → 地图 → 遥测）*/
+static void dispatch_message(const char *json, size_t len)
+{
+    {
+        /*
+         * 分流：同一特征承载两类消息，用 "t":"nav" 区分。
+         * ⚠️ 必须**先判导航**再按遥测解析 —— 导航包没有 "v" 字段，
+         *    走遥测分支必然解析失败并计入 s_parse_err（污染统计）。
+         * 回调内只做"解析 + 存变量"，硬件副作用留给主循环（架构约定）。
+         */
+        if (nav_parse(json, len, &s_pending_nav)) {
+            s_have_nav = true;
+            s_nav_ok++;
+            /*
+             * ⚠️ 这里**不要**打印 s_asm 的内容：那是 BLE 回调共用的重组缓冲区，
+             *    在回调里对共享缓冲区做 %s 打印会与下一次写入形成竞态
+             *    （排查时短暂加过，日志尾部出现过错拼）。需要看内容请在
+             *    主循环消费后打印 —— nav_poll 里已有等价日志。
+             */
+        }
+        else if (nav_map_handle(json, len)) {
+            /*
+             * 地图窗口消息（mw/mr/mb/mp/me）：同样复用本特征，用 "t" 分流。
+             * ⚠️ 顺序：**nav → 地图 → 遥测**。地图消息没有 "v" 字段，
+             *    落到遥测分支会解析失败并污染 s_parse_err 统计。
+             * 该函数内部只做"解析 + 存缓冲"，窗口切换发生在收到 me 时，
+             * 都是纯内存操作，适合回调内完成（无硬件副作用）。
+             */
+        }
+        else {
+            telemetry_msg_t m;
+            if (telemetry_parse(json, len, &m) && m.v == PROTOCOL_VERSION) {
+                store_msg(&m);
+                s_ok++;
+            }
+            else {
+                s_parse_err++;
+            }
+        }
+    }
+}
+
+/*
+ * 收到一段字节：重组并**逐个**提取完整的顶层 JSON 对象。
+ *
+ * ⚠️ 为什么必须"逐个"而不是"整段就是一个对象"：
+ *
+ * 地图窗口是**一条要素一条消息**、由 App 连续快速下发（一次窗口约 40 条）。
+ * BLE 栈会把背靠背的写入**合并**成一次 onWrite 回调，于是缓冲区里会出现
+ * `{...}{...}{...}`。旧实现只判断"首字符是 '{'、末字符是 '}'"就整段解析 ——
+ * 结果一条都解析不出来（或只解析出最后一段的碎片），
+ * 且收不到 `me` 导致地图窗口被 3 秒超时丢弃。
+ * 实测现象：`窗口：道路 0 条`、`丢弃` 持续增长。
+ *
+ * 现在按**括号配平**逐个切分（正确处理字符串内的括号与转义），
+ * 切完把剩余未完成的部分前移，等下一包补齐。这样：
+ *   - 一条消息被拆成多包 → 仍然正确（累积到配平为止）
+ *   - 多條消息挤在一包 → 也正确（逐条分发）
+ */
 static void handle_chunk(const char *data, size_t n)
 {
     if (n == 0) return;
@@ -102,49 +160,46 @@ static void handle_chunk(const char *data, size_t n)
     memcpy(s_asm + s_asm_len, data, n);
     s_asm_len += n;
 
-    /* 判完整：以 '{' 开头且以 '}' 结尾即可（本协议为扁平对象） */
-    if (s_asm_len > 0 && s_asm[0] == '{' && s_asm[s_asm_len - 1] == '}') {
-        /*
-         * 分流：同一特征承载两类消息，用 "t":"nav" 区分。
-         * ⚠️ 必须**先判导航**再按遥测解析 —— 导航包没有 "v" 字段，
-         *    走遥测分支必然解析失败并计入 s_parse_err（污染统计）。
-         * 回调内只做"解析 + 存变量"，硬件副作用留给主循环（架构约定）。
-         */
-        if (nav_parse(s_asm, s_asm_len, &s_pending_nav)) {
-            s_have_nav = true;
-            s_nav_ok++;
-            /*
-             * ⚠️ 这里**不要**打印 s_asm 的内容：那是 BLE 回调共用的重组缓冲区，
-             *    在回调里对共享缓冲区做 %s 打印会与下一次写入形成竞态
-             *    （排查时短暂加过，日志尾部出现过错拼）。需要看内容请在
-             *    主循环消费后打印 —— nav_poll 里已有等价日志。
-             */
-        }
-        else if (nav_map_handle(s_asm, s_asm_len)) {
-            /*
-             * 地图窗口消息（mw/mr/mb/mp/me）：同样复用本特征，用 "t" 分流。
-             * ⚠️ 顺序：**nav → 地图 → 遥测**。地图消息没有 "v" 字段，
-             *    落到遥测分支会解析失败并污染 s_parse_err 统计。
-             * 该函数内部只做"解析 + 存缓冲"，窗口切换发生在收到 me 时，
-             * 都是纯内存操作，适合回调内完成（无硬件副作用）。
-             */
-        }
-        else {
-            telemetry_msg_t m;
-            if (telemetry_parse(s_asm, s_asm_len, &m) && m.v == PROTOCOL_VERSION) {
-                store_msg(&m);
-                s_ok++;
+    size_t start = 0;
+    while (start < s_asm_len) {
+        /* 跳过非 '{' 的前导垃圾（容错：对齐到下一个对象起点）*/
+        while (start < s_asm_len && s_asm[start] != '{') start++;
+        if (start >= s_asm_len) break;
+
+        /* 从 start 起找与之配平的 '}' */
+        int depth = 0;
+        bool in_str = false;
+        size_t i = start;
+        bool closed = false;
+        for (; i < s_asm_len; i++) {
+            const char c = s_asm[i];
+            if (in_str) {
+                if (c == '\\') { i++; continue; } /* 跳过被转义字符 */
+                if (c == '"') in_str = false;
+                continue;
             }
-            else {
-                s_parse_err++;
+            if (c == '"') { in_str = true; continue; }
+            if (c == '{') depth++;
+            else if (c == '}') {
+                depth--;
+                if (depth == 0) { closed = true; break; }
             }
         }
-        s_asm_len = 0;
+        if (!closed) break; /* 还不完整：等下一包（start 之后的内容保留）*/
+
+        dispatch_message(s_asm + start, i - start + 1);
+        start = i + 1;
     }
-    /* 不以 '{' 开头：丢弃开头垃圾，尝试重新对齐（容错） */
-    else if (s_asm_len == n && s_asm[0] != '{') {
-        s_asm_len = 0;
+
+    /* 丢弃已处理部分，保留未完成尾巴 */
+    if (start > 0) {
+        const size_t rest = s_asm_len - start;
+        if (rest > 0) memmove(s_asm, s_asm + start, rest);
+        s_asm_len = rest;
     }
+
+    /* 尾巴里已经没有 '{'：说明是纯垃圾，直接清掉 */
+    if (s_asm_len > 0 && s_asm[0] != '{') s_asm_len = 0;
 }
 
 /* ---------------- 下行控制命令 ---------------- */

@@ -88,6 +88,14 @@ static float s_used_heading = 999.0f;
 static int s_used_ox = INT32_MIN;
 static int s_used_oy = INT32_MIN;
 static uint32_t s_redraws;
+/**
+ * 上次画过的是**第几个**窗口（nav_map_window_count()）。
+ *
+ * ⚠️ 必须跟踪它：节流只看"航向/位移变化"，而**新窗口到达时这两者都可能没变**
+ *    （停车等红灯时尤其明显）—— 不比较序号的话，地图会一直停在第一个窗口，
+ *    看起来像"地图死住了"。
+ */
+static uint32_t s_shown_window_no = 0;
 
 /* ---------------- 内部工具 ---------------- */
 
@@ -229,7 +237,7 @@ void ui_nav_map_update(void)
             lv_obj_add_flag(s_root, LV_OBJ_FLAG_HIDDEN);
         }
         s_dirty = true;
-        s_used_heading = 999.0f;
+        s_used_heading = 999.0f; /* 下次必重画 */
         return;
     }
 
@@ -244,7 +252,10 @@ void ui_nav_map_update(void)
     const float dh = fabsf(s_heading_deg - s_used_heading);
     const float dm = sqrtf((float)((ox - s_used_ox) * (ox - s_used_ox) +
                                    (oy - s_used_oy) * (oy - s_used_oy)));
-    if (!s_dirty && dh < NAV_MAP_REDRAW_DEG && dm < NAV_MAP_REDRAW_M) return;
+    const uint32_t win_no = nav_map_window_count();
+    const bool new_window = (win_no != s_shown_window_no);
+    if (!s_dirty && !new_window && dh < NAV_MAP_REDRAW_DEG && dm < NAV_MAP_REDRAW_M) return;
+    s_shown_window_no = win_no;
 
     s_used_heading = s_heading_deg;
     s_used_ox = ox;
