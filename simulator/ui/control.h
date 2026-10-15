@@ -37,6 +37,7 @@ typedef enum {
     CONTROL_FACE,       /* value = 表盘 id（>=0）*/
     CONTROL_FACE_ENABLED, /* value = 表盘 id；value2 = 1 启用 / 0 隐藏 */
     CONTROL_ROTATE,     /* value = 屏幕方向角度：0 / 90 / 180 / 270 */
+    CONTROL_DEMO_SPEED, /* value = 演示车速 km/h；< 0 表示退出演示 */
 } control_kind_t;
 
 typedef struct {

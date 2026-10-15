@@ -206,6 +206,21 @@ bool control_parse(const char *json, size_t len, control_cmd_t *out)
         return true;
     }
 
+    if (strcmp(cmd, "demo_speed") == 0) {
+        /*
+         * 演示速度（App 的"模拟速度测试"滑块）：
+         *   {"cmd":"demo_speed","value":45}    → 演示 45 km/h
+         *   {"cmd":"demo_speed","value":-1}    → 退出演示
+         *
+         * 不做上限校验：真实限幅交给 ui_speed（仪表盘自己的量程），
+         * 解析层只管语法 —— 与 face_enabled 的分工一致（业务规则不在这里）。
+         */
+        if (!have_num) return false;
+        out->kind = CONTROL_DEMO_SPEED;
+        out->value = num;
+        return true;
+    }
+
     (void)have_str;
     return false; /* 未知命令：kind 保持 CONTROL_NONE */
 }

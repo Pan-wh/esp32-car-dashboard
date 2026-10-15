@@ -960,6 +960,20 @@ static void control_poll(void)
       s_faces_dirty = true;
       break;
     }
+    case CONTROL_DEMO_SPEED: {
+      /*
+       * 演示速度（App 的"模拟速度测试"滑块）。value < 0 = 退出演示。
+       *
+       * 安全约定：**不以 App 的退出命令为准** —— 收到真实遥测或 BLE 断开时，
+       * 固件自己退出（见 telemetry_apply 与 ble 断开处理）。否则命令一丢，
+       * 演示速度就会在真正开车时继续显示，那是危险的。
+       */
+      const int32_t v = cmd.value;
+      ui_speed_set_demo(v < 0 ? -1.0f : (float)v);
+      Serial.printf("[演示] %s%s\n", v < 0 ? "退出" : "速度 →",
+                    v < 0 ? "" : "");
+      break;
+    }
     case CONTROL_ROTATE: {
       /*
        * 只暂存目标值（合并连点），真正执行交给 rotation_poll()。
@@ -1200,6 +1214,7 @@ static void print_help(void)
   Serial.println("       face [id|next|prev]       查看/切换表盘（不带参数=列出全部）");
   Serial.println("       nav [st mv dist [spd]]   导航卡片模拟数据（阶段1）：st=0..5 mv=0..7");
   Serial.println("                                  例: nav 1 2 500 68 → 导航中·左转·500m·68km/h");
+  Serial.println("       demo [kmh|off]           演示速度（App 滑块的调试入口；状态行显示 DEMO）");
   Serial.println("       lvrot [0|1|2|3]          临时切换 0/90/180/270°（不写入 NVS）");
   Serial.println("       mem                      显示 LVGL/ESP 内存情况");
   Serial.println("       dump                     打印当前屏幕的元素树（排查元素缺失）");
@@ -1255,7 +1270,8 @@ static void print_ble(void)
   }
 
   static const char *sn[] = { "BT OFF", "WAIT GPS", "NO FIX", "STALE", "LIVE" };
-  int si = (s_last_status >= 0 && s_last_status <= UI_STATUS_OK) ? (int)s_last_status : 0;
+  /* 上界用 UI_STATUS_COUNT：见 ui_speed.h 里关于"往枚举末尾加值"的说明 */
+  int si = (s_last_status >= 0 && s_last_status < UI_STATUS_COUNT) ? (int)s_last_status : 0;
   Serial.printf("   链路状态=%s\n", sn[si]);
   {
     uint32_t cok = 0, cerr = 0;
@@ -1530,6 +1546,28 @@ static void process_command(char *cmd)
                       st, mv, dist, (n >= 4) ? " 含车速" : "",
                       (int)ui_pages_current());
       }
+    }
+  }
+  else if (strncmp(cmd, "demo", 4) == 0) {
+    /*
+     * 【调试命令】演示速度（等同 App 的"模拟速度测试"滑块）。
+     *   demo           查询
+     *   demo <kmh>     进入演示并设定车速
+     *   demo off       退出演示
+     */
+    const char *arg = cmd + 4;
+    while (*arg == ' ') arg++;
+    if (*arg == '\0') {
+      Serial.printf("[演示] %s（车速=%.0f）\n",
+                    ui_speed_demo_active() ? "进行中" : "未开启",
+                    (double)ui_speed_demo_kmh());
+    } else if (strncmp(arg, "off", 3) == 0) {
+      ui_speed_set_demo(-1.0f);
+      Serial.println("[演示] 已退出");
+    } else {
+      float v = atof(arg);
+      ui_speed_set_demo(v);
+      Serial.printf("[演示] 车速 → %.0f km/h（状态行应显示 DEMO）\n", (double)v);
     }
   }
   else if (strncmp(cmd, "lvrot", 5) == 0) {
@@ -1974,6 +2012,11 @@ static void nav_poll(void)
 
   /* BLE 断开 → 立即进入"无数据"（不等超时）*/
   if (!ble_telemetry_connected()) {
+    /* BLE 断开：演示数据也失去意义，一并退出（App 可能已经走了）*/
+    if (ui_speed_demo_active()) {
+      ui_speed_set_demo(-1.0f);
+      Serial.println("[演示] BLE 断开 → 自动退出演示");
+    }
     if (ui_nav_get_state() != NAV_STATE_NO_DATA) {
       nav_apply_state(NAV_STATE_NO_DATA);
       s_nav_active = false;
@@ -2011,6 +2054,19 @@ static void ble_poll(void)
     Serial.printf("[BLE] 丢弃不合理数据（累计 %u）：速度=%.1f km/h 航向=%.0f°\n",
                   (unsigned)s_implausible, (double)telemetry_speed_kmh(&m), (double)m.course_deg);
     return;
+  }
+
+  /*
+   * ⚠️ **安全兜底：收到真实遥测就退出演示**。
+   *
+   * 不能依赖 App 一定发出退出命令（命令可能丢、App 可能被杀）。
+   * 演示速度显示得像真实车速是危险的 —— 所以只要真实数据来了，
+   * 演示立刻让位。这也是"点击开始驾驶自动退出演示"在**固件侧**的保证：
+   * 开始驾驶后遥测就开始发，第一条到达即退出。
+   */
+  if (ui_speed_demo_active()) {
+    ui_speed_set_demo(-1.0f);
+    Serial.println("[演示] 收到真实遥测 → 自动退出演示");
   }
 
   s_tel = m;
@@ -2162,8 +2218,14 @@ void loop()
     uint32_t dt_r = now_r - last_ramp_ms;
     if (dt_r >= 20) { /* 50Hz 推进 */
       last_ramp_ms = now_r;
-      float shown = telemetry_ramp_step(&s_ramp, dt_r);
-      ui_speed_set_speed(shown);
+      /*
+       * ⚠️ 演示模式必须**跳过**遥测斜坡：两条路径都在写同一个指针，
+       * 不区分的话滑块和遥测会互相打架（表现为"拖了没反应/自己弹回去"）。
+       */
+      if (!ui_speed_demo_active()) {
+        float shown = telemetry_ramp_step(&s_ramp, dt_r);
+        ui_speed_set_speed(shown);
+      }
     }
   }
   ph_end(PH_RAMP);
