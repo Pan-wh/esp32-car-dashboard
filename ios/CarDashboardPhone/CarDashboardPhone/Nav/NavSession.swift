@@ -118,6 +118,34 @@ final class NavSession: ObservableObject {
     /// 当前路况（如 "畅通"）
     @Published private(set) var trafficText: String?
 
+    /// 本次导航所选路线的**总里程/总耗时**（用于按比例估算剩余 ETA）
+    @Published private(set) var activeRouteDistanceM: Double?
+    @Published private(set) var activeRouteDurationS: Double?
+
+    /// 导航中用户点了「换一条路线」（P2-4）：此时界面应显示候选列表
+    @Published private(set) var isChoosingRoute = false
+
+    /**
+     导航中的**剩余 ETA**（如 "14:32 到"）。
+
+     ⚠️ `NavSnapshot` 里**没有剩余耗时**字段（只有剩余里程），所以这里按
+     `剩余里程 / 总里程` 的比例去缩放总耗时 —— 是个估算，但比"不显示"有用得多：
+     用户开车时想知道的是"我几点到"，不是"还剩 12.3 公里"。
+     */
+    var remainingEtaText: String? {
+        guard isNavigating,
+              let totalD = activeRouteDistanceM, totalD > 0,
+              let totalS = activeRouteDurationS else { return nil }
+        let frac = max(0.0, min(1.0, snapshot.remainingDistanceM / totalD))
+        return NavCandidateFormat.etaText(durationS: totalS * frac)
+    }
+
+    /// 进入「换一条路线」（P2-4）
+    func beginChoosingRoute() { isChoosingRoute = true }
+
+    /// 放弃「换一条路线」，回到导航
+    func cancelChoosingRoute() { isChoosingRoute = false }
+
     /// 最近一次定位（WGS84）。取候选与逆地理编码都要用它做起点。
     private var lastVehicleWGS84: GeoPoint?
     /// 上次查逆地理/路况的时刻（毫秒）
@@ -133,6 +161,9 @@ final class NavSession: ObservableObject {
 
     /// 供 UI 使用：最近一次 WGS84 定位（周边搜索要以"当前位置"为中心）
     var currentPositionWGS84: GeoPoint? { lastVehicleWGS84 }
+
+    /// 本次导航的目的地（WGS84）。UI 用它把目的地记进「最近」。
+    @Published private(set) var currentDestinationGeo: GeoPoint?
 
     /**
      直接从 `LocationService` 取当前位置（不经过导航时钟）。
@@ -293,6 +324,10 @@ final class NavSession: ObservableObject {
         lastVehicleWGS84 = nil
         routeCandidates = []
         activeCandidateId = nil
+        currentDestinationGeo = nil
+        activeRouteDistanceM = nil
+        activeRouteDurationS = nil
+        isChoosingRoute = false
         currentRoadName = nil
         trafficText = nil
         lastEnvQueryMs = 0
@@ -476,6 +511,7 @@ final class NavSession: ObservableObject {
                 gateway: gatewayURL, token: gatewayToken,
                 originWGS84: origin, destinationWGS84: destinationWGS84)
             routeCandidates = list
+            currentDestinationGeo = destinationWGS84
             lastError = nil
             statusText = list.isEmpty ? "没有可用路线" : "请选择路线（\(list.count) 条）"
             return list.count
@@ -500,6 +536,9 @@ final class NavSession: ObservableObject {
         rerouteCount = 0
         lastError = nil
         routeSummary = Self.summary(bundle: candidate.toBundle())
+        activeRouteDistanceM = candidate.distanceM
+        activeRouteDurationS = candidate.durationS
+        isChoosingRoute = false
         updateStatusText(core.snapshot)
         statusText = "导航中（\(candidate.label)）"
         update(snapshot: core.snapshot, force: true)

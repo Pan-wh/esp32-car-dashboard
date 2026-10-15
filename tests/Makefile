@@ -14,7 +14,15 @@ COORD_VECTORS := ../gateway/test/fixtures/coord-vectors.json
 NAV_BIN      := test_nav_core
 
 # Mac 模拟器（纯逻辑部分；BLE 只能在真机上验证）
-SIM_SRC      := $(NAV_SRC) ../tools/nav_sim/NavSimSupport.swift
+# ⚠️ GatewayClient.swift 必须在这里：RouteBundle / RouteProvider /
+#    RerouteDispatcher 在一次重构中被移进了它，但当时没同步本变量 ——
+#    结果 test_nav_sim 编译失败（26 个 "cannot find ... in scope"），
+#    **并且因为 make run 里它是 `|| exit 1` 的前置步骤，后面所有 Swift 测试
+#    都不再执行**。这种"测试静默停止"比测试失败更危险。
+SIM_SRC      := $(NAV_SRC) \
+                ../ios/CarDashboardPhone/CarDashboardPhone/Nav/GatewayClient.swift \
+                ../ios/CarDashboardPhone/CarDashboardPhone/Nav/MapWindowPacket.swift \
+                ../tools/nav_sim/NavSimSupport.swift
 SIM_BIN      := test_nav_sim
 
 # App 侧表盘列表解析（设备上报消费端）
@@ -25,6 +33,10 @@ SIM_FIXTURE  := $(abspath ../tools/nav_sim/testdata/route-bundle.json)
 # App 侧 BLE 自动连接决策（自动连接 / 手动断开 / 掉线重连）
 BLE_SRC      := ../ios/CarDashboardPhone/CarDashboardPhone/BLEConnectionPolicy.swift
 BLE_BIN      := test_ble_policy
+
+# 导航页状态机（准备/选地点/选路线/导航中）+ 展示格式化
+UI_SRC       := ../ios/CarDashboardPhone/CarDashboardPhone/Nav/NavUIState.swift
+UI_BIN       := test_nav_ui_state
 
 all: $(TESTS)
 
@@ -69,6 +81,8 @@ run: $(TESTS)
 	@$(MAKE) --no-print-directory test-device-faces
 	@echo "--- App BLE 自动连接决策（Swift，自动连接/手动断开/重连）---"
 	@$(MAKE) --no-print-directory test-ble-policy
+	@echo "--- 导航页状态机（按钮语义/ETA/常用目的地）---"
+	@$(MAKE) --no-print-directory test-nav-ui
 	@echo "--- 导航网关（Node，零依赖，全部离线）---"
 	@if command -v node >/dev/null 2>&1; then \
 		(cd ../gateway && node --test "test/**/*.test.js") ; \
@@ -134,7 +148,17 @@ $(BLE_BIN): $(BLE_SRC) ../tools/test_ble_policy.swift
 test-ble-policy: $(BLE_BIN)
 	@./$(BLE_BIN)
 
-clean:
-	rm -f $(TESTS) $(NAV_BIN) $(SIM_BIN) $(FACE_BIN) $(BLE_BIN)
+$(UI_BIN): $(UI_SRC) ../tools/test_nav_ui_state.swift
+	@if ! command -v swiftc >/dev/null 2>&1; then \
+		echo "  跳过：未找到 swiftc"; \
+		exit 0; \
+	fi
+	swiftc -O -o $(UI_BIN) $(UI_SRC) ../tools/test_nav_ui_state.swift
 
-.PHONY: all run clean test-nav-core test-nav-sim test-device-faces test-ble-policy
+test-nav-ui: $(UI_BIN)
+	@./$(UI_BIN)
+
+clean:
+	rm -f $(TESTS) $(NAV_BIN) $(SIM_BIN) $(FACE_BIN) $(BLE_BIN) $(UI_BIN)
+
+.PHONY: all run clean test-nav-core test-nav-sim test-device-faces test-ble-policy test-nav-ui
