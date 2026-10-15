@@ -56,6 +56,32 @@ const ROAD_CLASSES = new Set([
   'primary_construction', 'secondary_construction', 'tertiary_construction',
 ]);
 
+/**
+ * OpenMapTiles 的 `transportation.class` **类名 → 协议整数等级**。
+ *
+ * ⚠️ 这张表是必须的：协议（docs/ble.md）、App（`MapWindowBundle.Road.c: Int`）、
+ *    固件（`nav_map_road_t.cls` + `road_width()`）三处都按 **0..5 的整数**约定，
+ *    而瓦片里给的是 `"service"` / `"tertiary"` 这样的**字符串**。
+ *    最初漏了这一步，把字符串直接透传 —— App 解码 `Int` 必然失败，
+ *    表现是"窗口一直取不回来、圆屏上什么都没有"（实测踩过）。
+ *
+ * 与 docs/ble.md 的表格一致：0 高速 / 1 主干 / 2 次干 / 3 支路 / 4 辅路 / 5 其它。
+ */
+const ROAD_CLASS_INT = {
+  motorway: 0,
+  trunk: 0,
+  primary: 1,
+  secondary: 2,
+  tertiary: 3,
+  minor: 3, /* OpenMapTiles 把 residential/unclassified 等归入 minor */
+  service: 4,
+};
+
+/** 类名 → 整数等级（未知一律 5=其它） */
+export function roadClassToInt(name) {
+  return ROAD_CLASS_INT[name] ?? 5;
+}
+
 /** 默认预算：对齐参考项目的窗口量级 */
 export const DEFAULT_BUDGET = {
   maxRoads: 24,
@@ -308,7 +334,8 @@ export async function fetchMapWindow({
     /** 所有几何的坐标系，供客户端自检 */
     crs: 'GCJ-02',
     radiusM,
-    roads: pickedRoads.map((r) => ({ c: r.class, p: round(r.pts) })),
+    /* c 必须是**整数等级**（见 ROAD_CLASS_INT 的说明），不能透传 OSM 类名 */
+    roads: pickedRoads.map((r) => ({ c: roadClassToInt(r.class), p: round(r.pts) })),
     buildings: pickedBuildings.map((b) => ({ p: round(b.pts) })),
     truncated: {
       roads: pickedRoads.length < before.roads,
