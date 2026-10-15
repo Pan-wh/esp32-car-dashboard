@@ -396,6 +396,8 @@ lv_obj_t *ui_nav_create(lv_obj_t *parent)
 static void apply_map_mode(bool on)
 {
     if (on == s_map_mode) return;
+    /* 表盘未构建时不要动布局（防御：调用方可能在 init 前就调了）*/
+    if (s_box == NULL || s_dist == NULL || s_dist_small == NULL) return;
     s_map_mode = on;
 
     if (on) {

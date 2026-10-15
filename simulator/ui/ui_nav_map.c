@@ -106,6 +106,7 @@ static void project(int mx, int my, int ox, int oy,
 /** 所有对象先隐藏；本次要画的再显示 */
 static void hide_all(void)
 {
+    /* 每个对象都判空：重建期间可能只创建了一部分，不能假设都齐了 */
     for (int i = 0; i < NAV_MAP_MAX_ROADS; i++) {
         if (s_road_obj[i]) lv_obj_add_flag(s_road_obj[i], LV_OBJ_FLAG_HIDDEN);
     }
@@ -119,7 +120,18 @@ static void hide_all(void)
 
 void ui_nav_map_init(lv_obj_t *parent)
 {
-    if (s_inited) return;
+    /*
+     * ⚠️ **不能**用 `if (s_inited) return;` 提前返回。
+     *
+     * 若表盘将来被重建（父对象销毁时 LVGL 会连带释放所有子对象），
+     * 那些 `s_*_obj[]` 就成了**悬空指针** —— 下一次 `ui_nav_map_update()`
+     * 就是 use-after-free（真机上表现为 PANIC 码 4）。
+     *
+     * 当前实现里表盘只在启动时构建一次（ui_pages.c 只调一次 build），
+     * 所以这条路径暂时走不到；但把它写成"每次重建都新建对象"才是安全的，
+     * 不能依赖调用方的偶然行为。
+     */
+    s_inited = false;
 
     s_root = lv_obj_create(parent);
     lv_obj_remove_style_all(s_root);
@@ -207,7 +219,7 @@ uint32_t ui_nav_map_redraw_count(void)
 
 void ui_nav_map_update(void)
 {
-    if (!s_inited) return;
+    if (!s_inited || s_root == NULL) return;
 
     const nav_map_window_t *w = nav_map_active();
 
