@@ -91,6 +91,12 @@ final class NavSession: ObservableObject {
     private var mapOriginGcj: GeoPoint?
     /// 上次请求窗口时的 WGS84 位置（用于判断"移动超过 100 米"）
     private var lastMapQueryPos: GeoPoint?
+    /**
+     * 上次**成功取到并下发**窗口时的位置。
+     * 与 `lastMapQueryPos`（请求时即写）不同，它只有成功后才更新 ——
+     * 周期刷新要靠它判断"相对上次的窗口是否真的移动过"。
+     */
+    private var lastMapWindowPos: GeoPoint?
     /// 上次请求窗口的时刻（毫秒）
     private var lastMapQueryMs: Int64 = 0
     /// 是否有窗口请求在飞行中（避免叠加）
@@ -107,8 +113,19 @@ final class NavSession: ObservableObject {
 
     /// 移动超过这么多米就重新取窗口（对齐 docs/ble.md 的约定）
     private let mapMoveThresholdM = 100.0
-    /// 即使没怎么动，也至少这么久刷新一次（毫秒）
-    private let mapRefreshIntervalMs: Int64 = 15000
+    /**
+     * 周期刷新间隔（毫秒）。
+     *
+     * ⚠️ 必须**明显小于**固件的窗口过期时间（`NAV_MAP_STALE_MS` = 60 秒），
+     *    否则停车等红灯时地图会突然消失。取 30 秒留一倍余量。
+     *
+     * ⚠️ 也**不能加"没移动就不刷新"的条件**：曾经加过（省带宽），结果
+     *    设备重启后 App 因为一直没动而永不重发，地图再也回不来；
+     *    停车超过 60 秒同样会让地图过期消失。
+     *    "重发会打断上一个窗口"的问题已由 BLEClient 的 pendingMap 解决，
+     *    不再需要靠"不重发"来回避。
+     */
+    private let mapRefreshIntervalMs: Int64 = 30000
     /**
      * 路线只发自车前方这么远的部分。
      *
@@ -206,6 +223,7 @@ final class NavSession: ObservableObject {
         mapOriginGcj = nil
         lastVehicleGCJ = nil
         lastMapQueryPos = nil
+        lastMapWindowPos = nil
         lastMapQueryMs = 0
         mapQueryInFlight = false
         ble?.sendMapMessages(["{\"t\":\"mw\"}", "{\"t\":\"me\"}"])
@@ -299,6 +317,10 @@ final class NavSession: ObservableObject {
         } else {
             movedFar = true /* 首次必取 */
         }
+        /*
+         * 周期刷新：无条件按间隔重发（**不能**加位移门槛，见 mapRefreshIntervalMs 的说明）。
+         * 停车时重发的数据与上次相同，但这是保证"地图不会过期消失"的必要代价。
+         */
         let timedOut = (nowMs - lastMapQueryMs) >= mapRefreshIntervalMs
         guard movedFar || timedOut else { return }
 
@@ -322,6 +344,7 @@ final class NavSession: ObservableObject {
                 await MainActor.run {
                     self.mapBundle = bundle
                     self.mapOriginGcj = bundle.centerGcj
+                    self.lastMapWindowPos = vehicleWGS84
                     self.mapQueryInFlight = false
                     let msgs = MapWindowCodec.messages(bundle: bundle, routeGCJ: routeAhead)
                     let sent = self.ble?.sendMapMessages(msgs) ?? 0

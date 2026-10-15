@@ -96,6 +96,40 @@ public enum MapWindowCodec {
     /// 单条消息的点数上限（与固件 `NAV_MAP_PTS_PER_FEATURE` 一致）
     public static let maxPointsPerFeature = 16
 
+    /**
+     折线的点会被切成若干条消息，每条**实际字节数**不超过 `maxMessageBytes`。
+     返回点的下标区间 `[start, end]`（含），相邻区间**重叠一个点**，
+     这样拆开的折线在设备上是连续的（不会出现一格空隙）。
+     */
+    static func pointRanges(prefix: String, pts: [(x: Int, y: Int)]) -> [(start: Int, end: Int)] {
+        guard pts.count >= 2 else { return [] }
+        var out: [(start: Int, end: Int)] = []
+        var start = 0
+        while start < pts.count - 1 {
+            var end = start + 1
+            /*
+             * ⚠️ 必须用**真实坐标**来量长度。
+             * 曾经用下标当坐标去试探（"[i,i]"），实际坐标是大数字（如 [-800,-500]），
+             * 于是切成 194~276 字节的包 —— 超出 BLE 单包上限、被静默丢弃。
+             * 教训：判断"放不放得下"只能按**最终要发出去的那个字符串**来算。
+             */
+            while end + 1 < pts.count {
+                let probe = prefix + pointsJSON(Array(start...(end + 1)).map { pts[$0] }) + "}"
+                if probe.utf8.count > maxMessageBytes { break }
+                end += 1
+            }
+            out.append((start, end))
+            if end >= pts.count - 1 { break }
+            start = end /* 重叠一个点，保证连续 */
+        }
+        return out
+    }
+
+    /// 按点区间生成一条消息
+    static func message(prefix: String, pts: [(x: Int, y: Int)], start: Int, end: Int) -> String {
+        prefix + pointsJSON(Array(start...end).map { pts[$0] }) + "}"
+    }
+
     /// 把点序列序列化成 `[[x,y],[x,y]]`
     static func pointsJSON(_ pts: [(x: Int, y: Int)]) -> String {
         var s = "["
@@ -132,30 +166,52 @@ public enum MapWindowCodec {
         out.reserveCapacity(2 + bundle.roads.count + bundle.buildings.count + 2)
         out.append("{\"t\":\"mw\"}")
 
+        /*
+         * ⚠️ 每条消息都必须**放在一个 BLE 包里**（约 185 字节）。
+         *
+         * 曾经踩过的坑：把路线点数从 64 提到 96 时忘了这一点 —— 一条 96 点的
+         * `mp` 消息达到 **892 字节**（超限 4.8 倍），BLE 栈直接丢弃，
+         * 表现是"底图有、白线没有"。所以这里改成按**实际序列化字节数**切分，
+         * 而不是按固定点数上限。
+         */
         for r in bundle.roads {
-            var pts = r.p.compactMap { a -> (x: Int, y: Int)? in
+            let pts = r.p.compactMap { a -> (x: Int, y: Int)? in
                 a.count >= 2 ? (a[0], a[1]) : nil
             }
             guard pts.count >= 2 else { continue }
-            pts = decimate(pts, to: maxPointsPerFeature)
-            let msg = "{\"t\":\"mr\",\"c\":\(r.c),\"p\":\(pointsJSON(pts))}"
-            out.append(msg)
+            let capped = decimate(pts, to: maxPointsPerFeature)
+            let prefix = "{\"t\":\"mr\",\"c\":\(r.c),\"p\":"
+            for rg in pointRanges(prefix: prefix, pts: capped) {
+                out.append(message(prefix: prefix, pts: capped, start: rg.start, end: rg.end))
+            }
         }
 
         for b in bundle.buildings {
-            var pts = b.p.compactMap { a -> (x: Int, y: Int)? in
+            let pts = b.p.compactMap { a -> (x: Int, y: Int)? in
                 a.count >= 2 ? (a[0], a[1]) : nil
             }
             guard pts.count >= 3 else { continue } /* 多边形至少三点 */
-            pts = decimate(pts, to: maxPointsPerFeature)
-            out.append("{\"t\":\"mb\",\"p\":\(pointsJSON(pts))}")
+            /*
+             * 建筑是**闭合轮廓**，不能像折线那样在中间切开（会破坏形状）。
+             * 它本身点数就少（网关已限到 16），若仍超限就进一步降采样。
+             */
+            var capped = decimate(pts, to: maxPointsPerFeature)
+            let prefix = "{\"t\":\"mb\",\"p\":"
+            while capped.count > 3,
+                  prefix.utf8.count + pointsJSON(capped).utf8.count + 1 > maxMessageBytes {
+                capped = decimate(capped, to: max(3, capped.count - 2))
+            }
+            out.append(prefix + pointsJSON(capped) + "}")
         }
 
-        /* 路线：投影到窗口原点，再按预算降采样 */
+        /* 路线：投影到窗口原点 → 降采样 → 按字节切段（设备端会把多段首尾相接）*/
         if routeGCJ.count >= 2 {
             let local = routeGCJ.map { LocalProjection.toMeters($0, origin: bundle.centerGcj) }
             let sliced = decimate(local, to: maxRoutePoints)
-            out.append("{\"t\":\"mp\",\"p\":\(pointsJSON(sliced))}")
+            let prefix = "{\"t\":\"mp\",\"p\":"
+            for rg in pointRanges(prefix: prefix, pts: sliced) {
+                out.append(message(prefix: prefix, pts: sliced, start: rg.start, end: rg.end))
+            }
         }
 
         out.append("{\"t\":\"me\"}")
