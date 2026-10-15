@@ -187,6 +187,17 @@ void ui_pages_settle(void)
     ui_face_sweep_if_speed(page);
 }
 
+bool ui_pages_show_nav_if_enabled(void)
+{
+    /* 用 ui_face_find 而不是硬编码 4：表盘注册顺序变了也不会跳错页 */
+    const int id = ui_face_find("nav");
+    if (id < 0) return false;
+    if (!ui_face_is_enabled(id)) return false;
+    if (ui_pages_current() == (ui_page_t)id) return true; /* 已经在导航页：无需动作 */
+    ui_pages_show((ui_page_t)id);
+    return true;
+}
+
 void ui_pages_show(ui_page_t page)
 {
     if (page < 0 || page >= UI_PAGE_COUNT) page = UI_PAGE_ANALOG;

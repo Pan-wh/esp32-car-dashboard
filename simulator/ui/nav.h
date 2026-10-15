@@ -81,6 +81,21 @@ void nav_format_distance_value(int meters, char *buf, size_t sz);
 /* 单位部分："m" / "km" / ""（无效时为空，避免显示 "500 km" 这类误导）*/
 const char *nav_distance_unit(int meters);
 
+/*
+ * **导航是否"刚刚开始"** —— 决定要不要自动跳到导航表盘。
+ *
+ * 规则（刻意收得很紧）：
+ *   - 只有 `idle` / `no_data` → `active` / `rerouting` 才算"开始"；
+ *   - `stale` → `active` **不算** —— 那只是导航数据晚到，用户可能早就
+ *     手动划走了，这时把他拽回导航页很讨厌；
+ *   - `arrived` → `active` **不算** —— 同上。
+ *
+ * 这样"开始导航就自动跳一次、之后随便划走"才成立：只在**上升沿**跳。
+ *
+ * 纯函数，可单测（见 tests/test_nav.c）。
+ */
+bool nav_should_auto_jump(nav_state_t prev, nav_state_t now);
+
 /* 动作/状态的稳定标识（ASCII，供日志与协议调试；不是屏幕文案）*/
 const char *nav_maneuver_name(nav_maneuver_t m);
 const char *nav_state_name(nav_state_t st);

@@ -150,6 +150,27 @@ int main(void)
         nav_format_distance_value(500, NULL, 0);  /* 不应崩溃 */
         CHECK(1, "NULL 入参不崩溃");
     }
+    /* ---- 导航开始时"自动跳到导航表盘"的判定（纯函数）---- */
+    printf("--- 自动跳转的上升沿判定 ---\n");
+    /* 真的"开始"：idle/no_data → active/rerouting */
+    CHECK(nav_should_auto_jump(NAV_STATE_IDLE,    NAV_STATE_ACTIVE),    "未开始 → 导航中：应跳");
+    CHECK(nav_should_auto_jump(NAV_STATE_NO_DATA, NAV_STATE_ACTIVE),    "无数据 → 导航中：应跳");
+    CHECK(nav_should_auto_jump(NAV_STATE_IDLE,    NAV_STATE_REROUTING), "未开始 → 重算中：应跳");
+    CHECK(nav_should_auto_jump(NAV_STATE_NO_DATA, NAV_STATE_REROUTING), "无数据 → 重算中：应跳");
+
+    /* 不是"开始"：数据晚到/到达后继续 —— 用户可能已手动划走，不该拽回来 */
+    CHECK(!nav_should_auto_jump(NAV_STATE_STALE,  NAV_STATE_ACTIVE),    "过期 → 导航中：**不**跳（数据晚到而已）");
+    CHECK(!nav_should_auto_jump(NAV_STATE_ARRIVED, NAV_STATE_ACTIVE),   "已到达 → 导航中：**不**跳");
+    CHECK(!nav_should_auto_jump(NAV_STATE_ACTIVE, NAV_STATE_REROUTING), "导航中 → 重算中：**不**跳（同一次导航）");
+    CHECK(!nav_should_auto_jump(NAV_STATE_REROUTING, NAV_STATE_ACTIVE),"重算中 → 导航中：**不**跳（同一次导航）");
+    CHECK(!nav_should_auto_jump(NAV_STATE_ACTIVE, NAV_STATE_ACTIVE),    "导航中 → 导航中：**不**跳（每几秒一条数据）");
+
+    /* 结束方向不应触发 */
+    CHECK(!nav_should_auto_jump(NAV_STATE_ACTIVE, NAV_STATE_IDLE),      "导航中 → 未开始：不跳");
+    CHECK(!nav_should_auto_jump(NAV_STATE_ACTIVE, NAV_STATE_ARRIVED),   "导航中 → 已到达：不跳");
+    CHECK(!nav_should_auto_jump(NAV_STATE_IDLE,   NAV_STATE_IDLE),      "未开始 → 未开始：不跳");
+    CHECK(!nav_should_auto_jump(NAV_STATE_IDLE,   NAV_STATE_STALE),     "未开始 → 过期：不跳");
+
 
     printf("结果: %d 通过, %d 失败\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
