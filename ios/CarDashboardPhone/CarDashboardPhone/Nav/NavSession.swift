@@ -133,6 +133,23 @@ final class NavSession: ObservableObject {
 
     /// 供 UI 使用：最近一次 WGS84 定位（周边搜索要以"当前位置"为中心）
     var currentPositionWGS84: GeoPoint? { lastVehicleWGS84 }
+
+    /**
+     确保定位在跑并尽量拿到一个位置（给"周边搜索"等非导航场景用）。
+
+     - Returns: 拿到（或已有）的位置；10 秒内仍拿不到则返回 nil。
+     */
+    func ensurePositionWGS84() async -> GeoPoint? {
+        if let p = lastVehicleWGS84 { return p }
+        location?.requestWhenInUse()
+        location?.start()
+        statusText = "正在获取定位…"
+        for _ in 0..<50 {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            if let p = lastVehicleWGS84 { return p }
+        }
+        return nil
+    }
     /**
      * 最近一次采纳的**自车 GCJ-02 位置**。
      *
@@ -383,12 +400,45 @@ final class NavSession: ObservableObject {
             lastError = "网关未配置（请填写地址与令牌）"
             return 0
         }
-        guard let origin = lastVehicleWGS84 else {
-            lastError = "还没有定位，无法规划路线"
-            return 0
-        }
+
+        /*
+         * ⚠️ **必须先确保定位在跑，并等第一个定位**。
+         *
+         * 这里踩过一个循环依赖的坑：新流程是"先选路线方案、再开始导航"，
+         * 而取路线需要起点坐标 —— 但定位只有「开始驾驶/开始导航」之后才跑，
+         * 于是点「开始导航」永远得到"还没有定位"。
+         *
+         * 修法就是本函数自己把定位拉起来（这正是"开始导航等同于开始驾驶"
+         * 那条规则的延伸），并给用户明确的过程反馈。
+         */
         candidatesLoading = true
         defer { candidatesLoading = false }
+
+        location?.requestWhenInUse()   /* 权限未定时会弹系统框；已授权时是空操作 */
+        location?.start()
+        if lastVehicleWGS84 == nil {
+            statusText = "正在获取定位…"
+            /* 最多等 10 秒（定位冷启动可能要几秒）*/
+            for _ in 0..<50 {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                if lastVehicleWGS84 != nil { break }
+            }
+        }
+        guard let origin = lastVehicleWGS84 else {
+            /*
+             * 失败时把"可能的原因"直接说清楚 —— 只报"还没有定位"用户无从下手。
+             */
+            switch location?.authorizationStatus {
+            case .denied, .restricted:
+                lastError = "定位权限被拒绝：请到「设置 → 隐私与安全性 → 定位服务」允许本 App"
+            case .notDetermined:
+                lastError = "尚未授权定位：请在弹出的系统提示里选择「使用 App 时允许」"
+            default:
+                lastError = "拿不到定位：请到窗边或室外再试（室内可能搜不到卫星/基站定位）"
+            }
+            statusText = "等待定位…"
+            return 0
+        }
         do {
             let list = try await GatewayClient.fetchRouteCandidates(
                 gateway: gatewayURL, token: gatewayToken,

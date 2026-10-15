@@ -505,10 +505,14 @@ struct ContentView: View {
         let q = navNearbyQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return }
         session.nav.configure(gateway: navGateway, token: navToken)
+        /* 周边搜索要以"当前位置"为中心 —— 没定位就先拉起来等一会（见 ensurePositionWGS84）*/
+        guard let near = await session.nav.ensurePositionWGS84() else {
+            navInputError = session.nav.lastError ?? "拿不到定位，无法搜索附近"
+            return
+        }
         do {
             navNearby = try await GatewayClient.fetchAround(
-                gateway: navGateway, token: navToken, keywords: q,
-                near: session.nav.currentPositionWGS84)
+                gateway: navGateway, token: navToken, keywords: q, near: near)
             navInputError = navNearby.isEmpty ? "附近没找到「\(q)」" : nil
         } catch {
             navInputError = "周边搜索失败：\(error)"
