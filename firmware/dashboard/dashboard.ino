@@ -2224,13 +2224,19 @@ void loop()
     if (dt_r >= 20) { /* 50Hz 推进 */
       last_ramp_ms = now_r;
       /*
-       * ⚠️ 演示模式必须**跳过**遥测斜坡：两条路径都在写同一个指针，
-       * 不区分的话滑块和遥测会互相打架（表现为"拖了没反应/自己弹回去"）。
+       * 演示模式**仍然走同一条斜坡**，只是把目标换成演示值。
+       *
+       * 为什么不是"跳过斜坡直接写指针"：那样指针只会瞬间跳变，看不出动画，
+       * 而演示的唯一目的就是看动画。让演示值与真实数据走**完全相同的路径**，
+       * 演示才有意义（也顺带验证了斜坡逻辑本身）。
+       *
+       * 斜坡是写指针的**唯一**驱动者，所以两者不会互相打架。
        */
-      if (!ui_speed_demo_active()) {
-        float shown = telemetry_ramp_step(&s_ramp, dt_r);
-        ui_speed_set_speed(shown);
+      if (ui_speed_demo_active()) {
+        telemetry_ramp_set_target(&s_ramp, ui_speed_demo_kmh(), true);
       }
+      float shown = telemetry_ramp_step(&s_ramp, dt_r);
+      ui_speed_set_speed(shown);
     }
   }
   ph_end(PH_RAMP);
