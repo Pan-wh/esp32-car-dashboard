@@ -62,6 +62,8 @@ struct ContentView: View {
     /// 默认地址是开发机的局域网 IP —— 手机访问不到电脑的 127.0.0.1，必须用局域网地址。
     @AppStorage("navGateway") private var navGateway = "http://192.168.5.188:8080"
     @AppStorage("navToken") private var navToken = ""
+    /// 「测试连接」的结果文字（nil = 还没测过）
+    @State private var gatewayTestResult: String?
 
     /// 当前选中的**分组**（不是表盘）。分组来自设备上报。
     ///
@@ -208,6 +210,38 @@ struct ContentView: View {
         .navigationViewStyle(.stack)
     }
 
+    /**
+     测一下网关通不通。
+
+     为什么值得做成按钮：手机连不上电脑的原因有好几种（不在同一 Wi-Fi、
+     令牌写错、网关只监听 127.0.0.1、网关没启动），而它们的**界面表现完全一样**
+     —— 都是"什么都搜不到"。调用 `/health` 能把它们区分开，而且**不消耗高德额度**。
+     */
+    private func testGateway() async {
+        let base = navGateway.hasSuffix("/") ? String(navGateway.dropLast()) : navGateway
+        guard let url = URL(string: base + "/health") else {
+            gatewayTestResult = "❌ 网关地址不合法：\(navGateway)"
+            return
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        if !navToken.isEmpty { req.setValue("Bearer \(navToken)", forHTTPHeaderField: "authorization") }
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 200 {
+                let t = String(data: data, encoding: .utf8) ?? ""
+                gatewayTestResult = "✅ 网关可达（HTTP 200）\(t.isEmpty ? "" : "\n\(t.prefix(160))")"
+            } else if code == 401 || code == 403 {
+                gatewayTestResult = "❌ 网关拒绝（HTTP \(code)）：令牌不对。请核对网关 .env 里的 GATEWAY_TOKEN"
+            } else {
+                gatewayTestResult = "❌ 网关返回 HTTP \(code)"
+            }
+        } catch {
+            gatewayTestResult = "❌ 连不上网关：\(error.localizedDescription)\n请确认：① 手机与电脑在同一 Wi-Fi ② 网关已启动 ③ 网关监听 0.0.0.0（不是 127.0.0.1） ④ 地址填的是电脑的局域网 IP"
+        }
+    }
+
     // MARK: - 标签页 4：设置（开发期配置不占主流程）
 
     /**
@@ -239,14 +273,30 @@ struct ContentView: View {
                 }
 
                 Section {
-                    LabeledContent("网关状态",
-                                   value: session.nav.isConfigured ? "已配置" : "未配置")
+                    /*
+                     * ⚠️ 这两行是**排查必需**：手机连不上网关时，界面若只显示
+                     * "没找到地点"，用户完全无从判断是"没这个地方"还是
+                     * "令牌没填" / "不在同一 Wi-Fi"。把事实摆出来。
+                     */
+                    LabeledContent("令牌",
+                                   value: navToken.isEmpty
+                                          ? "未填写" : "已填写（\(navToken.count) 字符）")
                     LabeledContent("导航会话",
                                    value: session.nav.isNavigating ? "导航中" : "空闲")
+                    Button {
+                        Task { await testGateway() }
+                    } label: {
+                        Label("测试连接", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                    if let r = gatewayTestResult {
+                        Text(r)
+                            .font(.footnote)
+                            .foregroundStyle(r.hasPrefix("✅") ? .green : .red)
+                    }
                 } header: {
                     Text("状态")
                 } footer: {
-                    Text("导航页进入时会自动把这里的配置推给导航会话。")
+                    Text("「测试连接」会调用网关的 /health（**不消耗高德额度**），用来确认手机与电脑在同一局域网、且令牌正确。")
                 }
             }
             .navigationTitle("设置")

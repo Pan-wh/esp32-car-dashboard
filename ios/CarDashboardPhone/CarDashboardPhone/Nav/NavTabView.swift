@@ -115,6 +115,17 @@ struct NavTabView: View {
                 session.nav.configure(gateway: navGateway, token: navToken)
                 saved = SavedDestinationStore.load()
                 refreshCurrentPlace()
+                #if DEBUG
+                /*
+                 * 便于截图/复现：`-navQuery 北京南` 预填搜索框。
+                 * 网关地址与令牌直接用 UserDefaults 的**参数域**传入即可
+                 * （`-navGateway http://... -navToken xxx`），无需额外代码。
+                 */
+                let args = ProcessInfo.processInfo.arguments
+                if let i = args.firstIndex(of: "-navQuery"), i + 1 < args.count, query.isEmpty {
+                    query = args[i + 1]
+                }
+                #endif
             }
             .onChange(of: query) { _, v in scheduleTips(for: v) }
         }
@@ -205,7 +216,12 @@ struct NavTabView: View {
             } header: {
                 Text(quickFilter == nil ? "搜索结果" : "附近的\(quickFilter!)")
             }
-        } else if !query.isEmpty && quickFilter == nil {
+        } else if !query.isEmpty && quickFilter == nil && errorText == nil {
+            /*
+             * 只有**确实查完且没有失败**时才说"没找到"。
+             * 有失败时上面那个红色 Section 已经说清了原因 ——
+             * 否则会把"网关连不上"伪装成"没有这个地方"。
+             */
             Section {
                 Text("没找到「\(query)」").font(.footnote).foregroundStyle(.secondary)
             }
@@ -429,22 +445,74 @@ struct NavTabView: View {
         }
     }
 
-    /// 输入提示防抖（300ms）
+    /**
+     输入提示防抖（300ms）+ **地名解析回落**。
+
+     ## 这里踩过两次坑，都记下来
+
+     1. **`/geocode` 回落被漏掉**：重写界面时只保留了 `/tips`，
+        `geocoded` 变成"只被清空、从不赋值"的死变量。而 `/tips` 对**门牌地址**
+        之类关键词常常给不出结果（它偏 POI），于是用户看到"没找到" ——
+        而他记得的"联想"恰恰是旧版点「开始导航」时那次 `/geocode`。
+        **所以 tips 为空时必须回落到 geocode。**
+
+     2. **`try?` 把所有错误吞了**：失败时 `tips` 只是空数组，
+        界面显示"没找到「xxx」" —— **把网络/令牌/解码问题伪装成"没有这个地方"**。
+        这类"把失败说成没结果"的写法最难查，一律改为**把原因显示出来**。
+     */
     private func scheduleTips(for text: String) {
         tipsTask?.cancel()
         let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
         quickFilter = nil
         nearby = []
-        /* 太短不查（噪音大）；纯坐标也不查 */
-        guard q.count >= 2, !q.contains(",") else { tips = []; geocoded = []; return }
+        /* 太短不查（噪音大）；纯坐标("39.9,116.4")走另一条路，不查地名 */
+        guard q.count >= 2, !q.contains(",") else {
+            tips = []; geocoded = []
+            if errorText?.hasPrefix("查询") == true { errorText = nil }
+            return
+        }
         tipsTask = Task {
             try? await Task.sleep(nanoseconds: 300_000_000)
             if Task.isCancelled { return }
-            guard session.nav.isConfigured else { return }
-            let list = (try? await GatewayClient.fetchInputTips(
-                gateway: navGateway, token: navToken, keywords: q)) ?? []
+
+            /* 网关没配置：明确说出来，不要伪装成"没找到" */
+            guard session.nav.isConfigured else {
+                await MainActor.run {
+                    tips = []; geocoded = []
+                    errorText = "网关未配置：请到「设置」填写地址与令牌"
+                }
+                return
+            }
+
+            var newTips: [PlaceSuggestion] = []
+            var newGeo: [GeocodeResult] = []
+            var failure: String?
+
+            do {
+                newTips = try await GatewayClient.fetchInputTips(
+                    gateway: navGateway, token: navToken, keywords: q)
+            } catch {
+                failure = "输入提示失败：\(error)"
+            }
+
+            /* tips 给不出时回落到 /geocode（地址类关键词 tips 常为空）*/
+            if newTips.isEmpty {
+                do {
+                    newGeo = try await GatewayClient.geocode(
+                        gateway: navGateway, token: navToken, address: q)
+                } catch {
+                    if failure == nil { failure = "地名查询失败：\(error)" }
+                }
+            }
+
             if Task.isCancelled { return }
-            await MainActor.run { tips = list }
+            await MainActor.run {
+                tips = newTips
+                geocoded = newGeo
+                /* 两者都空时：**有失败就报失败**，真没结果才留空让界面说"没找到" */
+                if newTips.isEmpty && newGeo.isEmpty { errorText = failure }
+                else { errorText = nil }
+            }
         }
     }
 
