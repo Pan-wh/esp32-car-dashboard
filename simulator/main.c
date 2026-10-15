@@ -233,6 +233,7 @@ int main(int argc, char **argv)
     int sweep_test = 0;
     int ble_sim = 0;
     int map_demo = 0;          /* --map-demo：注入合成地图窗口 */
+    float demo_speed = -1.0f;  /* --demo-speed：演示速度（-1 = 不用）*/
     float map_heading = 0.0f;  /* --map-heading：初始航向 */
     /* 复刻固件 ble_update 每帧调用 setter 的行为（性能回归复现） */
 
@@ -257,6 +258,16 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--sweep")) sweep_test = 1;
         else if (!strcmp(argv[i], "--ble-sim")) ble_sim = 1;
         else if (!strcmp(argv[i], "--map-demo")) map_demo = 1;
+        /*
+         * --demo-speed <kmh>：进入演示模式，并**持续模拟固件的周期状态刷新**
+         *   （每帧调一次 ui_speed_set_status(LIVE/STALE/...)）。
+         *
+         * 这是"演示状态会不会被冲掉"的回归测试：固件每 20ms 刷新状态行，
+         * 若 ui_speed_set_status 没有把演示期间的状态让给演示，界面会显示
+         * LIVE/STALE 而不是 DEMO —— 曾经就是这样，用户看到的是"状态一直在变、
+         * 演示速度卡顿"。
+         */
+        else if (!strcmp(argv[i], "--demo-speed") && i + 1 < argc) demo_speed = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--map-heading") && i + 1 < argc) map_heading = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
             if (sscanf(argv[++i], "%d:%d:%d", &fh, &fm, &fs) < 2) fh = -1;
@@ -268,6 +279,7 @@ int main(int argc, char **argv)
 
     /* 速度表盘预置状态（GNSS 未接入前由命令行模拟数据） */
     ui_speed_set_speed(speed_kmh);
+    if (demo_speed >= 0.0f) ui_speed_set_demo(demo_speed);
     ui_speed_set_fix(nofix ? false : true, 12);
     if (status_state >= 0) ui_speed_set_status((ui_speed_status_t)status_state);
     ui_speed_set_driver_state(driver_state);
@@ -510,6 +522,19 @@ int main(int argc, char **argv)
                 fflush(stdout);
                 }
             }
+        }
+
+        /*
+         * 与固件一致：每帧都尝试刷新一次链路状态。
+         * 演示模式下这**不能**把 DEMO 冲掉（见 ui_speed_set_status 的说明）——
+         * 这里刻意用不同的状态轮流灌，最大化暴露该问题。
+         */
+        if (demo_speed >= 0.0f) {
+            static const ui_speed_status_t kCycle[] = {
+                UI_STATUS_OK, UI_STATUS_STALE, UI_STATUS_CONNECTING, UI_STATUS_WAIT_LOC
+            };
+            static int k = 0;
+            ui_speed_set_status(kCycle[k++ & 3]);
         }
 
         ui_nav_map_update(); /* 与固件一致：主循环刷新地图层（内部按航向/位移节流）*/
