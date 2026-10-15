@@ -970,8 +970,13 @@ static void control_poll(void)
        */
       const int32_t v = cmd.value;
       ui_speed_set_demo(v < 0 ? -1.0f : (float)v);
-      Serial.printf("[演示] %s%s\n", v < 0 ? "退出" : "速度 →",
-                    v < 0 ? "" : "");
+      /* 注意把数值也打出来：第一版格式串写成 "%s%s" 却只传了方向字符串，
+         日志变成"[演示] 速度 →"没有数值，真机排查时看不出到底设了多少 */
+      if (v < 0) {
+        Serial.println("[演示] 退出（→ 状态行交还链路状态）");
+      } else {
+        Serial.printf("[演示] 速度 → %ld km/h（状态行显示 DEMO）\n", (long)v);
+      }
       break;
     }
     case CONTROL_ROTATE: {
