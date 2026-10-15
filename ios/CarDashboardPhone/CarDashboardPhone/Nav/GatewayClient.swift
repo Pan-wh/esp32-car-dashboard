@@ -361,24 +361,59 @@ public extension GatewayClient {
 
 // MARK: - 目的地搜索（输入提示 / 周边搜索）
 
-/// 一条地点候选（`/tips` 与 `/around` 共用）
+/**
+ 一条地点候选（`/tips` 与 `/around` 共用给 UI 的结构）。
+
+ ⚠️ 注意：网关这两个端点的**响应字段并不相同**（见下面两个私有解码结构），
+ 这里只是把两者**归一**成 UI 好用的形状。
+ */
 public struct PlaceSuggestion: Codable, Identifiable, Sendable {
     public let name: String
     public let address: String
     public let lon: Double
     public let lat: Double
+    /// 距当前位置的距离（米）。`/around` 有，`/tips` 没有。
+    public let distanceM: Double?
 
     public var id: String { "\(name)|\(lon)|\(lat)" }
     public var geo: GeoPoint { GeoPoint(lon: lon, lat: lat) }
 }
 
-private struct PlacesResponse: Codable {
-    let places: [PlaceSuggestion]
+/*
+ * ⚠️ **字段名必须照网关实际返回写**，不能凭印象。
+ *    这一版第一稿就是凭印象写的（以为两者都返回 `places`、元素是
+ *    `address` + `lon/lat`），结果真机上一调就全解不开 ——
+ *    "查询失败"只是表象，实际是 JSONDecoder 抛错。
+ *    `/tips` 与 `/around` 的元素字段**不一样**，所以这里分开定义。
+ */
+
+/// `/tips` 的元素：`{tips:[{name, district, adcode, lon, lat}]}`
+private struct TipItem: Codable {
+    let name: String
+    let district: String?
+    let adcode: String?
+    let lon: Double
+    let lat: Double
 }
+private struct TipsResponse: Codable { let tips: [TipItem] }
+
+/// `/around` 的元素：`{pois:[{name, type, distanceM, lon, lat, address}]}`
+private struct PoiItem: Codable {
+    let name: String
+    let type: String?
+    let distanceM: Double?
+    let lon: Double
+    let lat: Double
+    let address: String?
+}
+private struct AroundResponse: Codable { let pois: [PoiItem] }
 
 public extension GatewayClient {
     /**
      输入提示：边打字边给候选（比"打完再查"体验好得多）。
+
+     网关入参：`{keywords, city?, location?}`
+     网关返回：`{tips:[{name, district, adcode, lon, lat}]}`
 
      - Returns: 候选列表（可能为空，表示没有匹配）。
      */
@@ -388,116 +423,137 @@ public extension GatewayClient {
                                city: String = "",
                                near: GeoPoint? = nil,
                                timeoutSec: Double = 10) async throws -> [PlaceSuggestion] {
-        try await postPlaces(path: "tips", gateway: gateway, token: token,
-                             body: {
-                                 var b: [String: Any] = ["keywords": keywords]
-                                 if !city.isEmpty { b["city"] = city }
-                                 if let n = near { b["location"] = ["lon": n.lon, "lat": n.lat] }
-                                 return b
-                             }(), timeoutSec: timeoutSec)
+        var body: [String: Any] = ["keywords": keywords]
+        if !city.isEmpty { body["city"] = city }
+        if let n = near { body["location"] = ["lon": n.lon, "lat": n.lat] }
+
+        let data = try await postJSON(path: "tips", gateway: gateway, token: token,
+                                      body: body, timeoutSec: timeoutSec)
+        let r: TipsResponse
+        do { r = try JSONDecoder().decode(TipsResponse.self, from: data) }
+        catch { throw GatewayError.decode("tips: \(error)") }
+        return r.tips.map {
+            PlaceSuggestion(name: $0.name,
+                            address: $0.district ?? "",
+                            lon: $0.lon, lat: $0.lat, distanceM: nil)
+        }
     }
 
     /**
-     周边搜索：按关键词在城市/坐标附近找地点（如"加油站""停车场"）。
+     周边搜索：按关键词在坐标附近找地点（如"加油站""停车场"）。
+
+     ⚠️ 网关要求 `lon`/`lat` 在**顶层**（不是嵌套的 `location` 对象）——
+     第一稿写成了 `location:{...}`，网关直接返回 `invalid_coordinates`。
+
+     网关返回：`{pois:[{name, type, distanceM, lon, lat, address}]}`
      */
     static func fetchAround(gateway: String,
                             token: String,
                             keywords: String,
-                            near: GeoPoint? = nil,
+                            near: GeoPoint?,
                             radiusM: Double = 3000,
                             timeoutSec: Double = 12) async throws -> [PlaceSuggestion] {
-        try await postPlaces(path: "around", gateway: gateway, token: token,
-                             body: {
-                                 var b: [String: Any] = ["keywords": keywords, "radius": radiusM]
-                                 if let n = near { b["location"] = ["lon": n.lon, "lat": n.lat] }
-                                 return b
-                             }(), timeoutSec: timeoutSec)
-    }
-
-    /// `/tips` 与 `/around` 的公共 POST 逻辑（两者响应形状一致）
-    private static func postPlaces(path: String,
-                                   gateway: String,
-                                   token: String,
-                                   body: [String: Any],
-                                   timeoutSec: Double) async throws -> [PlaceSuggestion] {
-        guard let url = URL(string: gateway.hasSuffix("/") ? gateway + path : gateway + "/" + path) else {
-            throw GatewayError.badURL(gateway)
+        guard let n = near else {
+            throw GatewayError.transport("还没有定位，无法周边搜索")
         }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "content-type")
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
-        req.timeoutInterval = timeoutSec
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        guard code == 200 else {
-            let detail = String(data: data, encoding: .utf8) ?? ""
-            throw GatewayError.transport("HTTP \(code)：\(detail.prefix(300))")
-        }
-        do {
-            return try JSONDecoder().decode(PlacesResponse.self, from: data).places
-        } catch {
-            throw GatewayError.decode("\(error)")
+        let body: [String: Any] = [
+            "lon": n.lon, "lat": n.lat,
+            "keywords": keywords, "radius": radiusM,
+        ]
+        let data = try await postJSON(path: "around", gateway: gateway, token: token,
+                                      body: body, timeoutSec: timeoutSec)
+        let r: AroundResponse
+        do { r = try JSONDecoder().decode(AroundResponse.self, from: data) }
+        catch { throw GatewayError.decode("around: \(error)") }
+        return r.pois.map {
+            PlaceSuggestion(name: $0.name,
+                            address: $0.address ?? $0.type ?? "",
+                            lon: $0.lon, lat: $0.lat, distanceM: $0.distanceM)
         }
     }
 }
 
 // MARK: - 逆地理编码 / 路况
 
-/// 逆地理编码结果（坐标 → 可读地址，用于显示"当前所在道路"）
-public struct ReverseGeocodeResult: Codable, Sendable {
-    public let address: String
-    /// 所在道路名（可能为空）
-    public let road: String
-    /// 结构化地址组分（省/市/区/街道…）
-    public let components: [String: String]?
+/**
+ 逆地理编码结果（坐标 → 可读地址）。
 
-    private enum CodingKeys: String, CodingKey {
-        case address, road, components
+ ⚠️ 网关返回的是**扁平对象**：`{formattedAddress, road, poiName, district,
+ city, province}` —— 不是 `{result:{...}}`。第一稿按后者写，解不开。
+ */
+public struct ReverseGeocodeResult: Codable, Sendable {
+    public let formattedAddress: String?
+    public let road: String?
+    public let poiName: String?
+    public let district: String?
+    public let city: String?
+    public let province: String?
+
+    /// 适合显示的一行文字：优先 POI 名，其次道路名，最后完整地址
+    public var displayText: String {
+        for s in [poiName, road, formattedAddress] {
+            if let v = s, !v.isEmpty { return v }
+        }
+        return ""
     }
 }
 
-/// 路况（`/traffic`）
+/**
+ 路况。
+
+ ⚠️ 同样是**扁平对象**：`{status, statusCode, description, roads:[...]}`。
+ 车速在各路段里（`roads[].speedKmh`），顶层没有 —— 第一稿按
+ `{traffic:{status, speedKmh}}` 写，解不开。
+ */
 public struct TrafficStatus: Codable, Sendable {
-    /// 总体描述，如 "畅通" / "缓行" / "拥堵"
     public let status: String
-    /// 该区域的平均车速（km/h），未知为 nil
-    public let speedKmh: Double?
+    public let statusCode: String?
+    public let description: String?
+    public let roads: [Road]
 
-    public var isCongested: Bool { status.contains("拥堵") }
-}
+    public struct Road: Codable, Sendable {
+        public let name: String?
+        public let status: String?
+        public let speedKmh: Double?
+        public let lengthM: Double?
+    }
 
-private struct RegeoResponse: Codable {
-    let result: ReverseGeocodeResult?
-}
-private struct TrafficResponse: Codable {
-    let traffic: TrafficStatus?
+    /// 各路段平均车速（无有效数据时为 nil）
+    public var averageSpeedKmh: Double? {
+        let vals = roads.compactMap { $0.speedKmh }
+        guard !vals.isEmpty else { return nil }
+        return vals.reduce(0, +) / Double(vals.count)
+    }
 }
 
 public extension GatewayClient {
-    /// 坐标 → 可读地址（WGS84 入参，网关内部转 GCJ-02）
+    /**
+     坐标 → 可读地址（WGS84 入参，网关内部转 GCJ-02）。
+     网关返回**扁平对象**（见 `ReverseGeocodeResult`）。
+     */
     static func fetchRegeo(gateway: String, token: String,
                            positionWGS84: GeoPoint,
-                           timeoutSec: Double = 10) async throws -> ReverseGeocodeResult? {
-        let json = try await postJSON(path: "regeo", gateway: gateway, token: token,
+                           timeoutSec: Double = 10) async throws -> ReverseGeocodeResult {
+        let data = try await postJSON(path: "regeo", gateway: gateway, token: token,
                                       body: ["lon": positionWGS84.lon, "lat": positionWGS84.lat],
                                       timeoutSec: timeoutSec)
-        return try? JSONDecoder().decode(RegeoResponse.self, from: json).result
+        do { return try JSONDecoder().decode(ReverseGeocodeResult.self, from: data) }
+        catch { throw GatewayError.decode("regeo: \(error)") }
     }
 
-    /// 查询某点周边的路况
+    /// 查询某点周边的路况（网关返回扁平对象，见 `TrafficStatus`）
     static func fetchTraffic(gateway: String, token: String,
                              positionWGS84: GeoPoint,
-                             timeoutSec: Double = 10) async throws -> TrafficStatus? {
-        let json = try await postJSON(path: "traffic", gateway: gateway, token: token,
+                             timeoutSec: Double = 10) async throws -> TrafficStatus {
+        let data = try await postJSON(path: "traffic", gateway: gateway, token: token,
                                       body: ["lon": positionWGS84.lon, "lat": positionWGS84.lat],
                                       timeoutSec: timeoutSec)
-        return try? JSONDecoder().decode(TrafficResponse.self, from: json).traffic
+        do { return try JSONDecoder().decode(TrafficStatus.self, from: data) }
+        catch { throw GatewayError.decode("traffic: \(error)") }
     }
 
-    /// 简单的 POST → Data（供上面两个用；它们不需要复杂的解码错误信息）
+    /// 共用的 POST → Data。**解析错误要抛出并带上下文**，
+    /// 不能像第一稿那样静默返回 nil（那样只会表现为"查询失败"，查不到原因）。
     private static func postJSON(path: String, gateway: String, token: String,
                                  body: [String: Any], timeoutSec: Double) async throws -> Data {
         guard let url = URL(string: gateway.hasSuffix("/") ? gateway + path : gateway + "/" + path) else {
@@ -512,7 +568,8 @@ public extension GatewayClient {
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else {
-            throw GatewayError.transport("HTTP \(code)")
+            let detail = String(data: data, encoding: .utf8) ?? ""
+            throw GatewayError.transport("HTTP \(code)：\(detail.prefix(200))")
         }
         return data
     }

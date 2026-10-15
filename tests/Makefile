@@ -79,6 +79,8 @@ run: $(TESTS)
 	@swift ../tools/test_ios_logic.swift
 	@echo "--- 地图窗口编码（与网关公式交叉验证）---"
 	@swift ../tools/test_map_codec.swift
+	@echo "--- 网关响应契约（真实 JSON 夹具，防字段名写错）---"
+	@swift ../tools/test_gateway_contract.swift
 	@echo "--- UI 像素级回归（需已构建 simulator/dashboard_sim）---"
 	@if [ ! -x ../simulator/dashboard_sim ]; then \
 		echo "  跳过：未构建 dashboard_sim（cd ../simulator && make）"; \
