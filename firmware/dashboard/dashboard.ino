@@ -1563,9 +1563,13 @@ static void process_command(char *cmd)
     const char *arg = cmd + 4;
     while (*arg == ' ') arg++;
     if (*arg == '\0') {
-      Serial.printf("[演示] %s（车速=%.0f）\n",
+      /* 顺便报出**斜坡当前值**：这是"命令是否真的驱动了指针"的直接证据
+         （指针由斜坡驱动，演示值只是斜坡的目标）。 */
+      Serial.printf("[演示] %s（演示值=%.0f，斜坡当前=%.1f，目标=%.1f）\n",
                     ui_speed_demo_active() ? "进行中" : "未开启",
-                    (double)ui_speed_demo_kmh());
+                    (double)ui_speed_demo_kmh(),
+                    (double)telemetry_ramp_value(&s_ramp),
+                    (double)s_ramp.target_kmh);
     } else if (strncmp(arg, "off", 3) == 0) {
       ui_speed_set_demo(-1.0f);
       Serial.println("[演示] 已退出");
@@ -2144,7 +2148,20 @@ static void ble_update(void)
   ui_speed_set_status(st_disp);
   s_last_status = st_disp;
 
-  if (link_raw == LINK_OK) {
+  /*
+   * ⚠️ **演示模式下遥测路径不得碰速度斜坡**。
+   *
+   * 这是"滑动速度条完全没反应"的真正原因：演示时没有真实遥测，
+   * link_raw != LINK_OK，于是下面 else 分支每帧都 `telemetry_ramp_reset()`，
+   * 而主循环的斜坡块刚设好的演示目标**下一帧就被清零** —— 目标恒为 0、
+   * 指针纹丝不动，而状态行的 DEMO 又显示正常，所以看起来"命令到了但没动画"。
+   *
+   * 演示期间速度目标**只由主循环的斜坡块**设置（见 PH_RAMP 段）。
+   */
+  if (ui_speed_demo_active()) {
+    ui_speed_set_fix(true, 0); /* 让指针区域按"有效"渲染 */
+  }
+  else if (link_raw == LINK_OK) {
     bool speed_ok = s_tel.speed_valid && s_tel.speed_mps >= 0.0f;
     ui_speed_set_fix(true, 0);
     if (speed_ok) {

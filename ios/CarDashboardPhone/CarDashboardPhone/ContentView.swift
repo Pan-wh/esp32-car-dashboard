@@ -99,6 +99,8 @@ struct ContentView: View {
         所以拖动期间**限频**，松手时再补发一次末值确保一定送达。
      */
     @State private var lastDemoSendMs: UInt64 = 0
+    /// 演示命令**真正发出去**的次数（未连接时不计）—— 用于区分"没发"与"发了没动"
+    @State private var demoSendCount = 0
     /// 演示速度的发送间隔（毫秒）。100ms ≈ 10Hz，比人手拖动平滑。
     private static let demoSendIntervalMs: UInt64 = 100
     @State private var screenOn = true
@@ -437,7 +439,11 @@ struct ContentView: View {
                          */
                         if !editing {
                             lastDemoSendMs = 0
-                            _ = session.ble.sendDemoSpeed(demoSpeed)
+                            /* announce：松手这次让它出现在上方的"已发送"里，
+                               好确认滑条真的发出去了（否则无从区分"没发"与"没动"）*/
+                            if session.ble.sendDemoSpeed(demoSpeed, announce: true) {
+                                demoSendCount += 1
+                            }
                         }
                     }
                     .onChange(of: demoSpeed) { _, v in
@@ -445,10 +451,22 @@ struct ContentView: View {
                         let now = DispatchTime.now().uptimeNanoseconds / 1_000_000
                         if now &- lastDemoSendMs >= Self.demoSendIntervalMs {
                             lastDemoSendMs = now
-                            _ = session.ble.sendDemoSpeed(v)
+                            if session.ble.sendDemoSpeed(v) { demoSendCount += 1 }
                         }
                     }
                     Text("\(Int(demoSpeed))").monospacedDigit().frame(width: 34)
+                }
+                /*
+                 * 直接显示"滑条当前值是几" —— 这是排查的第一步：
+                 * 若拖动时这个数字都不变，问题在滑条本身；
+                 * 变了但仪表不动，问题在发送或固件。
+                 */
+                HStack {
+                    Text("当前演示值").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(Int(demoSpeed)) km/h").font(.caption).monospacedDigit()
+                    Text(demoSendCount > 0 ? "（已发送 \(demoSendCount) 次）" : "（尚未发送）")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
                 Text("仅用于演示表盘动画：仪表状态行会显示 DEMO（琥珀色）。开始驾驶、收到真实定位或蓝牙断开时会自动退出。")
                     .font(.footnote).foregroundStyle(.secondary)
