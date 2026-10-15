@@ -138,7 +138,25 @@ static uint8_t s_touch_rot = 0;
  * `verbose on|off` 可强制打开（以防某平台 DTR 检测不可靠）。
  */
 static bool s_dbg_force = false;
-static inline bool dbg_on(void) { return s_dbg_force || (bool)Serial; }
+/**
+ * 是否允许打印**周期性**调试信息（BLE 2Hz 行、5 秒心跳、触摸日志）。
+ *
+ * ⚠️ 除了"有没有串口"，还必须检查**发送缓冲余量** —— 这是踩过的坑：
+ *
+ * 控制台走 USB CDC（`CDCOnBoot=cdc`）。当**没有读端**时（没插电脑、
+ * 或串口监视器/日志记录器没在跑），CDC 的发送缓冲会填满，
+ * 此时 `Serial.printf` **会阻塞**，把主循环（甚至 BLE 回调）卡死 ——
+ * 现象是设备"活着但什么都不打印、也不响应命令"，只能复位。
+ *
+ * 所以周期性日志一律"写不下就跳过这一条"：丢一行日志远比卡死设备划算。
+ * 按需输出（命令响应）不受此限，因为那本身就意味着有人在交互。
+ */
+static inline bool dbg_on(void)
+{
+  if (!(s_dbg_force || (bool)Serial)) return false;
+  /* 256 B 余量：够放最长的一条心跳（约 200 B），避免 printf 中途被卡住 */
+  return Serial.availableForWrite() >= 256;
+}
 
 /*
  * ── 中断间隔诊断（区分"中断被关"与"任务被抢占"）────────────────────
