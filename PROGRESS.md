@@ -226,11 +226,11 @@ ESP32-S3 (dashboard.ino)
 
 ## 九、待办（Backlog）
 
-> 📐 **导航页交互重设计（设计稿已完成，待评审）**：
-> [`docs/nav-app-ux.md`](docs/nav-app-ux.md) —— 从产品视角复盘了当前导航页的
-> 7 个 Section 铺陈问题（按钮语义随状态变、点提示即跳转、候选缺 ETA 等），
-> 提出**四状态机**（准备 → 选地点 → 选路线 → 导航中）与 P0/P1/P2 实施清单。
-> **评审通过前不改 `ContentView.swift`。**
+> ✅ **导航页交互重设计（已实施）**：四状态机（准备 → 选地点 → 选路线 → 导航中）|
+> —— 修掉了"「开始导航」按钮两种含义"、合并了搜索入口、候选补上 ETA 与人话策略名、
+> 网关配置移入设置页、常用/最近目的地、导航与驾驶解耦、导航中可换路线。
+> 设计与实施记录：[`docs/nav-app-ux.md`](docs/nav-app-ux.md)（**P0+P1+P2 全做完**）
+> 代码：`Nav/NavTabView.swift` + `Nav/NavUIState.swift`（61 项单测）
 
 > 任务书 §9 矩阵 **12/12** 与 DoD **8/8** 均已完成（见
 > [`docs/test-results.md`](docs/test-results.md)），以下为**任务书之外的**
