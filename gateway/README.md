@@ -12,7 +12,8 @@
 
 ## 快速开始
 
-**零依赖**（只用 Node 内置 `fetch` / `node:http` / `node:test`），无需 `npm install`。
+**有 2 个运行时依赖**：`@mapbox/vector-tile` 与 `pbf`（解析 OSM 矢量瓦片用，见 `package.json`）。**必须 `npm install`** —— 不装会启动失败（`src/mapwindow.js` 会 import 它们）。
+其余能力全用 Node 内置（`fetch` / `node:http` / `node:test`）。
 要求 Node ≥ 18（开发环境实测 v24）。
 
 ```bash
@@ -44,7 +45,7 @@ curl -s -X POST localhost:8080/route \
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/health` | `{ ok, hasKey, amapCallsToday }` —— **不回显 Key 内容** |
+| `GET` | `/health` | `{ ok, hasKey, amapCallsToday, mapWindowRequestsToday }` —— **不回显 Key 内容** |
 | `POST` | `/route` | 驾车路线规划，返回 RouteBundle |
 | `POST` | `/routes` | **多方案路线**：返回若干条真正不同的候选供选择 |
 | `POST` | `/geocode` | 地址文本 → 坐标（中文地名目的地）|
@@ -282,7 +283,7 @@ curl -s -X POST localhost:8080/route \
 ## 测试
 
 ```bash
-npm test          # 88 项，全部离线（不联网、不需要真实 Key）
+npm test          # 98 项，全部离线（不联网、不需要真实 Key）
 ```
 
 覆盖：坐标转换（往返/境外直通/偏移量级）、动作映射（**顺序敏感**用例）、
@@ -367,7 +368,7 @@ npm run probe -- --from 116.397428,39.90923 --to 116.481028,39.989643
 它会打印**字段清单**与**原始响应**。对照 `src/normalize.js` 用到的字段：
 
 - `route.paths[].distance` / `.duration`
-- `route.paths[].steps[].instruction` / `.road_name` / `.step_distance` / `.polyline`
+- `route.paths[].steps[].instruction` / `.road` / `.distance` / `.polyline`（⚠️ 旧名 `road_name` / `step_distance` 只是兼容 fallback，见下方第 1 条实测）
 
 若实际字段名不同，改 `normalize.js` 并同步更新 `test/fixtures/`。
 
@@ -381,7 +382,7 @@ npm run probe -- --from 116.397428,39.90923 --to 116.481028,39.989643
 
 | 决定 | 原因 |
 |------|------|
-| 零依赖 | 减少供应链风险；Node 内置能力已足够 |
+| 依赖极少（只 2 个，且都是解析 OSM 瓦片用的）| 减少供应链风险；其余全用 Node 内置能力 |
 | Key 只在服务端 + Bearer Token | 客户端可被反编译；CORS 不是认证 |
 | 无缓存 | 高德协议 §3.5 禁止存储/缓存服务数据 |
 | 坐标转换在网关与端侧各有一份 | 手机每次定位都要转换（2Hz），不能走网络往返 |
