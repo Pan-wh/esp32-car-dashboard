@@ -36,6 +36,36 @@
 #define MAP_COLOR_BLDG     0x25252B /* 建筑轮廓 */
 #define MAP_COLOR_ROUTE    0xFFFFFF /* 路线：纯白 */
 
+/*
+ * 车头箭头的**描边（casing）**。
+ *
+ * 为什么需要：路线与箭头都是白色，箭头正好压在路线起点上 ——
+ * 两者颜色相同、直接连在一起，看上去是一坨，看不出箭头指向哪。
+ * 通用做法是在白色箭头下面先画一个**更粗的、与底图同色**的箭头：
+ * 路线就像从箭头下面穿过一样，箭头轮廓立刻清晰。
+ *
+ * 取与底图同色而不是纯黑：底图是近黑（0x08080A），用纯黑会留下一圈
+ * 比底图更暗的痕迹；同色则只在压住路线/路网的地方"挖掉"一条缝。
+ */
+/*
+ * 白箭头要比描边"厚"才有分量感：若描边比白芯还宽，视觉上会变成
+ * "一个深色箭头里嵌了根白线"。这里 W=7、CASING=5（总宽 17），
+ * 白芯明显宽于两侧 5px 的深色缝隙。
+ */
+#define MAP_ARROW_W        9  /* 白箭头线宽 */
+#define MAP_ARROW_CASING   6  /* 描边向外加粗的像素数（总宽 = W + 2*CASING）*/
+
+/*
+ * 箭头尺寸（相对屏幕中心，像素）。
+ *
+ * 参考项目的车头箭头明显更大 —— 太小的话在快速扫视时根本看不出指向，
+ * 尤其是外面还包了一圈深色描边之后。
+ */
+#define MAP_ARROW_TIP_Y   (-38) /* 箭尖（屏幕上方为负）*/
+#define MAP_ARROW_SIDE_X  (24)  /* 两侧张开宽度 */
+#define MAP_ARROW_SIDE_Y  (22)  /* 两侧末端高度 */
+#define MAP_ARROW_NOTCH_Y (8)   /* 中间内凹高度 */
+
 /* 与 LCD 尺寸一致 */
 #define MAP_SCREEN_W 466
 #define MAP_SCREEN_H 466
@@ -71,7 +101,8 @@ static lv_obj_t *s_root;                                    /* 图层容器 */
 static lv_obj_t *s_road_obj[NAV_MAP_MAX_ROADS];
 static lv_obj_t *s_bldg_obj[NAV_MAP_MAX_BLDGS];
 static lv_obj_t *s_route_obj;
-static lv_obj_t *s_arrow;
+static lv_obj_t *s_arrow;      /* 白箭头（上层）*/
+static lv_obj_t *s_arrow_case; /* 描边箭头（下层，与底图同色）*/
 
 /** 点缓冲：`lv_line_set_points` 只保存指针，缓冲必须常驻 */
 static lv_point_t s_road_pts[NAV_MAP_MAX_ROADS][NAV_MAP_PTS_PER_FEATURE + 2];
@@ -183,20 +214,29 @@ void ui_nav_map_init(lv_obj_t *parent)
 
     /* 车头箭头：雪佛龙（tip → 左 → 内凹 → 右 → 回 tip）*/
     s_arrow_pts[0].x = (lv_coord_t)MAP_CX;
-    s_arrow_pts[0].y = (lv_coord_t)(MAP_CY - 24);
-    s_arrow_pts[1].x = (lv_coord_t)(MAP_CX - 15);
-    s_arrow_pts[1].y = (lv_coord_t)(MAP_CY + 14);
+    s_arrow_pts[0].y = (lv_coord_t)(MAP_CY + MAP_ARROW_TIP_Y);
+    s_arrow_pts[1].x = (lv_coord_t)(MAP_CX - MAP_ARROW_SIDE_X);
+    s_arrow_pts[1].y = (lv_coord_t)(MAP_CY + MAP_ARROW_SIDE_Y);
     s_arrow_pts[2].x = (lv_coord_t)MAP_CX;
-    s_arrow_pts[2].y = (lv_coord_t)(MAP_CY + 4);
-    s_arrow_pts[3].x = (lv_coord_t)(MAP_CX + 15);
-    s_arrow_pts[3].y = (lv_coord_t)(MAP_CY + 14);
+    s_arrow_pts[2].y = (lv_coord_t)(MAP_CY + MAP_ARROW_NOTCH_Y);
+    s_arrow_pts[3].x = (lv_coord_t)(MAP_CX + MAP_ARROW_SIDE_X);
+    s_arrow_pts[3].y = (lv_coord_t)(MAP_CY + MAP_ARROW_SIDE_Y);
     s_arrow_pts[4] = s_arrow_pts[0];
+
+    /* 先创建描边箭头（在下层），再创建白箭头（压住它）—— 创建顺序即层级 */
+    s_arrow_case = lv_line_create(s_root);
+    lv_obj_remove_style_all(s_arrow_case);
+    lv_obj_set_pos(s_arrow_case, 0, 0);
+    lv_obj_set_style_line_color(s_arrow_case, lv_color_hex(MAP_COLOR_BG), 0);
+    lv_obj_set_style_line_width(s_arrow_case, MAP_ARROW_W + 2 * MAP_ARROW_CASING, 0);
+    lv_obj_set_style_line_rounded(s_arrow_case, true, 0);
+    lv_line_set_points(s_arrow_case, s_arrow_pts, 5);
 
     s_arrow = lv_line_create(s_root);
     lv_obj_remove_style_all(s_arrow);
     lv_obj_set_pos(s_arrow, 0, 0);
     lv_obj_set_style_line_color(s_arrow, lv_color_hex(MAP_COLOR_ROUTE), 0);
-    lv_obj_set_style_line_width(s_arrow, 4, 0);
+    lv_obj_set_style_line_width(s_arrow, MAP_ARROW_W, 0);
     lv_obj_set_style_line_rounded(s_arrow, true, 0);
     lv_line_set_points(s_arrow, s_arrow_pts, 5);
 

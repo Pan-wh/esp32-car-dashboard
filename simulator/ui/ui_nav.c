@@ -364,7 +364,7 @@ lv_obj_t *ui_nav_create(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_dist_small, &speed_num_64, 0);
     lv_obj_set_style_text_color(s_dist_small, lv_color_hex(C_DIST), 0);
     lv_label_set_text(s_dist_small, "");
-    lv_obj_align(s_dist_small, LV_ALIGN_CENTER, 0, 40);
+    lv_obj_align(s_dist_small, LV_ALIGN_CENTER, 0, 56);
     lv_obj_add_flag(s_dist_small, LV_OBJ_FLAG_HIDDEN);
 
     /* 当前车速（底部）*/
@@ -407,7 +407,7 @@ static void apply_map_mode(bool on)
          * 只是从画面正中被挪到下方；150px 的大数字则换成 64px 的紧凑行。
          */
         lv_obj_align(s_box, LV_ALIGN_CENTER, 0, 140);
-        lv_obj_align(s_dist_small, LV_ALIGN_CENTER, 0, 36);
+        lv_obj_align(s_dist_small, LV_ALIGN_CENTER, 0, 56);
         lv_obj_add_flag(s_dist, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_unit, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_speed, LV_OBJ_FLAG_HIDDEN);
