@@ -294,9 +294,15 @@ final class BLEClient: NSObject, ObservableObject {
         让切换立刻生效。
      */
     @discardableResult
-    func sendDemoSpeed(_ kmh: Double) -> Bool {
-        /* quiet：滑块 10Hz 连发，成功时不刷 lastNotice（否则整页 10Hz 重绘）*/
-        sendCommand("{\"cmd\":\"demo_speed\",\"value\":\(Int(kmh.rounded()))}", quiet: true)
+    func sendDemoSpeed(_ kmh: Double, announce: Bool = false) -> Bool {
+        /*
+         * 默认 quiet：滑块 10Hz 连发，成功时不刷 lastNotice，
+         * 否则每秒 10 次整页重绘（本身就是卡顿源）。
+         * announce=true 只用在**松手**那一次 —— 让"到底发出去没有"看得见，
+         * 否则用户没法区分"没发"和"发了但仪表没动"。
+         */
+        sendCommand("{\"cmd\":\"demo_speed\",\"value\":\(Int(kmh.rounded()))}",
+                    quiet: !announce)
     }
 
     /// 便捷方法：息屏 / 亮屏
