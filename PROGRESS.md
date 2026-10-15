@@ -21,6 +21,7 @@
 | [`docs/ble.md`](docs/ble.md) | BLE 协议细节（GATT、JSON 字段）|
 | [`docs/decisions.md`](docs/decisions.md) | 设计决策（含已被取代的决策，保留历史）|
 | [`docs/nav-backend.md`](docs/nav-backend.md) | 导航数据源/网关：**引用归属、部署、维护、合规**（阶段 3）|
+| [`docs/nav-app-ux.md`](docs/nav-app-ux.md) | App 导航页的产品视角复盘与四状态机重设计（**待评审**）|
 | [`gateway/README.md`](gateway/README.md) | 导航网关（已实现）：接口、环境变量、真实响应核实结果 |
 | [`docs/ble.md`](docs/ble.md) | BLE 协议：**表盘列表上报**、face_enabled 命令、MTU 与 Read/Notify 约定 |
 | [`tools/nav_sim/README.md`](tools/nav_sim/README.md) | **Mac 侧「模拟手机」**：不需 iPhone 即可驱动真机验证全链路 |
@@ -224,6 +225,12 @@ ESP32-S3 (dashboard.ino)
 ---
 
 ## 九、待办（Backlog）
+
+> 📐 **导航页交互重设计（设计稿已完成，待评审）**：
+> [`docs/nav-app-ux.md`](docs/nav-app-ux.md) —— 从产品视角复盘了当前导航页的
+> 7 个 Section 铺陈问题（按钮语义随状态变、点提示即跳转、候选缺 ETA 等），
+> 提出**四状态机**（准备 → 选地点 → 选路线 → 导航中）与 P0/P1/P2 实施清单。
+> **评审通过前不改 `ContentView.swift`。**
 
 > 任务书 §9 矩阵 **12/12** 与 DoD **8/8** 均已完成（见
 > [`docs/test-results.md`](docs/test-results.md)），以下为**任务书之外的**
