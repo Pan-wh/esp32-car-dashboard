@@ -1517,14 +1517,18 @@ static void process_command(char *cmd)
         Serial.println("       例: nav 1 2 500 68  （导航中·左转·500m·68km/h）");
       }
       else {
-        ui_nav_set_state(st);
+        /*
+         * 走与 BLE 完全相同的路径（含"上升沿自动跳转"）——
+         * 这样串口命令既能驱动界面，也能**验证**真机上的跳转规则。
+         * 若要强制跳到导航页做界面调试，用 `page 4`。
+         */
+        nav_apply_state((nav_state_t)st);
         ui_nav_set_maneuver(mv);
         ui_nav_set_distance(dist);
         if (n >= 4) ui_nav_set_speed(spd, true);
-        /* 切到导航表盘，便于直接观察 */
-        ui_pages_set_face(UI_PAGE_NAV);
-        Serial.printf("[导航] 已设置 状态=%d 动作=%d 距离=%d%s\n", st, mv, dist,
-                      (n >= 4) ? " 含车速" : "");
+        Serial.printf("[导航] 已设置 状态=%d 动作=%d 距离=%d%s（当前表盘=%d）\n",
+                      st, mv, dist, (n >= 4) ? " 含车速" : "",
+                      (int)ui_pages_current());
       }
     }
   }
@@ -1915,6 +1919,28 @@ static bool time_sync_maybe(int64_t utc_ms)
  * NAV_STALE_MS（10s），而非遥测的 2.5s —— 否则会频繁误报过期。
  * 关键：一旦过期，**不得继续显示旧指引**（§6.3），由 ui_nav_set_state 落地。
  */
+/**
+ * 应用一个导航状态，并在**上升沿**自动跳到导航表盘。
+ *
+ * 抽成函数的原因：BLE 路径（nav_poll）与串口调试命令（nav ...）都要用同一套
+ * 跳转规则。原先串口命令是**无条件** `ui_pages_set_face(UI_PAGE_NAV)` ——
+ * 那样就绕过了"只在开始时跳一次"的判定，也没法用它验证真机行为。
+ */
+static void nav_apply_state(nav_state_t now)
+{
+  const nav_state_t prev = (nav_state_t)ui_nav_get_state();
+  ui_nav_set_state((int)now);
+
+  if (nav_should_auto_jump(prev, now)) {
+    if (ui_pages_show_nav_if_enabled()) {
+      Serial.printf("[导航] 开始导航 → 自动跳到导航表盘（%s → %s）\n",
+                    nav_state_name(prev), nav_state_name(now));
+    } else {
+      Serial.println("[导航] 开始导航，但导航表盘已被禁用 → 不跳转");
+    }
+  }
+}
+
 static void nav_poll(void)
 {
   static uint32_t s_last_nav_ms = 0;
@@ -1926,7 +1952,7 @@ static void nav_poll(void)
     s_nav_active = true;
 
     /* 只应用**实际提供**的字段：缺字段保留旧值（不因缺字段清空显示）*/
-    if (nm.has_state)    ui_nav_set_state((int)nm.state);
+    if (nm.has_state) nav_apply_state((nav_state_t)nm.state);
     if (nm.has_maneuver) ui_nav_set_maneuver((int)nm.maneuver);
     if (nm.has_dist)     ui_nav_set_distance(nm.distance_m);
     /* 自车在窗口坐标系中的偏移：地图层据此平移地图，使车永远在中心箭头上 */
@@ -1949,7 +1975,7 @@ static void nav_poll(void)
   /* BLE 断开 → 立即进入"无数据"（不等超时）*/
   if (!ble_telemetry_connected()) {
     if (ui_nav_get_state() != NAV_STATE_NO_DATA) {
-      ui_nav_set_state(NAV_STATE_NO_DATA);
+      nav_apply_state(NAV_STATE_NO_DATA);
       s_nav_active = false;
       Serial.println("[导航] BLE 断开 → 无数据");
     }
@@ -1958,7 +1984,7 @@ static void nav_poll(void)
 
   /* 超时 → 过期（**不显示旧指引**）*/
   if (age > NAV_STALE_MS && ui_nav_get_state() == NAV_STATE_ACTIVE) {
-    ui_nav_set_state(NAV_STATE_STALE);
+    nav_apply_state(NAV_STATE_STALE);
     Serial.printf("[导航] 数据过期（%u ms 无更新）→ 停止显示旧指引\n", (unsigned)age);
   }
 }

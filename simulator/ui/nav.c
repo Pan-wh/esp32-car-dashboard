@@ -23,6 +23,13 @@ const char *nav_maneuver_name(nav_maneuver_t m)
     }
 }
 
+bool nav_should_auto_jump(nav_state_t prev, nav_state_t now)
+{
+    const bool now_navigating = (now == NAV_STATE_ACTIVE || now == NAV_STATE_REROUTING);
+    const bool prev_idle      = (prev == NAV_STATE_IDLE || prev == NAV_STATE_NO_DATA);
+    return now_navigating && prev_idle;
+}
+
 const char *nav_state_name(nav_state_t st)
 {
     switch (st) {

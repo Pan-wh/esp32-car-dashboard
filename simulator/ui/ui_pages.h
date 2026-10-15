@@ -32,6 +32,14 @@ void ui_pages_init(void);
 void ui_pages_show(ui_page_t page);
 
 /*
+ * 若导航表盘**处于启用状态**，切到它并返回 true；否则不动、返回 false。
+ *
+ * 为什么要判断启用：被禁用的表盘不在滑动序列里，跳过去会让用户"卡在一个
+ * 划不走的页面上"。用户明确禁用了它，就该尊重这个选择 —— 只提示（日志）。
+ */
+bool ui_pages_show_nav_if_enabled(void);
+
+/*
  * 快速划动（flick）翻页：dir = +1 下一页，-1 上一页。
  *
  * 为什么需要它：一帧渲染约 110ms，LVGL 的输入读取被拖慢；用户快速一划时
