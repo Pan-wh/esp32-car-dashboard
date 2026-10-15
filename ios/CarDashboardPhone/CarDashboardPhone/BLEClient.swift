@@ -257,15 +257,23 @@ final class BLEClient: NSObject, ObservableObject {
 
     /// 发送设备控制命令（功能①/③）。返回是否已发出（未连接/特征未就绪时返回 false）。
     /// - Parameter json: 形如 {"cmd":"brightness","value":128}
+    /**
+     发送设备控制命令。返回是否已发出（未连接/特征未就绪时返回 false）。
+
+     - Parameter quiet: **成功时不更新 `lastNotice`**。
+       演示滑块会以 10Hz 连续发送，若每次都写 `lastNotice`，而它又被界面绑定，
+       就会造成**每秒 10 次整页重绘**（用户实测的"卡顿"之一）。
+       失败时**仍然**会写，因为那才是需要用户看到的信息。
+     */
     @discardableResult
-    func sendCommand(_ json: String) -> Bool {
+    func sendCommand(_ json: String, quiet: Bool = false) -> Bool {
         guard let per = peripheral, let ch = commandChar, isConnected else {
             lastNotice = "命令未发送：仪表未连接或命令特征未就绪"
             return false
         }
         guard let data = json.data(using: .utf8) else { return false }
         per.writeValue(data, for: ch, type: .withResponse)
-        lastNotice = "已发送：\(json)"
+        if !quiet { lastNotice = "已发送：\(json)" }
         return true
     }
 
@@ -287,7 +295,8 @@ final class BLEClient: NSObject, ObservableObject {
      */
     @discardableResult
     func sendDemoSpeed(_ kmh: Double) -> Bool {
-        sendCommand("{\"cmd\":\"demo_speed\",\"value\":\(Int(kmh.rounded()))}")
+        /* quiet：滑块 10Hz 连发，成功时不刷 lastNotice（否则整页 10Hz 重绘）*/
+        sendCommand("{\"cmd\":\"demo_speed\",\"value\":\(Int(kmh.rounded()))}", quiet: true)
     }
 
     /// 便捷方法：息屏 / 亮屏
