@@ -245,14 +245,26 @@ handle(fix:nowMs:) -> NavOutcome { snapshot, commands }
 > 已含坐标转换、高德客户端、响应归一化、认证、限流、无缓存。
 > 下面保留设计说明作为验收对照；具体用法见 gateway README。
 
-已实现的接口：
+> ⚠️ **本表是设计阶段的对照，可能滞后。当前接口的权威清单以
+> `gateway/src/server.js` 的 `KNOWN_PATHS` 为准**，字段详解见
+> [`../gateway/README.md`](../gateway/README.md)，部署见
+> [`../gateway/DEPLOY.md`](../gateway/DEPLOY.md)。
+
+已实现的接口（**2026-10-15 核对**）：
 
 | 接口 | 作用 | 状态 |
 |------|------|------|
-| `GET /health` | 存活与配置自检（不回显 Key）| ✅ |
+| `GET /health` | 存活与配置自检 + 今日各接口用量（不回显 Key）| ✅ |
 | `POST /route` | 起终点 → 路线（含 steps：动作/距离/道路名）| ✅ |
-| `POST /convert` | WGS84 → GCJ-02 | ✅ 已并入 `/route` 内部（手机端需本地转换，见 §3.6）|
-| `POST /traffic` | 路况刷新 | ⬜ 未实现（可选）|
+| `POST /routes` | **多方案路线**（内部用 3 个策略各取一条并去重）| ✅ 见 §5.4 |
+| `POST /geocode` | 地址文本 → 坐标 | ✅ |
+| `POST /regeo` | 坐标 → 地址 / 当前道路名 | ✅ |
+| `POST /traffic` | 周边**路况**（⚠️ 不是红绿灯）| ✅ |
+| `POST /around` | 周边搜索 | ✅ |
+| `POST /tips` | 地址联想 | ✅ |
+| `POST /bicycling` | 骑行路线 | ✅ |
+| `POST /mapwindow` | 周边地图窗口（走 OSM，不消耗高德额度）| ✅ 见 §5.3 |
+| ~~`POST /convert`~~ | WGS84 → GCJ-02 | 已并入 `/route` 内部（手机端需本地转换，见 §3.6）|
 
 **环境变量（Key 绝不入库、绝不进 App）**：
 

@@ -46,6 +46,7 @@ curl -s -X POST localhost:8080/route \
 |------|------|------|
 | `GET` | `/health` | `{ ok, hasKey, amapCallsToday }` —— **不回显 Key 内容** |
 | `POST` | `/route` | 驾车路线规划，返回 RouteBundle |
+| `POST` | `/routes` | **多方案路线**：返回若干条真正不同的候选供选择 |
 | `POST` | `/geocode` | 地址文本 → 坐标（中文地名目的地）|
 | `POST` | `/regeo` | 坐标 → 地址 / **当前道路名** |
 | `POST` | `/traffic` | 周边**拥堵**情况（⚠️ 不是红绿灯）|
@@ -107,6 +108,64 @@ curl -s -X POST localhost:8080/route \
 | 429 | `rate_limited` | 触发限流 |
 | 502 | `amap_error` | 高德业务错误（附 `info` / `infocode` / `hint`）|
 | 502 | `upstream_failed` | 网络/超时（默认不暴露细节，`VERBOSE_ERRORS=1` 可开）|
+
+### `POST /routes` —— 多方案路线
+
+**请求**与 `/route` 完全相同（同样可选 `strategy`，但此处会被忽略 —— 本接口
+自己用固定的三个策略去取）。
+
+**响应**：
+
+```json
+{
+  "origin":      { "lon": 116.403694, "lat": 39.910612 },
+  "destination": { "lon": 116.487295, "lat": 39.990960 },
+  "candidates": [
+    { "strategy": 0, "distanceM": 16847, "durationS": 2349,
+      "steps": [ ... ], "polyline": [ ... ] },
+    { "strategy": 6, "distanceM": 16056, "durationS": 2376, "steps": [ ... ], "polyline": [ ... ] },
+    { "strategy": 2, "distanceM": 15173, "durationS": 2859, "steps": [ ... ], "polyline": [ ... ] }
+  ],
+  "triedStrategies": [0, 2, 6],
+  "okStrategies":    [0, 2, 6]
+}
+```
+
+每个 `candidates[]` 元素与 `/route` 的响应**同构**（`strategy` 是额外字段），
+所以客户端选定后可以直接当作一条路线使用，**不需要再请求一次**。
+
+> #### 这个接口为什么存在（值得记下来）
+>
+> **高德 v3 驾车 API 一次只返回 1 条路径**。实测 `strategy`
+> 0/1/2/6/8/35/36/37 **全部**只返回 `route.paths.length === 1` ——
+> 所以"多方案对比"不可能靠它一次给。
+>
+> **但换 strategy 会得到真正不同的路线**。同一起终点实测：
+>
+> | 策略 | 含义 | 距离 | 耗时 |
+> |---|---|---|---|
+> | 0 | 速度优先 | 16847 m | 2349 s |
+> | 6 | 不走高速 | 16056 m | 2376 s |
+> | 2 | 距离最短 | 15173 m | 2859 s |
+>
+> 于是本接口的做法是：**串行**用这三个策略各请求一次，按
+> **距离 + 耗时去重**后合并返回。
+>
+> ⚠️ **去重是必须的**：实测策略 0/1/8/35/36/37 给出的是**完全相同**的一条路，
+> 不去重客户端会看到三条一模一样的"选项"。
+>
+> **代价与约束**：
+> - 一次调用 = 服务端 **3 次**高德请求（换来"真正可选 + 无需二次请求"）；
+> - 高德对单账号有 **QPS 限制**（实测快速连打会返回
+>   `10021 CUQPS_HAS_EXCEEDED_THE_LIMIT`），故串行 + 350ms 间隔；
+> - **单个策略失败不影响其余**：有几个成功的就给几个，全失败才返回 502。
+
+错误响应：
+
+| 状态 | `error` | 含义 |
+|------|---------|------|
+| 400 | `invalid_coordinates` | 坐标缺失或格式不对 |
+| 502 | `no_route_candidate` | 所有策略都没取到路线（配额 / QPS / 不可达）|
 
 ### `POST /regeo` —— 坐标 → 当前道路名
 

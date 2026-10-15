@@ -21,8 +21,9 @@
 | [`docs/ble.md`](docs/ble.md) | BLE 协议细节（GATT、JSON 字段）|
 | [`docs/decisions.md`](docs/decisions.md) | 设计决策（含已被取代的决策，保留历史）|
 | [`docs/nav-backend.md`](docs/nav-backend.md) | 导航数据源/网关：**引用归属、部署、维护、合规**（阶段 3）|
-| [`docs/nav-app-ux.md`](docs/nav-app-ux.md) | App 导航页的产品视角复盘与四状态机重设计（**待评审**）|
-| [`gateway/README.md`](gateway/README.md) | 导航网关（已实现）：接口、环境变量、真实响应核实结果 |
+| [`docs/nav-app-ux.md`](docs/nav-app-ux.md) | App 导航页的产品视角复盘与四状态机重设计（**P0+P1+P2 已实施**）|
+| [`gateway/DEPLOY.md`](gateway/DEPLOY.md) | **网关部署与运维**（自包含）：交给 AI / 运维即可部署、升级、验收、排障 |
+| [`gateway/README.md`](gateway/README.md) | 导航网关（已实现）：接口字段、环境变量、真实响应核实结果 |
 | [`docs/ble.md`](docs/ble.md) | BLE 协议：**表盘列表上报**、face_enabled 命令、MTU 与 Read/Notify 约定 |
 | [`tools/nav_sim/README.md`](tools/nav_sim/README.md) | **Mac 侧「模拟手机」**：不需 iPhone 即可驱动真机验证全链路 |
 | [`docs/hardware.md`](docs/hardware.md) | 硬件规格与引脚 |
@@ -122,6 +123,8 @@ ESP32-S3 (dashboard.ino)
 | **驾驶员插画** | 三态表情（平静/皱眉/咬牙），按 90/120 km/h 阈值切换 |
 | **底部状态子仪表** | 白底圆形区域组合数字速度、单位、状态色点与五态文案，不抢人物和指针焦点 |
 | **设备控制** | 亮度（0-255）、息屏/亮屏、**屏幕方向 0/90/180/270°**（NVS 持久化）|
+| **演示速度** | App 滑条驱动，走**与真实数据完全相同**的速度斜坡；仪表状态行显示 **DEMO**（琥珀色）以示区别。退出有三重保证：用户关开关 / **点开始驾驶** / 固件侧收到真实遥测或 BLE 断开 |
+| **导航开始自动跳转** | 收到"开始导航"的**上升沿**时跳到导航表盘一次；之后手动划走**不会被拽回**（`stale→active` 的恢复也不算）|
 | **时间同步** | 首次 BLE UTC → RTC，时钟页显示 SYNCED |
 | **行程统计** | 里程/最高速/加权均速，**仅 LIVE 且速度有效时累积** |
 
@@ -130,8 +133,9 @@ ESP32-S3 (dashboard.ino)
 | 功能 | 说明 |
 |------|------|
 | 驾驶会话 | 开始/结束，2Hz 发送 |
-| 仪表控制 | 表盘选择、亮度滑块、息屏开关 |
+| 仪表控制 | 表盘选择、亮度滑块、息屏开关、**模拟速度测试（演示）** |
 | 实时数据 | 速度/航向/精度/坐标 + **诊断字段**（速度质量、测速精度）|
+| **导航** | 四状态机（准备 → 选地点 → 选路线 → 导航中）：输入提示、多方案选路（含 ETA）、周边搜索、当前道路/路况、导航中换路线 |
 | 后台定位 | `allowsBackgroundLocationUpdates` |
 
 ---
@@ -200,25 +204,29 @@ ESP32-S3 (dashboard.ino)
 
 | 套件 | 数量 | 说明 |
 |------|------|------|
-| `test_telemetry` | 107 | 解析/换算/平滑/合理性/状态机/行程/**斜坡**/**防抖** |
-| `test_control` | 52 | 控制命令解析（含屏幕方向校验）|
-| `test_ui_face` | 67 | 表盘注册表（含分组/启用掩码）|
-| `test_nav` | 63 | 导航卡片纯逻辑（动作/状态/距离格式化）|
-| `test_nav_parse` | 92 | 导航消息解析（分流/容错/向前兼容）|
-| `test_nav_map` | 66 | 地图窗口（道路/建筑/路线绘制与裁剪）|
-| `test_img_indexed` | 28 | 索引图解码（调色板字节序/16位截断/边界/越界）|
-| `test_face_report` (C) | 72 | 表盘列表上报（JSON 结构/分组/截断/**显示状态 bright/rot/screen**）|
+| 套件 | 项数 | 覆盖 |
+|------|------|------|
+| `test_telemetry` (C) | 107 | 解析/换算/平滑/合理性/状态机/行程/**斜坡**/**防抖** |
+| `test_control` (C) | 58 | 控制命令解析（亮度/息屏/表盘/方向/**演示速度**）|
+| `test_ui_face` (C) | 67 | 表盘注册表（含分组/启用掩码）|
+| `test_nav` (C) | 76 | 导航卡片纯逻辑（动作/状态/距离格式化/**自动跳转的上升沿判定**）|
+| `test_nav_parse` (C) | 92 | 导航消息解析（分流/容错/向前兼容）|
+| `test_nav_map` (C) | 66 | 地图窗口（道路/建筑/路线绘制与裁剪）|
+| `test_img_indexed` (C) | 28 | 索引图解码（调色板字节序/16 位截断/边界/越界）|
+| `test_face_report` (C) | 72 | 表盘列表上报（JSON 结构/分组/截断/显示状态 bright/rot/screen）|
 | `test_nav_core` (Swift) | 156 | iOS 导航核心（含**偏航重算**）+ 坐标跨语言一致性 |
-| `test_nav_sim` (Swift) | 43 | Mac 模拟器（行车推进/法向偏航/**重算调度**/消息序列）|
-| `test_device_faces` (Swift) | 59 | App 表盘解析（分组/本地化/未知兜底/**显示状态缺省与 0 的区分**）|
+| `test_nav_sim` (Swift) | 43 | Mac 模拟器（行车推进/法向偏航/重算调度/消息序列）|
+| `test_device_faces` (Swift) | 59 | App 表盘解析（分组/本地化/未知兜底/显示状态缺省与 0 的区分）|
 | `test_map_codec` (Swift) | 38 | 地图窗口编码（**与网关 JS 公式交叉验证**/消息顺序/字节上限/切段连续性）|
-| `test_ble_policy` (Swift) | 19 | **App BLE 自动连接决策**（自动连接/手动断开/掉线重连，含 16 种状态组合穷举）|
-| `gateway` (Node) | 98 | 导航网关（路线/**多方案选路**/地理编码/周边搜索/交通/输入提示/骑行等端点，含真实响应结构回归，全离线）|
-| `test_ios_logic` | 32 | iOS 侧纯逻辑（Swift）|
-| **单测小计** | **992** | | `cd tests && make run`（各计数为 2026-10-15 实测值）|
+| `test_gateway_contract` (Swift) | 22 | **网关响应契约**：用真实抓取的 JSON 夹具验证字段名（防"凭印象写字段"）|
+| `test_ble_policy` (Swift) | 19 | App BLE 自动连接决策（穷举 16 种状态组合）|
+| `test_nav_ui_state` (Swift) | 61 | **导航页状态机**（穷举 16 种组合/按钮可见性/ETA 格式化/常用目的地去重）|
+| `test_ios_logic` (Swift) | 32 | iOS 侧其它纯逻辑 |
+| `gateway` (Node) | 98 | 网关（路线/多方案选路/逆地理/周边/交通/输入提示/骑行，含真实响应结构回归，**全离线**）|
+| **单测小计** | **1094** | `cd tests && make run`（各计数为 2026-10-15 实测值）|
 | `ui_regression.py` | 33 | UI 像素级回归 |
 | XCUITest | 5 | 会话/遥测计数/设备控制/链路诊断/BLE 状态 |
-| **自动化总计** | **1030** | | 单测 + UI 像素回归 + XCUITest |
+| **自动化总计** | **1132** | 单测 + UI 像素回归 + XCUITest |
 
 **真机验证**（iPhone 12 / iOS 27）：§9 矩阵 **12/12 通过**，DoD **8/8 达成**。
 
