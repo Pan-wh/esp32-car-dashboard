@@ -20,7 +20,8 @@
 | 文件 | 行数 | 职责 | 典型需求 |
 |------|------|------|---------|
 | `ContentView.swift` | 165 | SwiftUI 表单界面 | 加设置项、调布局、改文案 |
-| `BLEClient.swift` | 213 | BLE 连接/发送/控制命令 | 加特征、改重连策略 |
+| `BLEClient.swift` | 677 | BLE 连接/发送/控制命令 | 加特征、改重连策略 |
+| `BLEConnectionPolicy.swift` | 108 | **自动连接决策**（纯函数，可离线单测）| 改"何时自动连/断开是否重连" |
 | `LocationService.swift` | 104 | 定位采集 | 改精度/后台模式/新鲜度 |
 | `TelemetryQuality.swift` | 45 | **数据质量门槛** | 改速度有效性判定 |
 | `TelemetryPacket.swift` | 79 | JSON 打包 | **改字段（须同步固件）** |

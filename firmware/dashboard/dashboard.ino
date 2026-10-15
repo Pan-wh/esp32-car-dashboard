@@ -557,11 +557,18 @@ static uint8_t s_brightness = 200;   /* 当前亮度（0-255）*/
 static bool s_screen_off = false;    /* 息屏状态 */
 #define BRIGHTNESS_DEFAULT 200
 
+/*
+ * 前置声明：定义在下面（那里能用到 s_display_rot / s_faces_dirty）。
+ * C++ 要求先声明后使用，故在此声明、在下方定义。
+ */
+static void sync_display_report_state(void);
+
 /* 应用亮度（带限幅；0 视为最低可见亮度，见 control_clamp_brightness） */
 static void apply_brightness(uint8_t v)
 {
   s_brightness = v;
   gfx->setBrightness(v);
+  sync_display_report_state();
 }
 
 static void apply_screen(bool off)
@@ -575,6 +582,7 @@ static void apply_screen(bool off)
     gfx->displayOn();
     gfx->setBrightness(s_brightness); /* 唤醒后恢复亮度 */
   }
+  sync_display_report_state();
 }
 
 /* 消费一条 BLE 下行控制命令（主循环调用，BLE 回调只暂存） */
@@ -614,8 +622,29 @@ static lv_disp_rot_t rot_deg_to_enum(int deg)
 
 /** 上一次观察到的表盘 id（-1 = 尚未取过），用于检测变化并持久化 */
 static int s_last_face = -1;
-/** 表盘列表或启用状态有变化，需要重新上报 */
+/** 表盘列表、启用状态或显示状态（亮度/方向/息屏）有变化，需要重新上报 */
 static bool s_faces_dirty = false;
+
+/**
+ * 把"设备显示状态"（亮度/方向/息屏）同步进上报表，供 App 显示**真值**。
+ *
+ * 为什么要有：这三项是**设备的属性**，不是 App 的设置。用 App 调好亮度后
+ * 断掉 App、带着仪表上车，亮度仍是那个值；下次单独给仪表上电（压根没开 App）
+ * 也应保持。所以**绝不能**在连接时由 App 下发一份"它记得的亮度"，那会把
+ * 用户在设备上设好的值悄悄冲掉。正确方向是：设备上报 → App 显示。
+ *
+ * ⚠️ 定义放在这里（而非 apply_brightness 旁边）是因为要用到上面这两个变量，
+ *    C++ 要求先声明后使用（上面已有前置声明供 apply_* 调用）。
+ */
+static void sync_display_report_state(void)
+{
+  face_report_display_t d;
+  d.brightness = (int)s_brightness;
+  d.rotation = s_display_rot; /* -1 = 尚未设置 → 上报时省略该字段 */
+  d.screen_on = s_screen_off ? 0 : 1;
+  face_report_set_display(&d);
+  s_faces_dirty = true; /* 让主循环立刻重新上报 */
+}
 
 static void save_face_prefs(int face_id, uint32_t mask)
 {
@@ -749,6 +778,11 @@ static void set_display_rotation(int deg, bool persist)
       prefs.end();
     }
   }
+  /*
+   * 方向变了 → 通知 App 重新上报（方向同样是"设备属性、设备上报"）。
+   * 放在两个分支之后统一调用，避免只在某一条路径上同步而漏掉另一条。
+   */
+  sync_display_report_state();
   Serial.printf("[旋转] 屏幕方向 -> %d°（%s）%s\n", deg,
                 hw ? "CO5300 硬件旋转" : "LVGL 低开销路径",
                 persist ? "（已存 NVS）" : "（未持久化）");

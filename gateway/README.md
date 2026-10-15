@@ -44,8 +44,18 @@ curl -s -X POST localhost:8080/route \
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/health` | `{ ok, hasKey }` —— **不回显 Key 内容** |
-| `POST` | `/route` | 路线规划，返回 RouteBundle |
+| `GET` | `/health` | `{ ok, hasKey, amapCallsToday }` —— **不回显 Key 内容** |
+| `POST` | `/route` | 驾车路线规划，返回 RouteBundle |
+| `POST` | `/geocode` | 地址文本 → 坐标（中文地名目的地）|
+| `POST` | `/regeo` | 坐标 → 地址 / **当前道路名** |
+| `POST` | `/traffic` | 周边**拥堵**情况（⚠️ 不是红绿灯）|
+| `POST` | `/around` | 周边搜索（加油站 / 服务区等）|
+| `POST` | `/tips` | 地址联想（搜索框输入提示）|
+| `POST` | `/bicycling` | 骑行路线规划 |
+| `POST` | `/mapwindow` | 周边地图窗口（±500m 路网/建筑几何）|
+
+> 除 `/health` 外**全部需要** `authorization: Bearer <GATEWAY_TOKEN>`。
+> 所有接口的**入参与返回坐标一律 WGS84**（网关内部往返 GCJ-02）。
 
 ### `POST /route`
 
@@ -98,6 +108,93 @@ curl -s -X POST localhost:8080/route \
 | 502 | `amap_error` | 高德业务错误（附 `info` / `infocode` / `hint`）|
 | 502 | `upstream_failed` | 网络/超时（默认不暴露细节，`VERBOSE_ERRORS=1` 可开）|
 
+### `POST /regeo` —— 坐标 → 当前道路名
+
+```json
+// 请求（WGS84）
+{ "lon": 116.397428, "lat": 39.90923, "radius": 0 }
+```
+
+```json
+// 响应
+{
+  "formattedAddress": "北京市东城区东华门街道北湾子胡同",
+  "road": "北湾子胡同",
+  "poiName": null,
+  "district": "东城区",
+  "city": null,
+  "province": "北京市"
+}
+```
+
+`road` 为 `null` 表示该处无道路名（高德此时返回**空数组**，已容错）。
+仪表可直接显示 "北湾子胡同"。
+
+### `POST /traffic` —— 周边拥堵（⚠️ **不是红绿灯**）
+
+```json
+// 请求（WGS84）；halfMeters 默认 500（即 1km×1km）
+{ "lon": 116.397428, "lat": 39.90923, "halfMeters": 500, "level": 6 }
+```
+
+```json
+// 响应
+{
+  "status": "拥堵",
+  "statusCode": "3",
+  "description": "中度拥堵",
+  "roads": [
+    { "name": "东华门大街", "status": "拥堵", "statusCode": "3",
+      "direction": "从北河沿大街到南池子大街",
+      "lengthM": 317, "speedKmh": 5, "congestedLengthM": 317 }
+  ],
+  "count": 1
+}
+```
+
+**这是拥堵信息，不是红绿灯。** 红绿灯的相位/倒计时不在任何高德 Web 服务 API 中
+（属地图客户端与导航 SDK 能力），详见 [`docs/nav-backend.md`](../docs/nav-backend.md)。
+
+### `POST /around` —— 周边搜索
+
+```json
+// 请求（WGS84）；keywords 可省略
+{ "lon": 116.397428, "lat": 39.90923, "keywords": "加油站", "radius": 3000, "limit": 20 }
+```
+
+```json
+// 响应（坐标已转回 **WGS84**）
+{ "pois": [
+  { "name": "中国石化加油站(北京站)", "type": "汽车服务;加油站;中国石化",
+    "distanceM": 1797, "lon": 116.416618, "lat": 39.902593, "address": "" }
+] }
+```
+
+无坐标的 POI 会被跳过（对导航无用）。
+
+### `POST /tips` —— 地址联想
+
+```json
+// 请求
+{ "keywords": "天安", "city": "" }
+```
+
+```json
+// 响应（有坐标的已转 WGS84；无坐标的候选保留但 lon/lat 为 null）
+{ "tips": [
+  { "name": "天安门", "district": "北京市东城区", "adcode": "110101",
+    "lon": 116.39122182304565, "lat": 39.90778574896749 }
+] }
+```
+
+### `POST /bicycling` —— 骑行路线
+
+请求与 `/route` 相同（WGS84 的 `origin` / `destination`）。
+响应结构与 RouteBundle 一致，额外带 `"mode": "bicycling"`。
+
+> ⚠️ 骑行用的是高德 **v4** 接口，路径在 `data.paths[]`（驾车是 `route.paths[]`），
+> 且用 `errcode: 0` 表示成功（驾车是 `status: "1"`）。已单独归一化。
+
 ---
 
 ## 环境变量
@@ -110,22 +207,39 @@ curl -s -X POST localhost:8080/route \
 |------|------|------|------|
 | `AMAP_KEY` | ✅ | — | 高德「Web 服务」类型 Key；**缺失则启动即失败** |
 | `GATEWAY_TOKEN` | ✅ | — | 客户端访问令牌；**缺失则启动即失败**（CORS 不是认证）|
+| `HOST` | | `127.0.0.1` | 监听地址。**默认只回环**（安全默认；反代/隧道场景用默认值即可）|
 | `PORT` | | `8080` | 监听端口 |
+| `TRUST_PROXY` | | `0` | 信任的反代跳数（默认不信任 `X-Forwarded-For`，避免被伪造）|
 | `RATE_LIMIT_PER_MIN` | | `60` | 每分钟请求上限（防误用刷爆配额）|
 | `UPSTREAM_TIMEOUT_MS` | | `8000` | 单次上游超时 |
+| `MAP_CACHE_DIR` | | `.cache/map-tiles` | 地图瓦片缓存目录（需可写，已 gitignore）|
 | `VERBOSE_ERRORS` | | — | 设为 `1` 才回传内部错误细节（仅本地调试用）|
+
+> ⚠️ **HTTPS 由外部提供**（反向代理或隧道），网关自身只监听明文 HTTP、不处理 TLS。
+> 部署要求与验收步骤见 [`DEPLOY.md`](DEPLOY.md)。
 
 ---
 
 ## 测试
 
 ```bash
-npm test          # 50 项，全部离线（不联网、不需要真实 Key）
+npm test          # 88 项，全部离线（不联网、不需要真实 Key）
 ```
 
 覆盖：坐标转换（往返/境外直通/偏移量级）、动作映射（**顺序敏感**用例）、
 响应归一化（字符串数字、解析失败不为 0、业务错误显式抛出）、
-HTTP 层（认证/限流/参数校验/请求体限制/上游错误透传/**Key 不泄露**）。
+HTTP 层（认证/限流/参数校验/请求体限制/上游错误透传/**Key 不泄露**）、
+以及新增 5 个接口（坐标是否真的转 GCJ-02 / 是否转回 WGS84 / 限幅 / 容错）。
+
+### 用真实 Key 核实新接口字段名
+
+```bash
+node --env-file-if-exists=.env bin/probe-new.js
+```
+
+本项目的一条硬规矩是**字段名以实测为准，不凭印象填写**。
+上面这个探针会用真实 Key 跑一遍 5 个新接口并打印字段清单。
+**它在开发时抓出了 3 个凭印象写就会错的地方**（见下）。
 
 ---
 
@@ -143,6 +257,26 @@ HTTP 层（认证/限流/参数校验/请求体限制/上游错误透传/**Key �
 
 **回归保护**：`test/fixtures/amap-driving-v3.json` 保留了真实响应的
 **字段名与结构**（数值为合成数据，见下方合规说明），字段名再变会立刻测试失败。
+
+---
+
+## ✅ 新增 5 接口的实测更正（2026-10-15）
+
+用真实 Key 跑 `bin/probe-new.js` 后，**推翻了 3 处凭印象写就会错的地方**。
+记录在此，避免将来有人"照直觉改回去"。
+
+| # | 原先的（错误）假设 | 实测结果 | 后果 |
+|---|-------------------|---------|------|
+| 1 | 骑行 v4 没有 `action`，maneuver 应为"未知" | `steps[].action` **就是中文**（"右转"），与驾车一致 | 若写死 UNKNOWN，骑行模式下仪表**完全不显示转向提示** |
+| 2 | `trafficinfo.evaluation.status` 是中文等级 | 是**数字码** `"3"`，中文在 `description`（"中度拥堵"）| 直接透出会得到 `"3"` 这种不可读值 |
+| 3 | `roads[]` 有 `congestion_distance` 字段（拥堵里程）| **该字段不存在**。实际字段：`name/status/direction/angle/speed/lcodes/polyline` | 拥堵里程恒为 `null`（现已改为**由 `polyline` 折线算出**）|
+
+补充实测结论：
+
+- **`extensions=base` 时 `roads` 恒为空数组** —— 要拿具体拥堵路段必须用 `all`。
+- **骑行 v4 用 `errcode: 0` 表示成功**，没有 `status` 字段 ——
+  直接套 `assertAmapOk`（要求 `status === "1"`）会把成功响应判成失败、恒返回 502。
+- 骑行接口路径是 `/v4/direction/bicycling`（驾车是 `/v3/...`）。
 
 ### 若上游再次改动，如何重新核实
 
@@ -204,8 +338,10 @@ npm run probe -- --from 116.397428,39.90923 --to 116.481028,39.989643
 |------|------|
 | `src/coords.js` | WGS84 ↔ GCJ-02（纯逻辑）|
 | `src/maneuver.js` | 动作映射（码表 + 文本兜底）|
-| `src/normalize.js` | 高德响应 → RouteBundle |
-| `src/amap.js` | 高德客户端（可注入 fetch）|
+| `src/normalize.js` | 高德响应 → RouteBundle（含骑行 v4）|
+| `src/amap.js` | 高德客户端：驾车/地理编码/逆地理/交通态势/周边/输入提示/骑行 |
+| `src/mapwindow.js` | 周边地图窗口（OSM 矢量瓦片，不消耗高德额度）|
 | `src/server.js` | HTTP 服务（认证/限流/无缓存）|
 | `src/config.js` | 环境变量 + 日志脱敏 |
-| `bin/probe.js` | 拉真实响应核对字段（**接 Key 后先跑这个**）|
+| `bin/probe.js` | 拉真实驾车响应核对字段（**接 Key 后先跑这个**）|
+| `bin/probe-new.js` | 核对逆地理/态势/周边/提示/骑行 5 个接口的字段名 |

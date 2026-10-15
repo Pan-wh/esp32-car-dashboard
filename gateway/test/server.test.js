@@ -272,6 +272,29 @@ test('loadConfig：缺 Key / 缺 token → 启动即失败（快速失败）', (
   assert.equal(loadConfig({}, { requireKey: false }).amapKey, '');
 });
 
+test('★ loadConfig：HOST 默认只回环（默认安全），显式值才放开', () => {
+  const base = { AMAP_KEY: 'k', GATEWAY_TOKEN: 't' };
+  /*
+   * 这是安全默认值：默认绑 127.0.0.1，避免"装好就暴露在公网"。
+   * 反向代理/隧道场景用默认值即可；只有网关直接对外才设 0.0.0.0。
+   */
+  assert.equal(loadConfig(base).host, '127.0.0.1', '默认必须是回环');
+  assert.equal(loadConfig({ ...base, HOST: '0.0.0.0' }).host, '0.0.0.0');
+  assert.equal(loadConfig({ ...base, HOST: '::' }).host, '::');
+  /*
+   * ⚠️ 空白值必须回落 —— .env 里写 `HOST=`（空）时若不回落，
+   *    listen 会拿到空地址，表现为"服务起不来且看不出原因"。
+   */
+  assert.equal(loadConfig({ ...base, HOST: '' }).host, '127.0.0.1', '空值应回落');
+  assert.equal(loadConfig({ ...base, HOST: '   ' }).host, '127.0.0.1', '空白应回落');
+});
+
+test('★ loadConfig：TRUST_PROXY 默认 0（不信任伪造的 X-Forwarded-For）', () => {
+  const base = { AMAP_KEY: 'k', GATEWAY_TOKEN: 't' };
+  assert.equal(loadConfig(base).trustProxy, 0);
+  assert.equal(loadConfig({ ...base, TRUST_PROXY: '1' }).trustProxy, 1);
+});
+
 test('redact：遮蔽 key= / token= 参数（即便未显式传入 secrets）', () => {
   // URL 查询串
   assert.ok(!redact('https://x/y?key=SECRET123&a=1').includes('SECRET123'));

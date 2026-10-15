@@ -22,6 +22,7 @@
 		ADB735B3B0B903C576498A3E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FB8403418EFFC9FF3B4E519 /* ContentView.swift */; };
 		B235513F0C1CCE3B55EC7E93 /* DriveSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F24318EB88B2A85793A51CDA /* DriveSessionManager.swift */; };
 		BC1731E6285D1D59745CC0CB /* TelemetryPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41E0AF98E7F8E07D4F845669 /* TelemetryPacket.swift */; };
+		DB5F7B6B36949BC4316036DE /* BLEConnectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43AF101E01CE990CAB51551D /* BLEConnectionPolicy.swift */; };
 		E6D1D8986CC6A5AF1EBD96A7 /* LocationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A77792F272247B65306766CE /* LocationService.swift */; };
 		ED2CF185151F8E4F62825E63 /* CarDashboardPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90328C9C31C539EC52E1A87D /* CarDashboardPhoneApp.swift */; };
 		F569284BEE2E71612370E64B /* NavPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EA857645CD0BF1BA8BC01A5 /* NavPacket.swift */; };
@@ -43,6 +44,7 @@
 		3B5F263755A2A9A3BD832304 /* CarDashboardPhoneUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CarDashboardPhoneUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3C19D2B63E27756D16449A70 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		41E0AF98E7F8E07D4F845669 /* TelemetryPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryPacket.swift; sourceTree = "<group>"; };
+		43AF101E01CE990CAB51551D /* BLEConnectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEConnectionPolicy.swift; sourceTree = "<group>"; };
 		44C43BB0CCB313C4FB88F21C /* CarDashboardPhone.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CarDashboardPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		568C2317847C250D5E170B6D /* BLEStateUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEStateUITests.swift; sourceTree = "<group>"; };
 		56BCEAC1DF235542021ED285 /* GatewayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatewayClient.swift; sourceTree = "<group>"; };
@@ -111,6 +113,7 @@
 			children = (
 				3C19D2B63E27756D16449A70 /* Assets.xcassets */,
 				6DE0D4C728A95FAA998B576A /* BLEClient.swift */,
+				43AF101E01CE990CAB51551D /* BLEConnectionPolicy.swift */,
 				90328C9C31C539EC52E1A87D /* CarDashboardPhoneApp.swift */,
 				5FB8403418EFFC9FF3B4E519 /* ContentView.swift */,
 				E64BAD111E15074881588DA9 /* DeviceFaces.swift */,
@@ -218,6 +221,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3325EE76B686D6EB495C914E /* BLEClient.swift in Sources */,
+				DB5F7B6B36949BC4316036DE /* BLEConnectionPolicy.swift in Sources */,
 				ED2CF185151F8E4F62825E63 /* CarDashboardPhoneApp.swift in Sources */,
 				ADB735B3B0B903C576498A3E /* ContentView.swift in Sources */,
 				9E2D0559BFBE37F8642C0C86 /* Coords.swift in Sources */,

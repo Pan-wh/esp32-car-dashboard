@@ -29,6 +29,39 @@ void face_report_set_current(int face_id)
     s_current = face_id;
 }
 
+/*
+ * 设备显示状态（亮度/方向/息屏）。
+ *
+ * 各字段负数 = "尚未设置" → 上报时**省略**该字段，而不是发一个假值。
+ * 这一点很重要：App 收到省略的字段会保持原值，而收到 0 会显示成 0
+ * —— 那正是"亮度被凭空改掉"的 bug 形态。
+ */
+static face_report_display_t s_display = { -1, -1, -1 };
+
+void face_report_set_display(const face_report_display_t *d)
+{
+    if (d == NULL) {
+        s_display.brightness = -1;
+        s_display.rotation = -1;
+        s_display.screen_on = -1;
+        return;
+    }
+    s_display = *d;
+}
+
+face_report_display_t face_report_get_display(void)
+{
+    return s_display;
+}
+
+void face_report_reset_for_test(void)
+{
+    s_current = -1;
+    s_display.brightness = -1;
+    s_display.rotation = -1;
+    s_display.screen_on = -1;
+}
+
 static void sb_init(sb_t *sb, char *buf, size_t cap)
 {
     sb->buf = buf;
@@ -104,6 +137,27 @@ static void sb_printf(sb_t *sb, const char *fmt, ...)
     sb_puts(sb, tmp);
 }
 
+/**
+ * 追加"设备显示状态"字段（只追加已设置的非负字段）。
+ *
+ * 抽成函数是因为**完整报告与截断报告的表头必须一致** —— 两处各写一遍
+ * 迟早会改漏一处（截断路径较少被走到）。
+ *
+ * ⚠️ 定义位置必须在 sb_printf 之后（它要用到）。
+ */
+static void sb_put_display(sb_t *sb)
+{
+    if (s_display.brightness >= 0) {
+        sb_printf(sb, ",\"bright\":%d", s_display.brightness);
+    }
+    if (s_display.rotation >= 0) {
+        sb_printf(sb, ",\"rot\":%d", s_display.rotation);
+    }
+    if (s_display.screen_on >= 0) {
+        sb_printf(sb, ",\"screen\":%d", s_display.screen_on ? 1 : 0);
+    }
+}
+
 /** 分组枚举 → ASCII 名（App 据此本地化分组标题）*/
 static const char *group_key(int group)
 {
@@ -134,8 +188,10 @@ int face_report_build(char *buf, size_t cap)
     sb_t full;
     sb_init(&full, probe, sizeof(probe));
     sb_printf(&full,
-              "{\"t\":\"faces\",\"v\":1,\"count\":%d,\"mask\":%u,\"cur\":%d,\"faces\":[",
+              "{\"t\":\"faces\",\"v\":1,\"count\":%d,\"mask\":%u,\"cur\":%d",
               n, (unsigned)mask, current);
+    sb_put_display(&full);
+    sb_puts(&full, ",\"faces\":[");
     for (int i = 0; i < n; i++) {
         const ui_face_desc_t *d = ui_face_get(i);
         if (d == NULL) continue;
@@ -163,8 +219,14 @@ int face_report_build(char *buf, size_t cap)
     sb_t sb;
     sb_init(&sb, buf, cap);
     sb_printf(&sb,
-              "{\"t\":\"faces\",\"v\":1,\"count\":%d,\"mask\":%u,\"cur\":%d,\"truncated\":1,\"faces\":[",
+              "{\"t\":\"faces\",\"v\":1,\"count\":%d,\"mask\":%u,\"cur\":%d,\"truncated\":1",
               n, (unsigned)mask, current);
+    /*
+     * ⚠️ 显示状态放在表头之后、faces 之前，且**截断时也必须带出** ——
+     *    否则表盘一多，App 就拿不到亮度/方向，又退化回"默认值覆盖设备"的坑。
+     */
+    sb_put_display(&sb);
+    sb_puts(&sb, ",\"faces\":[");
 
     bool first = true;
     for (int i = 0; i < n; i++) {

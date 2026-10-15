@@ -15,6 +15,20 @@ final class BLEClient: NSObject, ObservableObject {
     /// 最近一次失败/等待原因（供 UI 显示，避免"点了没反应"）
     @Published var lastNotice: String?
 
+    /**
+     自动连接开关（由**用户意图**驱动，不是由连接状态驱动）。
+
+     - `true`（默认）：蓝牙一就绪就自动扫描并连上仪表；掉线后自动重连。
+       用户不必再手动点「连接仪表」。
+     - `false`：用户点过「断开连接」→ 在用户重新点「连接仪表」之前，
+       **不再自动扫描/重连**（否则刚断开就会被自动连回去，按钮形同虚设）。
+
+     ⚠️ 不能用 `isConnected` 代替本标志：断连瞬间 `isConnected` 也是 false，
+       但它表达的是"当前没连着"，而本标志表达的是"用户想不想连着"。
+       两者混用会导致「断开连接」永远失效或掉线后不再自愈。
+     */
+    @Published private(set) var autoConnectEnabled = true
+
     /// 设备上报表盘列表（连接后自动读取；设备侧变更时会通知并触发重读）
     @Published var faces = DeviceFaceReport()
 
@@ -30,6 +44,20 @@ final class BLEClient: NSObject, ObservableObject {
      */
     static var demoModeEnabled: Bool {
         ProcessInfo.processInfo.arguments.contains("-demoFaces")
+    }
+
+    /**
+     演示"用户已手动断开"的界面状态（仅 Debug 构建，需启动参数 -demoDisconnected）。
+
+     为什么需要：模拟器**不支持 CoreBluetooth**，蓝牙状态恒为 .unsupported，
+     永远走不到"已连接 → 点断开"这条路径，因此"断开后界面长什么样"
+     （是否显示「连接仪表」、是否提示已停止自动连接）无法在模拟器上验收。
+     这个开关直接把状态置成"用户断开后的样子"，让该界面可截图验收。
+
+     Release 构建里这段代码不存在（#if DEBUG），不会误发布。
+     */
+    static var demoDisconnectedEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("-demoDisconnected")
     }
     #endif
     /// 上报是否已就绪（界面据此区分"还没读到"与"设备确实没有表盘"）
@@ -81,46 +109,148 @@ final class BLEClient: NSObject, ObservableObject {
         central = CBCentralManager(delegate: self, queue: .main)
     }
 
+    /// 是否正在扫描（用于去重：CoreBluetooth 重复 scanForPeripherals 不会报错，
+    /// 但会在状态回调里反复启动扫描，白耗电）
+    private var isScanning = false
+
     func scanAndConnect() {
         startMapWatchdog()
         /*
-         * 已连接时直接返回，**不要覆盖 lastNotice**。
-         *
-         * 真机踩坑：启动时 onAppear 自动连一次，用户随后点「开始驾驶」会再次
-         * 调用本函数 → 文案被改成"扫描中…"；但此时连接已建立，不会再有
-         * didConnect 回调来清空它 → 界面永久停在"扫描中…请确认仪表已上电"，
-         * 而 BLE 状态却显示"已连接"（自相矛盾）。
+         * 用户主动点「连接仪表」= 明确表达"我要连" → 重新打开自动连接。
+         * 这样「断开连接」之后仍能靠这个按钮恢复自动连接行为。
          */
-        if isConnected {
-            lastNotice = "已连接 CarDashboard"
-            return
-        }
-        switch state {
-        case .poweredOn:
+        autoConnectEnabled = true
+        connectIfPossible()
+    }
+
+    /**
+     尝试（重新）开始扫描并连接仪表。
+
+     只在**蓝牙就绪 + 用户未要求断开 + 尚未连接 + 尚未在扫描**时真正启动扫描，
+     其余情况只更新提示文案。
+
+     这是自动连接与手动连接的**唯一入口**：`centralManagerDidUpdateState`
+     （蓝牙刚就绪）、`didDisconnectPeripheral`（掉线重连）、用户点按钮，
+     三条路径都汇聚到这里，避免"三处各自写一份判断"而漏改。
+     */
+    private func connectIfPossible() {
+        /*
+         * 决策全部交给纯函数 BLEConnectionPolicy.decide —— 那里穷举了
+         * "用户断开优先于蓝牙就绪"等易错组合，并有 macOS 单测覆盖
+         * （tools/test_ble_policy.swift）。此处只负责执行与提示。
+         */
+        let decision = BLEConnectionPolicy.decide(.init(
+            bluetoothReady: state == .poweredOn,
+            isConnected: isConnected || peripheral?.state == .connected,
+            isScanning: isScanning,
+            autoConnectEnabled: autoConnectEnabled))
+
+        switch decision {
+        case .startScan:
             lastNotice = "扫描中…请确认仪表已上电"
+            isScanning = true
             central.scanForPeripherals(withServices: [serviceUUID], options: nil)
-        case .unknown, .resetting:
-            lastNotice = "蓝牙尚未就绪，请稍候再试"
-        case .unsupported:
-            lastNotice = "此设备不支持蓝牙 LE"
-        case .unauthorized:
-            lastNotice = "未授权蓝牙：请在 设置 → 隐私与安全性 → 蓝牙 中允许本 App"
-        case .poweredOff:
-            lastNotice = "蓝牙已关闭：请在控制中心或设置中打开蓝牙"
-        @unknown default:
-            lastNotice = "蓝牙状态异常"
+
+        case .alreadyScanning:
+            // 已在扫描：保持原提示文案，不要覆盖（否则会反复闪成"扫描中…"）
+            break
+
+        case .alreadyConnected:
+            /*
+             * 已连接时**不要覆盖 lastNotice**。
+             *
+             * 真机踩坑：启动时 onAppear 自动连一次，用户随后点「开始驾驶」会再次
+             * 调用本函数 → 文案被改成"扫描中…"；但此时连接已建立，不会再有
+             * didConnect 回调来清空它 → 界面永久停在"扫描中…请确认仪表已上电"，
+             * 而 BLE 状态却显示"已连接"（自相矛盾）。
+             */
+            lastNotice = "已连接 CarDashboard"
+
+        case .userDisconnected:
+            // 用户主动断开：不扫描、不重连，只说明现状与恢复方式
+            lastNotice = "已断开连接（点「连接仪表」可重新连接）"
+
+        case .bluetoothNotReady:
+            switch state {
+            case .unknown, .resetting:
+                lastNotice = "蓝牙尚未就绪，请稍候再试"
+            case .unsupported:
+                lastNotice = "此设备不支持蓝牙 LE"
+            case .unauthorized:
+                lastNotice = "未授权蓝牙：请在 设置 → 隐私与安全性 → 蓝牙 中允许本 App"
+            case .poweredOff:
+                lastNotice = "蓝牙已关闭：请在控制中心或设置中打开蓝牙"
+            case .poweredOn:
+                break // 不可达：poweredOn 时决策不会是 .bluetoothNotReady
+            @unknown default:
+                lastNotice = "蓝牙状态异常"
+            }
         }
     }
 
+    /**
+     手动断开连接（用户点「断开连接」）。
+
+     语义要点：**断开的同时关掉自动连接**，否则下一秒就会被 `didDisconnectPeripheral`
+     的自动重连接回去 —— 用户会看到"点了断开又自己连上了"。
+     要恢复自动连接：点「连接仪表」（`scanAndConnect`）。
+     */
+    func disconnect() {
+        autoConnectEnabled = false
+        pendingPacket = nil
+        resetMapQueue(reason: "用户主动断开")
+        stopScanning()
+        /*
+         * ⚠️ 判断"是否真的连着"，而不是"peripheral 是否非空"。
+         *
+         * `peripheral` 在上一次连接后**不会被自动清空**，所以它非空并不代表
+         * 当前处于连接态（例如：刚掉线正在重连时用户点了断开）。
+         * 若只判断非空就去 cancelPeripheralConnection，会丢掉"清 UI 状态"
+         * 这一步 —— 界面会停在"正在连接…"，而实际已经没有连接了。
+         */
+        let live = (peripheral?.state == .connected) || isConnected
+        if let per = peripheral, live {
+            central.cancelPeripheralConnection(per) // 触发 didDisconnectPeripheral → 清状态
+        } else {
+            clearConnectionState()
+            lastNotice = "已断开连接（点「连接仪表」可重新连接）"
+        }
+    }
+
+    /// 复位所有"当前连接"相关的状态（断连收尾的**唯一出口**，避免两处各清一半）
+    private func clearConnectionState() {
+        isConnected = false
+        telemetryChar = nil
+        statusChar = nil
+        commandChar = nil
+        facesChar = nil
+        facesReady = false
+    }
+
+    /// 停止扫描并复位扫描标志（幂等）
+    private func stopScanning() {
+        guard isScanning else { return }
+        isScanning = false
+        central.stopScan()
+    }
+
     /// 供 UI 显示的状态文案
+    ///
+    /// 蓝牙就绪与否的文案由 `BLEConnectionPolicy.stateText` 决定（有单测）；
+    /// 这里只处理"蓝牙根本没就绪"的细分原因。
     var stateText: String {
+        if state == .poweredOn {
+            return BLEConnectionPolicy.stateText(bluetoothReady: true,
+                                                isConnected: isConnected,
+                                                autoConnectEnabled: autoConnectEnabled)
+        }
         switch state {
-        case .poweredOn: return isConnected ? "已连接" : "蓝牙就绪"
         case .unknown: return "初始化中"
         case .resetting: return "重置中"
         case .unsupported: return "不支持 BLE"
         case .unauthorized: return "未授权"
         case .poweredOff: return "蓝牙已关闭"
+        case .poweredOn: return "蓝牙就绪" // 不可达（上面已提前返回）
         @unknown default: return "未知"
         }
     }
@@ -197,8 +327,9 @@ final class BLEClient: NSObject, ObservableObject {
     func loadDemoFaces() {
         // 与真机实际上报**完全一致**（3 个分组、5 个表盘），
         // 这样截图能代表用户实际会看到的样子。
+        // 含设备显示状态字段（bright/rot/screen）—— 固件 2026-10-15 起会上报。
         let json = """
-        {"t":"faces","v":1,"count":5,"mask":31,"cur":0,"faces":[\
+        {"t":"faces","v":1,"count":5,"mask":31,"cur":0,"bright":70,"rot":0,"screen":1,"faces":[\
         {"id":0,"name":"analog","label":"Analog","group":"clock","on":1},\
         {"id":1,"name":"digital","label":"Digital","group":"clock","on":1},\
         {"id":2,"name":"speed","label":"Speed","group":"speed","on":1},\
@@ -210,6 +341,16 @@ final class BLEClient: NSObject, ObservableObject {
             facesReady = true
             lastNotice = "演示模式：已载入样本表盘列表（未连接真实设备）"
         }
+    }
+
+    /// 演示"用户已手动断开"的状态（仅 Debug + -demoDisconnected）。
+    ///
+    /// 直接走 `disconnect()` 的**同一套状态**（autoConnectEnabled=false + 清连接态），
+    /// 不另写一份"看起来像断开"的假状态 —— 否则演示的就不是真实代码路径了。
+    func enterDemoDisconnectedState() {
+        autoConnectEnabled = false
+        clearConnectionState()
+        lastNotice = "已断开连接（点「连接仪表」可重新连接）"
     }
     #endif
 
@@ -371,31 +512,46 @@ extension BLEClient: CBCentralManagerDelegate {
         state = central.state
         if central.state != .poweredOn {
             isConnected = false
+            /*
+             * 蓝牙被关掉时扫描也一并停止，并把标志复位 ——
+             * 否则重新打开蓝牙后 connectIfPossible() 会因 isScanning 仍为 true
+             * 而**拒绝启动扫描**，表现为"开了蓝牙也连不上"。
+             */
+            isScanning = false
         }
-        if central.state == .poweredOn, discoveredName == nil {
-            lastNotice = "蓝牙就绪，点「连接仪表」开始扫描"
-        } else if central.state == .unauthorized {
-            lastNotice = "未授权蓝牙：请在 设置 → 隐私与安全性 → 蓝牙 中允许本 App"
-        } else if central.state == .poweredOff {
-            lastNotice = "蓝牙已关闭：请在控制中心或设置中打开蓝牙"
-        }
+        /*
+         * 蓝牙就绪即自动连接（本次优化的核心）。
+         *
+         * ⚠️ **无论什么状态都调用 connectIfPossible()**，不要只判断 `.poweredOn`
+         *    再单独写一串 else if 设文案 —— 那样 `.unknown` / `.resetting` /
+         *    `.unsupported` 三种状态会**漏设 lastNotice**，界面就停在上一轮的
+         *    旧文案上（实测：模拟器不支持 BLE，却显示"蓝牙尚未就绪，请稍候再试"）。
+         *    统一入口后，每个状态都有确定的文案。
+         */
+        connectIfPossible()
     }
 
     func centralManager(_ central: CBCentralManager,
                         didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        // 用户在扫描途中点了「断开连接」→ 立刻放弃这次发现，不要再连
+        guard autoConnectEnabled else {
+            stopScanning()
+            return
+        }
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name
         // 优先匹配设备名，避免误连其他广播同一 service 的设备
         guard name == deviceName else { return }
         discoveredName = name
         self.peripheral = peripheral
-        central.stopScan()
+        stopScanning()
         central.connect(peripheral, options: nil)
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         NSLog("[BLE] 已连接，开始发现服务")
         isConnected = true
+        isScanning = false
         lastNotice = "已连接 CarDashboard"
         didSendTimeOnConnect = false // 新连接：允许再校一次时
         peripheral.delegate = self
@@ -404,22 +560,35 @@ extension BLEClient: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         isConnected = false
-        lastNotice = "连接失败：\(error?.localizedDescription ?? "未知原因")"
+        /*
+         * 连接失败也要继续重试（例如仪表刚上电、广播还没起来）。
+         * 若用户已要求断开则不重试 —— 判断在 connectIfPossible 内统一做。
+         */
+        lastNotice = autoConnectEnabled
+            ? "连接失败：\(error?.localizedDescription ?? "未知原因")，正在重试…"
+            : "已断开连接（点「连接仪表」可重新连接）"
+        connectIfPossible()
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         NSLog("[BLE] 已断开: %@", error?.localizedDescription ?? "无错误")
-        isConnected = false
-        lastNotice = "已断开，正在尝试重连…"
-        telemetryChar = nil
-        statusChar = nil
+        clearConnectionState()
         /*
          * ⚠️ 必须重置地图队列：若断连发生在发送途中，`mapSending` 会停在 true，
          *    之后的窗口只会写进 pendingMap 而永远发不出去（静默失效）。
          */
         resetMapQueue(reason: "连接断开")
-        // 自动重连（固件断连后会重新广播）
-        central.scanForPeripherals(withServices: [serviceUUID], options: nil)
+        /*
+         * 自动重连（固件断连后会重新广播）。
+         *
+         * 但**用户主动断开时不能重连**：`disconnect()` 已把 autoConnectEnabled
+         * 置 false，connectIfPossible() 会识别并只更新提示文案。
+         * 切勿在此处直接 scanForPeripherals —— 那会让「断开连接」按钮失效。
+         */
+        lastNotice = BLEConnectionPolicy.shouldReconnectAfterDrop(autoConnectEnabled: autoConnectEnabled)
+            ? "已断开，正在尝试重连…"
+            : "已断开连接（点「连接仪表」可重新连接）"
+        connectIfPossible()
     }
 }
 

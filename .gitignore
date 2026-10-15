@@ -102,3 +102,8 @@ ios/**/build/
 # 需要长期保存的设计稿请放 design/wireframes/（受跟踪）。
 # 本地文件保留，只是不再入库 —— 避免 git status 长期变脏。
 design/previews/
+
+# 网关地图瓦片缓存：运行时按需下载的 OSM 矢量瓦片（二进制，体积随使用增长）。
+# 属于**可再生的运行时缓存**、不是源码 —— 不应入库。
+# 原先误提交过两个 .pbf，已用 git rm --cached 移出跟踪（文件在本地保留）。
+gateway/.cache/

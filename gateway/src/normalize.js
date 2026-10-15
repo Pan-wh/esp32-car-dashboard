@@ -214,3 +214,95 @@ export function stepAt(bundle, traveledM) {
   // 已走完全部步骤 → 到达
   return { stepIndex: steps.length - 1, maneuver: MANEUVER.ARRIVE, distanceToManeuverM: 0 };
 }
+
+/**
+ * 归一化高德**骑行**路径规划响应（v4）。
+ *
+ * ## 与驾车 v3 的差异（这是必须单独写一个函数的原因）
+ *
+ * | 项 | 驾车 v3 | 骑行 v4 |
+ * |----|---------|---------|
+ * | 路径位置 | `route.paths[]` | `data.paths[]` |
+ * | 状态字段 | `status: "1"` | `errcode: 0` |
+ * | 距离 | `paths[].distance` | `data.paths[].distance` |
+ * | 时长 | `paths[].duration` | `data.paths[].duration` |
+ * | 转向 | `steps[].action`（中文） | `steps[].action`（中文，**同样存在**）|
+ *
+ * ⚠️ **实测更正（2026-10-15，真实 Key）**：原先以为骑行不给 `action`，
+ *    故写死 maneuver=UNKNOWN。真实响应里 `steps[].action` 是 `"右转"` 这样的
+ *    中文文本，与驾车一致 —— 因此**复用同一套 `resolveManeuver` 码表**。
+ *    （若当初按猜测写死 UNKNOWN，仪表在骑行模式下会完全不显示转向提示。）
+ *
+ * @param {object} json  高德原始响应（已 JSON.parse）
+ * @param {{origin, destination, routeId?}} meta 起终点应为**已转 GCJ-02** 的坐标
+ * @returns {object} RouteBundle（带 mode='bicycling' 标记）
+ * @throws {AmapError} 业务失败；或没有任何可用路径
+ */
+export function normalizeBicycling(json, meta = {}) {
+  /*
+   * ⚠️ 骑行 v4 用 `errcode: 0` 表示成功，**没有 `status` 字段**；
+   *    直接调 assertAmapOk 会把成功响应当成失败（实测踩过）。
+   */
+  if (json?.errcode !== undefined && json?.errcode !== null) {
+    if (Number(json.errcode) !== 0) {
+      throw new AmapError(json.errmsg ?? json.errdetail, String(json.errcode), json);
+    }
+  } else {
+    assertAmapOk(json);
+  }
+
+  const paths = Array.isArray(json?.data?.paths) ? json.data.paths : [];
+  if (paths.length === 0) {
+    throw new AmapError('骑行响应中没有可用路径（data.paths 为空）', json.infocode, json);
+  }
+
+  const p = paths[0];
+  const rawSteps = Array.isArray(p?.steps) ? p.steps : [];
+
+  const steps = rawSteps.map((s, i) => ({
+    index: i,
+    /*
+     * 与驾车同样解析 `action`（实测骑行 v4 也返回中文动作文本）。
+     * `road` 字段实测存在（如 "北湾子胡同"）。
+     */
+    maneuver: resolveManeuver({
+      action: s?.navi?.action ?? s?.action,
+      instruction: s?.instruction,
+      assistant_action: s?.assistant_action,
+    }),
+    distanceM: toNumberOrNull(s?.distance),
+    roadName: firstNonEmptyString(s?.road, s?.road_name),
+    instruction: firstNonEmptyString(s?.instruction),
+    durationS: toNumberOrNull(s?.duration),
+    polyline: parsePolyline(s?.polyline),
+  }));
+
+  // 拼接完整折线（相邻重复点去重）
+  const polyline = [];
+  for (const st of steps) {
+    for (const pt of st.polyline) {
+      const last = polyline[polyline.length - 1];
+      if (last && last.lon === pt.lon && last.lat === pt.lat) continue;
+      polyline.push(pt);
+    }
+  }
+
+  if (polyline.length === 0 && steps.length === 0) {
+    throw new AmapError('骑行路径既无折线也无步骤，视为无效', json.infocode, json);
+  }
+
+  return {
+    routeId: meta.routeId ?? null,
+    distanceM:
+      toNumberOrNull(p?.distance) ??
+      (steps.length > 0 ? steps.reduce((a, s) => a + (s.distanceM ?? 0), 0) : null),
+    durationS: toNumberOrNull(p?.duration),
+    origin: meta.origin ?? null,
+    destination: meta.destination ?? null,
+    steps,
+    polyline,
+    alternativeCount: paths.length - 1,
+    /** 标记这是骑行路线，便于客户端区分展示（驾车接口不返回此字段） */
+    mode: 'bicycling',
+  };
+}

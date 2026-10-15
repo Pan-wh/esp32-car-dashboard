@@ -22,12 +22,35 @@
 import http from 'node:http';
 
 import { loadConfig, redact, AMAP_DRIVING_URL } from './config.js';
-import { fetchDrivingRoute, fetchGeocode } from './amap.js';
+import {
+  fetchDrivingRoute,
+  fetchGeocode,
+  fetchRegeo,
+  fetchTrafficRectangle,
+  fetchPlaceAround,
+  fetchInputTips,
+  fetchBicyclingRoute,
+} from './amap.js';
 import { fetchMapWindow } from './mapwindow.js';
-import { normalizeRoute, AmapError } from './normalize.js';
+import { normalizeRoute, normalizeBicycling, AmapError } from './normalize.js';
 import { validLonLat } from './coords.js';
 
 const MAX_BODY_BYTES = 8 * 1024; // 请求体上限：本接口只需两个坐标
+
+/**
+ * 已知端点白名单。**集中一处**定义，避免"加了新分支却忘了放行"
+ * （旧写法在两处各列一遍路径，新增接口时极易漏改一处，表现是 404）。
+ */
+const KNOWN_PATHS = new Set([
+  '/route',
+  '/geocode',
+  '/mapwindow',
+  '/regeo',
+  '/traffic',
+  '/around',
+  '/tips',
+  '/bicycling',
+]);
 
 /** 简易滑窗限流（单进程内存态；自用规模足够） */
 function createRateLimiter(perMin) {
@@ -89,6 +112,28 @@ export function createServer(config, deps = {}) {
   const allow = createRateLimiter(config.rateLimitPerMin);
   const secrets = [config.amapKey, config.authToken];
 
+  /**
+   * 统一的上游错误响应。
+   *
+   * 为什么要抽出来：新增的 5 个接口都要做同样的事 ——
+   * 高德业务错误（AmapError）透出 info/infocode/hint，其它错误脱敏后按需透出。
+   * 复制五遍必然漏掉某一处的 redact（那等于泄露 Key），故集中一处。
+   */
+  const sendUpstreamError = (res, e) => {
+    if (e instanceof AmapError) {
+      log(`[上游错误] ${redact(e.message, secrets)}`);
+      return sendJson(res, 502, {
+        error: 'amap_error', info: e.info, infocode: e.infocode, hint: hintFor(e.infocode),
+      });
+    }
+    const msg = redact(e?.message ?? String(e), secrets);
+    log(`[网关错误] ${msg}`);
+    return sendJson(res, 502, {
+      error: 'upstream_failed',
+      ...(config.verboseErrors ? { detail: msg } : {}),
+    });
+  };
+
   /*
    * ── 高德调用计数（用户关心"免费额度够不够用"）──────────────────────
    *
@@ -98,16 +143,27 @@ export function createServer(config, deps = {}) {
    * 按"自然日"分桶，跨天自动归零（高德的日配额也是 0:00 重置）。
    * 通过 GET /health 暴露，方便随时查看自己的消耗。
    */
-  const usage = { day: '', route: 0, geocode: 0, mapwindow: 0 };
+  const usage = {
+    day: '',
+    route: 0,
+    geocode: 0,
+    mapwindow: 0,
+    /* 以下为新增接口；均消耗高德额度（mapwindow 不消耗）*/
+    regeo: 0,
+    traffic: 0,
+    around: 0,
+    tips: 0,
+    bicycling: 0,
+  };
   const today = () => new Date().toISOString().slice(0, 10);
   /** 跨天则清零（高德的日配额也是 0:00 重置，对齐它的口径）*/
   const ensureDay = () => {
     const d = today();
     if (usage.day !== d) {
       usage.day = d;
-      usage.route = 0;
-      usage.geocode = 0;
-      usage.mapwindow = 0;
+      for (const k of Object.keys(usage)) {
+        if (k !== 'day') usage[k] = 0;
+      }
     }
     return d;
   };
@@ -122,6 +178,10 @@ export function createServer(config, deps = {}) {
     if (req.method === 'GET' && url.pathname === '/health') {
       // 只暴露"是否已配置"，绝不回显 Key
       ensureDay(); /* 跨天先归零，保证显示的是"今天"的量 */
+      /* 消耗高德额度的接口（mapwindow 走 OSM，不计入）*/
+      const amapTotal =
+        usage.route + usage.geocode + usage.regeo + usage.traffic +
+        usage.around + usage.tips + usage.bicycling;
       return sendJson(res, 200, {
         ok: true,
         hasKey: config.amapKey.length > 0,
@@ -130,7 +190,12 @@ export function createServer(config, deps = {}) {
           date: usage.day,
           route: usage.route,
           geocode: usage.geocode,
-          total: usage.route + usage.geocode,
+          regeo: usage.regeo,
+          traffic: usage.traffic,
+          around: usage.around,
+          tips: usage.tips,
+          bicycling: usage.bicycling,
+          total: amapTotal,
         },
         /* 仅作参考：本网关自身处理的请求数 */
         mapWindowRequestsToday: usage.mapwindow,
@@ -138,7 +203,7 @@ export function createServer(config, deps = {}) {
     }
 
     /* 只放行已知端点；其余一律 404（不暴露内部结构） */
-    if (url.pathname !== '/route' && url.pathname !== '/geocode' && url.pathname !== '/mapwindow') {
+    if (!KNOWN_PATHS.has(url.pathname)) {
       return sendJson(res, 404, { error: 'not_found' });
     }
     if (req.method !== 'POST') {
@@ -231,6 +296,147 @@ export function createServer(config, deps = {}) {
       }
     }
 
+    // ---- 逆地理编码：坐标 → 当前道路名（仪表显示"在XX路"）----
+    if (url.pathname === '/regeo') {
+      if (!validLonLat(body)) {
+        return sendJson(res, 400, {
+          error: 'invalid_coordinates',
+          expect: { lon: 'WGS84 经度', lat: 'WGS84 纬度', radius: '可选，米' },
+        });
+      }
+      try {
+        bump('regeo');
+        const info = await fetchRegeo({
+          key: config.amapKey,
+          point: { lon: body.lon, lat: body.lat },
+          radius: Number.isFinite(body.radius) ? body.radius : 0,
+          timeoutMs: config.upstreamTimeoutMs,
+          fetchImpl,
+        });
+        return sendJson(res, 200, info);
+      } catch (e) {
+        return sendUpstreamError(res, e);
+      }
+    }
+
+    // ---- 交通态势：当前位置周边拥堵情况（⚠️ 不是红绿灯）----
+    if (url.pathname === '/traffic') {
+      if (!validLonLat(body)) {
+        return sendJson(res, 400, {
+          error: 'invalid_coordinates',
+          expect: {
+            lon: 'WGS84 经度', lat: 'WGS84 纬度',
+            halfMeters: '可选，默认 500（即 1km×1km 区域）',
+            level: '可选，高德道路等级，默认 6=所有道路',
+          },
+        });
+      }
+      /* 半边长限幅：太大既没意义又会拖慢上游；太小可能取不到任何路 */
+      const halfMeters = Number.isFinite(body.halfMeters)
+        ? Math.min(Math.max(body.halfMeters, 100), 3000) : 500;
+      try {
+        bump('traffic');
+        const info = await fetchTrafficRectangle({
+          key: config.amapKey,
+          center: { lon: body.lon, lat: body.lat },
+          halfMeters,
+          level: Number.isFinite(body.level) ? body.level : 6,
+          timeoutMs: config.upstreamTimeoutMs,
+          fetchImpl,
+        });
+        return sendJson(res, 200, info);
+      } catch (e) {
+        return sendUpstreamError(res, e);
+      }
+    }
+
+    // ---- 周边搜索：加油站 / 服务区等 ----
+    if (url.pathname === '/around') {
+      if (!validLonLat(body)) {
+        return sendJson(res, 400, {
+          error: 'invalid_coordinates',
+          expect: {
+            lon: 'WGS84 经度', lat: 'WGS84 纬度',
+            keywords: '可选，如「加油站」「服务区」',
+            radius: '可选，默认 3000 米',
+          },
+        });
+      }
+      const keywords = typeof body.keywords === 'string' ? body.keywords.trim() : '';
+      if (keywords.length > 60) {
+        return sendJson(res, 400, { error: 'invalid_keywords', expect: { keywords: '≤60 字' } });
+      }
+      try {
+        bump('around');
+        const { pois } = await fetchPlaceAround({
+          key: config.amapKey,
+          center: { lon: body.lon, lat: body.lat },
+          keywords,
+          radius: Number.isFinite(body.radius)
+            ? Math.min(Math.max(body.radius, 100), 50000) : 3000,
+          limit: Number.isFinite(body.limit) ? Math.min(Math.max(body.limit, 1), 25) : 20,
+          timeoutMs: config.upstreamTimeoutMs,
+          fetchImpl,
+        });
+        return sendJson(res, 200, { pois });
+      } catch (e) {
+        return sendUpstreamError(res, e);
+      }
+    }
+
+    // ---- 输入提示：搜索框地址联想 ----
+    if (url.pathname === '/tips') {
+      const keywords = typeof body.keywords === 'string' ? body.keywords.trim() : '';
+      if (keywords.length === 0 || keywords.length > 60) {
+        return sendJson(res, 400, {
+          error: 'invalid_keywords',
+          expect: { keywords: '非空字符串（≤60 字）', city: '可选，限定城市' },
+        });
+      }
+      try {
+        bump('tips');
+        const { tips } = await fetchInputTips({
+          key: config.amapKey,
+          keywords,
+          city: typeof body.city === 'string' ? body.city.trim() : '',
+          limit: Number.isFinite(body.limit) ? Math.min(Math.max(body.limit, 1), 20) : 10,
+          timeoutMs: config.upstreamTimeoutMs,
+          fetchImpl,
+        });
+        return sendJson(res, 200, { tips });
+      } catch (e) {
+        return sendUpstreamError(res, e);
+      }
+    }
+
+    // ---- 骑行路线（结构与驾车不同，单独归一化；maneuver 恒为「未知」）----
+    if (url.pathname === '/bicycling') {
+      if (!validLonLat(body.origin) || !validLonLat(body.destination)) {
+        return sendJson(res, 400, {
+          error: 'invalid_coordinates',
+          expect: { origin: '{lon,lat}', destination: '{lon,lat}', note: 'WGS84 坐标' },
+        });
+      }
+      try {
+        bump('bicycling');
+        const { raw, originGcj, destinationGcj } = await fetchBicyclingRoute({
+          key: config.amapKey,
+          origin: body.origin,
+          destination: body.destination,
+          timeoutMs: config.upstreamTimeoutMs,
+          fetchImpl,
+        });
+        const bundle = normalizeBicycling(raw, {
+          origin: originGcj,
+          destination: destinationGcj,
+          routeId: typeof body.routeId === 'string' ? body.routeId : null,
+        });
+        return sendJson(res, 200, bundle);
+      } catch (e) {
+        return sendUpstreamError(res, e);
+      }
+    }
+
     const origin = body.origin;
     const destination = body.destination;
     if (!validLonLat(origin) || !validLonLat(destination)) {
@@ -314,9 +520,18 @@ const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}
 if (isMain) {
   const config = loadConfig();
   const server = createServer(config);
-  server.listen(config.port, () => {
-    // 只打印端口，绝不打印 Key/token
-    console.log(`[网关] 已监听 http://127.0.0.1:${config.port}`);
+  server.listen(config.port, config.host, () => {
+    // 只打印监听地址与端口，绝不打印 Key/token
+    console.log(`[网关] 已监听 http://${config.host}:${config.port}`);
+    /*
+     * 直白提示当前暴露面 —— 这是最容易被忽略的安全项：
+     * 绑 0.0.0.0 意味着任何能路由到本机的人都可访问（需 token，但仍是暴露）。
+     */
+    if (config.host === '0.0.0.0' || config.host === '::') {
+      console.log('[网关] ⚠️ 正在监听所有网卡（HOST=0.0.0.0）—— 请确认这是你要的暴露面');
+    } else {
+      console.log(`[网关] 仅本机可访问（HOST=${config.host}）；如需外部访问请用反向代理`);
+    }
     console.log(`[网关] 上游 ${AMAP_DRIVING_URL}`);
     console.log(`[网关] 限流 ${config.rateLimitPerMin}/分钟；无缓存（协议 §3.5）`);
   });

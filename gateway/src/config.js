@@ -23,6 +23,53 @@ export const AMAP_DRIVING_URL = 'https://restapi.amap.com/v3/direction/driving';
 export const AMAP_GEOCODE_URL = 'https://restapi.amap.com/v3/geocode/geo';
 
 /**
+ * 高德 Web 服务**逆地理编码**：坐标 → 地址（含"当前所在道路名"）。
+ *
+ * 用途：仪表显示"当前在XX路" —— 比裸经纬度对驾驶员有意义得多。
+ * ⚠️ 与 geocode 对称：**输入坐标是 WGS84**（手机定位坐标系），
+ *    内部转 GCJ-02 后发给高德。我们只取地址文本（不含坐标），
+ *    故该接口不存在"双重转换"问题。
+ */
+export const AMAP_REGEO_URL = 'https://restapi.amap.com/v3/geocode/regeo';
+
+/**
+ * 高德 Web 服务**交通态势（矩形区域）**：经纬度矩形 → 区域内道路拥堵状态。
+ *
+ * 用途：仪表提示"前方拥堵 / 缓行"。
+ * ⚠️ 返回的是**拥堵信息**（畅通/缓行/拥堵 + 拥堵里程），**不是红绿灯**。
+ *    红绿灯相位/倒计时不在任何 Web 服务 API 中（见 docs/nav-backend.md）。
+ */
+export const AMAP_TRAFFIC_RECTANGLE_URL = 'https://restapi.amap.com/v3/traffic/status/rectangle';
+
+/**
+ * 高德 Web 服务**周边搜索**：中心点 + 半径 + 关键词 → POI 列表。
+ *
+ * 用途：沿途/周边的加油站、服务区。
+ * ⚠️ 返回 POI 的 `location` 是 **GCJ-02**，须转回 WGS84 再给客户端
+ *    （客户端约定"一律 WGS84"，否则双重转换、偏移数百米）。
+ */
+export const AMAP_PLACE_AROUND_URL = 'https://restapi.amap.com/v3/place/around';
+
+/**
+ * 高德 Web 服务**输入提示**：关键词前缀 → 候选地址列表。
+ *
+ * 用途：App 搜索框的地址联想（"天安" → "天安门…"）。
+ * ⚠️ 返回的 `location` 是 GCJ-02，同样须转回 WGS84。
+ *    `location` 可能为空字符串（无坐标的 POI），必须容忍。
+ */
+export const AMAP_INPUT_TIPS_URL = 'https://restapi.amap.com/v3/assistant/inputtips';
+
+/**
+ * 高德 Web 服务**骑行路径规划**（v4）。
+ *
+ * 用途：骑行路线规划。
+ * ⚠️ v4 的响应结构与驾车 v3 **不同**：路径在 `data.paths[]`（不是 `route.paths[]`），
+ *    且没有 `action` 转向语义。故不能直接复用 normalizeRoute，
+ *    需要单独归一化（见 amap.js 的 fetchBicyclingRoute 与 normalize.js 的 normalizeBicycling）。
+ */
+export const AMAP_BICYCLING_URL = 'https://restapi.amap.com/v4/direction/bicycling';
+
+/**
  * 从环境变量构建配置。
  * @param {Record<string,string|undefined>} env
  * @param {{requireKey?: boolean}} [opts] 测试时可关闭 Key 必填
@@ -49,7 +96,27 @@ export function loadConfig(env = process.env, opts = {}) {
   return {
     amapKey,
     authToken,
+    /*
+     * 监听地址。
+     *
+     * ⚠️ 默认 `127.0.0.1`（**只回环**）—— 这是刻意的安全默认值：
+     *   - 本机开发：直接可用，不暴露到局域网。
+     *   - 反向代理（nginx/Caddy 终止 TLS）：反代与网关同机，回环即可，
+     *     **公网流量进不来**，网关不可能被绕过反代直连。
+     *   - 若要网关直接对外（无 TLS、或网关自己处理 TLS），显式设 HOST=0.0.0.0。
+     * 早期版本写死"绑所有网卡"，属默认不安全，已改。
+     *
+     * ⚠️ 空白值（.env 里写了 `HOST=` 但没填）也回落到默认 ——
+     *    否则会变成监听空地址，表现为"服务起不来且原因不明"。
+     */
+    host: (env.HOST ?? '').trim() || '127.0.0.1',
     port: Number(env.PORT ?? 8080),
+    /*
+     * 反向代理场景下信任的代理跳数（用于记录真实客户端 IP）。
+     * 默认 0 = 不信任任何 X-Forwarded-For（避免被伪造）。
+     * 同机反代可设 1。
+     */
+    trustProxy: Number(env.TRUST_PROXY ?? 0),
     /*
      * 周边地图瓦片的磁盘缓存目录。
      * 必须缓存：OpenFreeMap 的离线额度是"每次 ≤3000 瓦片"，

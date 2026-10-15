@@ -171,6 +171,70 @@ int main(void)
     /* 未报出的表盘 id 应确实不存在 */
     CHECK(strstr(buf, "\"id\":19") == NULL || reported == 20, "超出上限的 id 不应出现");
 
+    printf("=== 设备显示状态（亮度/方向/息屏）===\n");
+    /*
+     * 背景：这三项是**设备属性**，由设备上报给 App 显示；App 不得在连接时
+     * 下发自己的记忆值去覆盖（那会把用户在设备上设好的值冲掉）。
+     * 这里验证字段的存在性与"未设置则省略"的规则。
+     */
+    ui_face_reset();
+    register_five();
+
+    /* 1) 全部未设置（初始态）→ 三个字段都不应出现（不能发假值） */
+    face_report_reset_for_test();
+    len = face_report_build(buf, sizeof(buf));
+    CHECK(len > 0, "未设置显示状态时仍应生成报告");
+    CHECK(strstr(buf, "\"bright\"") == NULL, "未设置亮度 → 不应上报 bright（避免 App 显示假值）");
+    CHECK(strstr(buf, "\"rot\"") == NULL, "未设置方向 → 不应上报 rot");
+    CHECK(strstr(buf, "\"screen\"") == NULL, "未设置息屏 → 不应上报 screen");
+
+    /* 2) 设置后应如实带出 */
+    face_report_set_display(&(face_report_display_t){ 70, 90, 1 });
+    len = face_report_build(buf, sizeof(buf));
+    CHECK(strstr(buf, "\"bright\":70") != NULL, "应上报亮度 70");
+    CHECK(strstr(buf, "\"rot\":90") != NULL, "应上报方向 90");
+    CHECK(strstr(buf, "\"screen\":1") != NULL, "应上报 screen=1（点亮）");
+
+    /* 3) 0 是**有效值**，必须照实上报，不能当成"未设置"省略。
+     *    这是最容易写错的地方：把 0 与"未知"混为一谈，App 就永远显示不出息屏。 */
+    face_report_set_display(&(face_report_display_t){ 0, 0, 0 });
+    len = face_report_build(buf, sizeof(buf));
+    CHECK(strstr(buf, "\"bright\":0") != NULL, "亮度 0 是有效值，必须上报");
+    CHECK(strstr(buf, "\"rot\":0") != NULL, "方向 0° 是有效值，必须上报");
+    CHECK(strstr(buf, "\"screen\":0") != NULL, "screen=0（息屏）必须上报");
+
+    /* 4) 部分设置：只带已设置的那一项 */
+    face_report_set_display(&(face_report_display_t){ 128, -1, -1 });
+    len = face_report_build(buf, sizeof(buf));
+    CHECK(strstr(buf, "\"bright\":128") != NULL, "应上报亮度 128");
+    CHECK(strstr(buf, "\"rot\"") == NULL, "方向未设置 → 不应出现");
+    CHECK(strstr(buf, "\"screen\"") == NULL, "息屏未设置 → 不应出现");
+
+    /* 5) 传 NULL 复位 */
+    face_report_set_display(NULL);
+    len = face_report_build(buf, sizeof(buf));
+    CHECK(strstr(buf, "\"bright\"") == NULL, "传 NULL 应复位为未设置");
+
+    /* 6) ★ 截断时仍必须带出显示状态 —— 否则表盘一多 App 就退回默认值，
+     *      又回到"亮度被凭空改掉"的老 bug。 */
+    face_report_reset_for_test();
+    face_report_set_display(&(face_report_display_t){ 70, 90, 1 });
+    ui_face_reset();
+    char many[20][16];
+    for (int i = 0; i < 20; i++) {
+        snprintf(many[i], sizeof(many[i]), "face_%02d_long_name", i);
+        ui_face_register(&(ui_face_desc_t){ many[i], "A Fairly Long Label Here", D,
+                                            (uint8_t)(i % UI_FACE_GROUP_COUNT) });
+    }
+    len = face_report_build(buf, sizeof(buf));
+    CHECK(strstr(buf, "\"truncated\":1") != NULL, "该场景应触发截断");
+    CHECK(strstr(buf, "\"bright\":70") != NULL, "★ 截断时也必须带出亮度");
+    CHECK(strstr(buf, "\"rot\":90") != NULL, "★ 截断时也必须带出方向");
+    CHECK(strstr(buf, "\"screen\":1") != NULL, "★ 截断时也必须带出息屏状态");
+    CHECK(len <= FACE_REPORT_MAX_PAYLOAD, "加了显示状态后截断仍须在上限内（%d）", len);
+
+    face_report_reset_for_test(); /* 复位，避免影响后续新增用例 */
+
     printf("结果: %d 通过, %d 失败\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
