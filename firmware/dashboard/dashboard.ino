@@ -527,6 +527,70 @@ static void photo_dump_dir(void)
   if (n == 0) Serial.println("[转储] /photos/ 里没有 .pgi");
 }
 
+
+/**
+ * [维护] 删除 `/photos/` 下**不合法**的 .pgi（头解析失败、或大小与头不符）。
+ *
+ * 为什么需要：早期版本的写入不可靠，留下了被截断/写坏的文件，
+ * 照片表盘轮播到它们就显示 LOAD ERROR。新版本已经"坏文件当场删除"，
+ * 但**历史遗留的坏文件还在**，这条命令用来一次性清掉。
+ *
+ * 合法的文件**不会**被动 —— 规则与上传时的校验完全一致。
+ */
+static void photo_clean_dir(void)
+{
+  if (!sd_mount()) { Serial.println("[清理] 未检测到 TF 卡"); return; }
+  File dir = SD_MMC.open(PHOTO_DIR);
+  if (!dir || !dir.isDirectory()) { Serial.println("[清理] 打不开 /photos/"); return; }
+
+  int removed = 0, kept = 0;
+  /* 收集待删名单：不能在遍历时直接删（会破坏目录迭代）*/
+  char victims[24][64];
+  int nv = 0;
+
+  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+    if (f.isDirectory()) continue;
+    const char *nm = f.name();
+    size_t len = strlen(nm);
+    if (len < 5 || strcasecmp(nm + len - 4, ".pgi") != 0) continue;
+
+    const char *base = strrchr(nm, '/');
+    const char *shortname = base ? base + 1 : nm;
+    size_t fsz = (size_t)f.size();
+
+    uint8_t hdr[PGI_HEADER_BYTES + PGI_MAX_FRAMES * PGI_FRAME_ENTRY_BYTES];
+    size_t got = 0;
+    f.seek(0);
+    while (got < sizeof(hdr)) {
+      int r = f.read(hdr + got, sizeof(hdr) - got);
+      if (r <= 0) break;
+      got += (size_t)r;
+    }
+    pgi_header_t h;
+    bool ok = (got >= PGI_HEADER_BYTES) && pgi_parse_header(hdr, got, &h);
+    if (ok) {
+      const uint32_t fr = (uint32_t)PGI_PALETTE_BYTES + (uint32_t)h.width * h.height;
+      const uint32_t total = h.data_off + fr * h.frame_count;
+      if ((uint32_t)fsz != total) ok = false;
+    }
+
+    if (ok) {
+      kept++;
+    } else if (nv < (int)(sizeof(victims) / sizeof(victims[0]))) {
+      snprintf(victims[nv], sizeof(victims[0]), "%s", shortname);
+      nv++;
+      Serial.printf("[清理] ✗ %s（%u 字节）不合法 → 待删\n", shortname, (unsigned)fsz);
+    }
+  }
+
+  for (int i = 0; i < nv; i++) {
+    char path[96];
+    snprintf(path, sizeof(path), PHOTO_DIR "/%s", victims[i]);
+    if (SD_MMC.remove(path)) removed++;
+  }
+  Serial.printf("[清理] 完成：删除 %d 个坏文件，保留 %d 个合法文件\n", removed, kept);
+}
+
 /* ── 打开当前文件 / 取帧信息 ─────────────────────────────────── */
 static bool photo_open_file(const char *name)
 {
@@ -769,6 +833,7 @@ static void photo_poll(void)
 static WebServer *s_http = NULL;
 static bool s_wifi_up = false;
 static bool s_upload_active = false;
+static bool   s_upload_reject = false; /* 本次上传被拒绝/失败（堆不足、写失败、校验不过）*/
 static size_t s_upload_bytes = 0;
 static File   s_upload_file;
 static char   s_upload_name[64];
@@ -848,8 +913,12 @@ static void wifi_start_http(void)
                Serial.printf("[上传] 收到 POST /upload（来自 %s，%u 字节）\n",
                              s_http->client().remoteIP().toString().c_str(),
                              (unsigned)s_upload_bytes);
-               s_http->send(200, "application/json",
-                            String("{\"ok\":true,\"bytes\":") + String((unsigned)s_upload_bytes) + "}");
+               bool ok = !s_upload_reject;
+               s_http->send(ok ? 200 : 507, "application/json",
+                            String(ok ? "{\"ok\":true,\"bytes\":"
+                                      : "{\"ok\":false,\"error\":\"upload_failed\",\"bytes\":") +
+                                String((unsigned)s_upload_bytes) + "}");
+               s_upload_reject = false;
              },
              []() {
                /*
@@ -864,6 +933,18 @@ static void wifi_start_http(void)
                HTTPUpload &up = s_http->upload();
                if (up.status == UPLOAD_FILE_START) {
                  if (!sd_mount()) return;
+                 /*
+                  * **堆不足就拒绝**：实测上传时空闲堆只剩 22~24 KB，
+                  * 大文件写到一半会静默失败，留下被截断的坏文件（用户看到 LOAD ERROR）。
+                  * 与其写坏，不如明确拒绝并让 App 报错。
+                  */
+                 if (ESP.getFreeHeap() < 40000u) {
+                   Serial.printf("[上传] 拒绝：空闲堆不足（%u B < 40000 B）\n",
+                                 (unsigned)ESP.getFreeHeap());
+                   s_upload_name[0] = '\0';
+                   s_upload_reject = true;
+                   return;
+                 }
                  SD_MMC.mkdir(PHOTO_DIR);
                  sanitize_name(s_http->arg("name"), s_upload_name, sizeof(s_upload_name));
                  char path[96];
@@ -880,8 +961,17 @@ static void wifi_start_http(void)
                    upload_reset();
                    return;
                  }
-                 s_upload_file.write(up.buf, up.currentSize);
-                 s_upload_bytes += up.currentSize;
+                 // **检查写入结果** —— 原来忽略了返回值，写失败也当成功
+                 size_t w = s_upload_file.write(up.buf, up.currentSize);
+                 if (w != up.currentSize) {
+                   Serial.printf("[上传] 写入失败（%u/%u）→ 中止并删除\n", (unsigned)w,
+                                 (unsigned)up.currentSize);
+                   upload_finish(false);
+                   upload_reset();
+                   s_upload_reject = true;
+                   return;
+                 }
+                 s_upload_bytes += w;
                } else if (up.status == UPLOAD_FILE_END) {
                  upload_finish(true);
                  /*
@@ -893,11 +983,49 @@ static void wifi_start_http(void)
                  File chk = SD_MMC.open(path, FILE_READ);
                  size_t on_disk = chk ? (size_t)chk.size() : 0;
                  if (chk) chk.close();
-                 if (on_disk != s_upload_bytes || on_disk < 1500) {
-                   Serial.printf("[上传] ⚠️ 落盘异常：收到 %u 字节，文件实际 %u 字节（%s）\n",
-                                 (unsigned)s_upload_bytes, (unsigned)on_disk, path);
+                 /*
+                  * **落盘校验 + 格式校验，任一不过就删掉。**
+                  *
+                  * 这是本次修复的核心：坏文件一旦留在 /photos/，照片表盘轮播到它
+                  * 就显示 LOAD ERROR。与其让用户看到坏图，不如当场拒绝。
+                  */
+                 bool good = (on_disk >= 1500 && on_disk == s_upload_bytes);
+                 if (good) {
+                   File vf = SD_MMC.open(path, FILE_READ);
+                   uint8_t vh[PGI_HEADER_BYTES + PGI_MAX_FRAMES * PGI_FRAME_ENTRY_BYTES];
+                   size_t vg = 0;
+                   if (vf) {
+                     while (vg < sizeof(vh)) {
+                       int r = vf.read(vh + vg, sizeof(vh) - vg);
+                       if (r <= 0) break;
+                       vg += (size_t)r;
+                     }
+                     vf.close();
+                   }
+                   pgi_header_t vhdr;
+                   if (vg < PGI_HEADER_BYTES || !pgi_parse_header(vh, vg, &vhdr)) {
+                     Serial.println("[上传] ✗ 文件头不是合法 .pgi → 删除");
+                     good = false;
+                   } else {
+                     const uint32_t expect_frame = (uint32_t)PGI_PALETTE_BYTES +
+                                                   (uint32_t)vhdr.width * vhdr.height;
+                     const uint32_t expect_total = vhdr.data_off + expect_frame * vhdr.frame_count;
+                     if ((uint32_t)on_disk != expect_total) {
+                       Serial.printf("[上传] ✗ 大小与头不符：文件 %u ≠ 应有 %u → 删除\n",
+                                     (unsigned)on_disk, (unsigned)expect_total);
+                       good = false;
+                     }
+                   }
                  } else {
-                   Serial.printf("[上传] 已落盘 %u 字节（%s）\n", (unsigned)on_disk, path);
+                   Serial.printf("[上传] ⚠️ 落盘异常：收到 %u 字节，文件实际 %u 字节\n",
+                                 (unsigned)s_upload_bytes, (unsigned)on_disk);
+                 }
+
+                 if (!good) {
+                   SD_MMC.remove(path);
+                 } else {
+                   Serial.printf("[上传] ✓ 已落盘并校验通过：%u 字节（%s）\n", (unsigned)on_disk,
+                                 path);
                  }
                  /*
                   * ⚠️ **必须让照片表盘重新扫描目录。**
@@ -2360,6 +2488,7 @@ static void print_help(void)
   Serial.println("       sdbench [KB]      SD 读写测速（S1：决定要不要 RLE）");
   Serial.println("       pgibench [帧] [边长] 生成 .pgi 并测解码耗时（S3：定 fps 目标）");
   Serial.println("       photodump          打印 /photos/ 下每个 .pgi 的头部字段（排格式问题）");
+  Serial.println("       photo clean        删除 /photos/ 下不合法的 .pgi（坏文件会让表盘 LOAD ERROR）");
   Serial.println("       wifi on|off        开/关上传热点（CarDash·免密，IP 192.168.4.1）");
   Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
@@ -2592,6 +2721,18 @@ static void process_command(char *cmd)
     }
     else {
       Serial.println("[上传] 用法：wifi on（开热点）| wifi off（关闭）| wifi（查状态）");
+    }
+  }
+  else if (strncmp(cmd, "photo", 5) == 0) {
+    /* 照片维护：photo clean（删坏文件）/ photo dump（打印头部）*/
+    const char *arg = cmd + 5;
+    while (*arg == ' ') arg++;
+    if (strncmp(arg, "clean", 5) == 0) {
+      photo_clean_dir();
+    } else if (strncmp(arg, "dump", 4) == 0) {
+      photo_dump_dir();
+    } else {
+      Serial.println("[照片] 用法：photo clean（删不合法文件）| photo dump（打印头部）");
     }
   }
   else if (strncmp(cmd, "photodump", 9) == 0) {
