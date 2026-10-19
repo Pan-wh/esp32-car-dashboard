@@ -934,10 +934,24 @@ static void http_list(WiFiClient &c)
 {
   if (!sd_mount()) { http_reply(c, 503, "Service Unavailable", "{\"ok\":false,\"error\":\"no_sd\"}"); return; }
 
-  /* 手工拼 JSON（不用 String，控制内存）*/
+  /*
+   * 手工拼 JSON（不用 String，控制内存）。
+   *
+   * ⚠️ **`snprintf` 返回的是"想写多长"，不是"实际写了多长"** ——
+   * 直接累加会让 n 超过缓冲，后续 `sizeof(buf) - n` 就**无符号下溢**成巨大值，
+   * 变成缓冲区溢出。每步都夹住 n。
+   */
   static char buf[2048];
   size_t n = 0;
-  n += snprintf(buf + n, sizeof(buf) - n, "{\"ok\":true,\"files\":[");
+#define PGI_JSON_APPEND(...)                                                    \
+  do {                                                                          \
+    if (n < sizeof(buf)) {                                                      \
+      int w = snprintf(buf + n, sizeof(buf) - n, __VA_ARGS__);                   \
+      if (w > 0) n += (size_t)((size_t)w < sizeof(buf) - n ? (size_t)w : sizeof(buf) - n - 1); \
+    }                                                                           \
+  } while (0)
+
+  PGI_JSON_APPEND("{\"ok\":true,\"files\":[");
   bool first = true;
 
   File dir = SD_MMC.open(PHOTO_DIR);
@@ -957,15 +971,15 @@ static void http_list(WiFiClient &c)
       pgi_header_t h;
       bool ok = pgi_file_ok(path, &fsz, &h);
 
-      n += snprintf(buf + n, sizeof(buf) - n,
-                    "%s{\"name\":\"%s\",\"size\":%u,\"frames\":%u,\"fps\":%u,\"ok\":%d}",
-                    first ? "" : ",", shortname, (unsigned)fsz,
-                    (unsigned)(ok ? h.frame_count : 0), (unsigned)(ok ? h.fps : 0),
-                    ok ? 1 : 0);
+      PGI_JSON_APPEND("%s{\"name\":\"%s\",\"size\":%u,\"frames\":%u,\"fps\":%u,\"ok\":%d}",
+                      first ? "" : ",", shortname, (unsigned)fsz,
+                      (unsigned)(ok ? h.frame_count : 0), (unsigned)(ok ? h.fps : 0),
+                      ok ? 1 : 0);
       first = false;
     }
   }
-  snprintf(buf + n, sizeof(buf) - n, "]}");
+  PGI_JSON_APPEND("]}");
+#undef PGI_JSON_APPEND
   http_reply(c, 200, "OK", buf);
 }
 
@@ -1027,7 +1041,8 @@ static void http_upload(WiFiClient &c, const char *url, size_t contentLen)
     int avail = c.available();
     if (avail <= 0) {
       if (!c.connected()) break;
-      if (millis() - t0 > 30000u) { Serial.println("[上传] 超时"); break; }
+      /* 8 MB 在实测速率下要 40 秒以上 —— 30 秒必然超时，放宽到 120 秒 */
+      if (millis() - t0 > 120000u) { Serial.println("[上传] 超时(120s)"); break; }
       delay(1);
       continue;
     }

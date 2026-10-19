@@ -280,7 +280,7 @@ struct PhotoTabView: View {
                         }
                     }
                     Button {
-                        Task { await refreshList() }
+                        Task { await refreshList(quiet: false) }
                     } label: {
                         Label("刷新列表", systemImage: "arrow.clockwise")
                     }
@@ -320,7 +320,7 @@ struct PhotoTabView: View {
                 }
             }
             .navigationTitle("照片")
-            .task { await refreshList() }
+            .task { await refreshList(quiet: true) }
             .onChange(of: pickedItem) { _, item in
                 guard let item else { return }
                 Task { await load(item) }
@@ -535,9 +535,19 @@ struct PhotoTabView: View {
              *   - ping 成功、POST 失败 → 就是 POST 这条请求本身（体积/超时/服务端 upload 流）。
              */
             await MainActor.run { uploadStatus = "正在探测设备…" }
-            let pingResult = await probe()
+            var pingResult = await probe()
+            if pingResult != nil {
+                /*
+                 * **逻辑 bug 修复**：原来探测失败就直接 throw ——
+                 * 手机没连 CarDash 时上传会立刻失败，**永远走不到"连热点"那一步**。
+                 * 正确顺序：探测失败 → 尝试连热点 → 再探测一次 → 仍失败才报错。
+                 */
+                await MainActor.run { uploadStatus = "未连上仪表，正在连接热点…" }
+                _ = await ensureHotspot()
+                pingResult = await probe()
+            }
             guard pingResult == nil else {
-                throw PgiEncoderError.encodeFailed("探测 /ping 失败：\(pingResult!)")
+                throw PgiEncoderError.encodeFailed("连不上仪表：\(pingResult!)")
             }
 
             do {
@@ -721,7 +731,9 @@ struct PhotoTabView: View {
 
     // MARK: - 设备照片管理
 
-    private func refreshList() async {
+    /// - Parameter quiet: 初次进入页面时的自动刷新用 true ——
+    ///   设备不可达是**正常情况**（多半没连热点），不该在状态栏弹网络错误。
+    private func refreshList(quiet: Bool = false) async {
         await MainActor.run { loadingList = true }
         defer { Task { @MainActor in loadingList = false } }
         guard let url = URL(string: "http://\(Self.deviceAPHost)/list") else { return }
@@ -742,7 +754,9 @@ struct PhotoTabView: View {
             }
             await MainActor.run { devicePhotos = list.sorted { $0.name < $1.name } }
         } catch {
-            await MainActor.run { uploadStatus = "读不到设备列表：\(Self.describeNetError(error))" }
+            if !quiet {
+                await MainActor.run { uploadStatus = "读不到设备列表：\(Self.describeNetError(error))" }
+            }
         }
     }
 
