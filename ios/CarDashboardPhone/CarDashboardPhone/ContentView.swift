@@ -144,7 +144,7 @@ struct ContentView: View {
             NavTabView(session: session)
                 .tag(2)
                 .tabItem { Label("导航", systemImage: "location.north.line") }
-            PhotoTabView()
+            PhotoTabView(session: session)
                 .tag(3)
                 .tabItem { Label("照片", systemImage: "photo.on.rectangle") }
             settingsTab
@@ -879,7 +879,7 @@ struct ContentView: View {
              * 传图的路径要短。点击后切到「照片」Tab。
              */
             NavigationLink {
-                PhotoTabView()
+                PhotoTabView(session: session)
             } label: {
                 Label("上传照片到仪表", systemImage: "photo.badge.plus")
             }

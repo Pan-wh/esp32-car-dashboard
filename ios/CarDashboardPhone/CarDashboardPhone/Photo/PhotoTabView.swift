@@ -14,6 +14,8 @@ import PhotosUI
 import SwiftUI
 
 struct PhotoTabView: View {
+    /// 用来发设备控制命令（轮播开关）；不连设备时也能正常用（只是命令发不出去）
+    let session: DriveSessionManager
     /// 导出尺寸：设备屏幕直径（圆屏最终会裁掉四角）
     @State private var size: Int = 466
 
@@ -59,6 +61,8 @@ struct PhotoTabView: View {
     @State private var uploadStatus = ""
     @State private var uploading = false
     @State private var pgiBytes = 0
+    /// 设备端轮播开关（与固件 photo_slide 命令对应）
+    @State private var slideshowOn = true
 
     var body: some View {
         NavigationStack {
@@ -151,6 +155,21 @@ struct PhotoTabView: View {
                             .font(.footnote)
                             .foregroundStyle(busy ? .orange : .secondary)
                     }
+                }
+
+                Section {
+                    Toggle("照片表盘轮播", isOn: Binding(
+                        get: { slideshowOn },
+                        set: { v in
+                            slideshowOn = v
+                            // 设备端命令：{"cmd":"photo_slide","value":0|1}
+                            _ = session.ble.sendCommand("{\"cmd\":\"photo_slide\",\"value\":\(v ? 1 : 0)}")
+                        }
+                    ))
+                } header: {
+                    Text("仪表设置")
+                } footer: {
+                    Text("关闭后仪表会停在当前那张照片（此时自动开启像素位移防烧屏）。\n需要先连上仪表。")
                 }
 
                 Section("参数") {

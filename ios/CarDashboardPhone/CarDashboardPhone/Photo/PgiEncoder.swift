@@ -50,12 +50,41 @@ enum PgiEncoder {
         let indices: [UInt8]       // w*h
     }
 
-    /// 把帧编码成 `.pgi`
+    /// 给定尺寸下，最多能放多少帧才不超过设备上限
+    static func maxFramesFit(w: Int, h: Int) -> Int {
+        let per = paletteBytes + w * h
+        let overhead = headerBytes + 8
+        let n = (maxBytes - overhead) / per
+        return max(1, min(n, 512))
+    }
+
+    /// 把帧编码成 `.pgi`（**自动裁剪到设备上限以内**）
     /// - Parameter fps: 动图帧率；单帧传 0（静态）
-    static func encode(frames: [CGImage], fps: Int) throws -> Data {
-        guard !frames.isEmpty else { throw PgiEncoderError.noFrames }
-        let w = frames[0].width
-        let h = frames[0].height
+    static func encode(frames allFrames: [CGImage], fps: Int) throws -> Data {
+        guard !allFrames.isEmpty else { throw PgiEncoderError.noFrames }
+        let w = allFrames[0].width
+        let h = allFrames[0].height
+
+        /*
+         * ⚠️ **按体积上限自动裁帧**。
+         *
+         * 原来不裁：120 帧 × 466×466 ≈ 26 MB，远超设备 8 MB 上限 ——
+         * 用户就会看到"动不动就超大"。现在按 `maxFramesFit` 截断，
+         * 并**均匀抽帧**（而不是只留前 N 帧，否则等于只取了视频开头一段）。
+         */
+        let fit = maxFramesFit(w: w, h: h)
+        let frames: [CGImage]
+        if allFrames.count > fit {
+            var picked: [CGImage] = []
+            picked.reserveCapacity(fit)
+            for i in 0..<fit {
+                let src = Int(Double(i) * Double(allFrames.count - 1) / Double(max(fit - 1, 1)))
+                picked.append(allFrames[min(src, allFrames.count - 1)])
+            }
+            frames = picked
+        } else {
+            frames = allFrames
+        }
         guard w > 0, h > 0, w <= 1024, h <= 1024 else {
             throw PgiEncoderError.encodeFailed("尺寸非法：\(w)×\(h)")
         }
@@ -212,13 +241,39 @@ enum PgiEncoder {
             lut[bin] = UInt8(i)
         }
 
-        // ── 映射像素 ──
+        // ── 映射像素 + **Floyd–Steinberg 抖动** ──
+        //
+        // 只做"最近桶"映射的话，256 色会让渐变出现明显色带（用户实测"画质有点差"）。
+        // 抖动把量化误差扩散到邻近像素，用空间混色换回观感 —— 对照片提升非常明显，
+        // 代价只是几十行。
         var idx = [UInt8](repeating: 0, count: px)
-        for i in 0..<px {
-            let r = Int(rgba[i * 4]) >> 3
-            let g = Int(rgba[i * 4 + 1]) >> 3
-            let b = Int(rgba[i * 4 + 2]) >> 3
-            idx[i] = lut[(r << 10) | (g << 5) | b]
+        // 用 Int 保存误差（可正可负），按行滚动
+        var cur = [Int](repeating: 0, count: (w + 2) * 3)
+        var nxt = [Int](repeating: 0, count: (w + 2) * 3)
+        for y in 0..<h {
+            for x in 0..<w {
+                let i = y * w + x
+                let o = (x + 1) * 3
+                let r = min(255, max(0, Int(rgba[i * 4]) + cur[o] / 16))
+                let g = min(255, max(0, Int(rgba[i * 4 + 1]) + cur[o + 1] / 16))
+                let b = min(255, max(0, Int(rgba[i * 4 + 2]) + cur[o + 2] / 16))
+
+                let bin = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)
+                let pi = Int(lut[bin])
+                idx[i] = UInt8(pi)
+
+                // 该调色板项的实际颜色（桶中心的 8 位值）
+                let pr = Int(pal[pi * 4 + 2]), pg2 = Int(pal[pi * 4 + 1]), pb = Int(pal[pi * 4])
+                let er = r - pr, eg = g - pg2, eb = b - pb
+
+                // 误差扩散：右 7/16、左下 3/16、下 5/16、右下 1/16
+                cur[o + 3]     += er * 7; cur[o + 4]     += eg * 7; cur[o + 5]     += eb * 7
+                nxt[o - 3]     += er * 3; nxt[o - 2]     += eg * 3; nxt[o - 1]     += eb * 3
+                nxt[o]         += er * 5; nxt[o + 1]     += eg * 5; nxt[o + 2]     += eb * 5
+                nxt[o + 3]     += er;     nxt[o + 4]     += eg;     nxt[o + 5]     += eb
+            }
+            cur = nxt
+            nxt = [Int](repeating: 0, count: (w + 2) * 3)
         }
         return IndexedFrame(w: w, h: h, paletteBGRA: pal, indices: idx)
     }
