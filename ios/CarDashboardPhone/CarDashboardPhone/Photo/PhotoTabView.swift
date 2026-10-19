@@ -41,6 +41,8 @@ struct PhotoTabView: View {
 
     /// 未经过手势的原始正方形帧（换素材时填；改手势时在此基础上重新裁切）
     @State private var rawFrames: [StudioFrame] = []
+    /// 视频自动降帧率的提示（跨 await 传递用 static，SwiftUI 里 @State 不方便从非主线程写）
+    private static var pendingFPSNote: String?
 
     var body: some View {
         NavigationStack {
@@ -123,6 +125,11 @@ struct PhotoTabView: View {
                         .foregroundStyle(.secondary)
                     }
 
+                    if let note = Self.pendingFPSNote {
+                        Text(note)
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
                     if !status.isEmpty {
                         Text(status)
                             .font(.footnote)
@@ -301,6 +308,7 @@ struct PhotoTabView: View {
             gifData = nil
             preview = nil
             frameCount = 0
+            Self.pendingFPSNote = nil
         }
         defer { Task { @MainActor in busy = false } }
 
@@ -333,7 +341,17 @@ struct PhotoTabView: View {
     private func loadFrames(from item: PhotosPickerItem) async throws -> [StudioFrame] {
         // 视频：走 AVAssetImageGenerator 抽帧
         if let movie = try? await item.loadTransferable(type: MovieTransferable.self) {
-            return try await PhotoStudio.frames(fromVideo: movie.url, size: size, fps: fps)
+            // 临时文件必须删 —— 否则一个 200MB 的视频会一直躺在沙盒里
+            defer { try? FileManager.default.removeItem(at: movie.url) }
+            do {
+                return try await PhotoStudio.frames(fromVideo: movie.url, size: size, fps: fps) {
+                    effective, wanted in
+                    // 在后台线程拿到结果；存到本地变量，主线程再显示
+                    Self.pendingFPSNote = "帧数预算有限：已从 \(Int(wanted)) fps 自动降到 \(String(format: "%.1f", effective)) fps（整段保留）"
+                }
+            } catch {
+                throw error
+            }
         }
         // 图片/动图：直接读原始数据（GIF 的帧信息在数据里）
         if let data = try await item.loadTransferable(type: Data.self) {
@@ -350,8 +368,11 @@ struct PhotoTabView: View {
         }
         do {
             try await PhotoStudio.saveToPhotoLibrary(gifData)
+            let over = gifData.count > PhotoStudio.deviceGifLimitBytes
             await MainActor.run {
-                status = "已保存到相册（\(frameCount) 帧）"
+                status = over
+                    ? "已保存到相册（\(frameCount) 帧），但 \(gifData.count / 1024 / 1024) MB 超过设备 8MB 上限，传到仪表前需要减小边长或帧数"
+                    : "已保存到相册（\(frameCount) 帧 · \(gifData.count / 1024) KB）"
                 busy = false
             }
         } catch {
@@ -373,6 +394,14 @@ struct MovieTransferable: Transferable {
         FileRepresentation(contentType: .movie) { movie in
             SentTransferredFile(movie.url)
         } importing: { received in
+            /*
+             * **先卡体积再复制** —— 复制本身要读写整份文件，
+             * 等复制完再判断就白花了时间和磁盘。
+             */
+            let size = (try? received.file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            if size > PhotoStudio.maxVideoBytes {
+                throw PhotoStudioError.videoTooLarge(maxBytes: PhotoStudio.maxVideoBytes)
+            }
             // 系统给的临时文件可能在导入后就被回收，复制到自己的临时目录
             let dst = FileManager.default.temporaryDirectory
                 .appendingPathComponent("picked-\(UUID().uuidString).mov")

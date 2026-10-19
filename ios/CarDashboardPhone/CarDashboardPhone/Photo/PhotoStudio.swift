@@ -62,6 +62,7 @@ enum PhotoStudioError: LocalizedError {
     case cannotReadSource
     case cannotEncodeGIF
     case videoTooLong(maxSeconds: Int)
+    case videoTooLarge(maxBytes: Int)
 
     var errorDescription: String? {
         switch self {
@@ -69,6 +70,7 @@ enum PhotoStudioError: LocalizedError {
         case .cannotReadSource: return "读不了这个文件（格式不支持？）"
         case .cannotEncodeGIF: return "GIF 编码失败"
         case .videoTooLong(let s): return "视频太长（上限 \(s) 秒），请先剪短"
+        case .videoTooLarge(let b): return "视频文件太大（上限 \(b / 1024 / 1024) MB），请先剪短或压缩"
         }
     }
 }
@@ -78,6 +80,16 @@ enum PhotoStudio {
     /// 设备端建议的上限（见 docs/photo-gif-design.md §七：单文件 ≤ 8MB）
     static let maxVideoSeconds = 30
     static let maxFrames = 120
+
+    /// 源视频文件体积上限。
+    ///
+    /// 为什么需要它：`PhotosPicker` 给到的是一个**文件**，我们要**整份复制**到临时目录
+    /// 才能给 AVAsset 用。30 秒 4K HEVC 可以有好几百 MB —— 复制慢、占盘、
+    /// 解码也慢。所以先卡体积，超了直接拒绝，而不是"慢慢来"。
+    static let maxVideoBytes = 200 * 1024 * 1024
+
+    /// 导出 GIF 的软上限（设备端硬上限是 8MB）
+    static let deviceGifLimitBytes = 8 * 1024 * 1024
 
     // MARK: - 裁切
 
@@ -235,7 +247,8 @@ enum PhotoStudio {
     // MARK: - 视频抽帧
 
     /// 把视频按 `fps` 抽帧（最多 `maxFrames` 帧、`maxVideoSeconds` 秒）
-    static func frames(fromVideo url: URL, size: Int, fps: Double) async throws -> [StudioFrame] {
+    static func frames(fromVideo url: URL, size: Int, fps: Double,
+                       onEffectiveFPS: ((Double, Double) -> Void)? = nil) async throws -> [StudioFrame] {
         let asset = AVURLAsset(url: url)
         let durationS = CMTimeGetSeconds(asset.duration)
         guard durationS.isFinite, durationS > 0 else { throw PhotoStudioError.cannotReadSource }
@@ -250,7 +263,26 @@ enum PhotoStudio {
         // 直接把目标尺寸告诉生成器：省一次缩放，也避免解出 4K 原图
         gen.maximumSize = CGSize(width: size, height: size)
 
-        let step = 1.0 / max(fps, 1)
+        /*
+         * ⚠️ **别静默截断**。
+         *
+         * 原来是"按 fps 抽帧，到 maxFrames 就停" —— 30 秒 @12fps 有 360 帧，
+         * 于是只抓到**前 10 秒**，而界面仍显示"30 秒的视频"，用户以为导出了全程。
+         *
+         * 改为：如果 duration×fps 会超上限，**自动降 fps** 让整段视频都落进帧数预算，
+         * 并把实际使用的 fps 回报给调用方（显示在界面上）。
+         */
+        let wanted = max(fps, 1)
+        var effectiveFPS = wanted
+        var framesNeeded = durationS * wanted
+        if framesNeeded > Double(maxFrames) {
+            effectiveFPS = Double(maxFrames) / durationS
+            if effectiveFPS < 2 { effectiveFPS = 2 }   /* 再低就不像动图了 */
+            framesNeeded = durationS * effectiveFPS
+            onEffectiveFPS?(effectiveFPS, wanted)
+        }
+
+        let step = 1.0 / effectiveFPS
         var times: [NSValue] = []
         var t = 0.0
         while t < durationS && times.count < maxFrames {
