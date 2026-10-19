@@ -5,7 +5,7 @@ PYTHON  ?= python3
 CFLAGS  := -O1 -std=gnu99 -Wall -Wextra -I../simulator/ui
 SRC     := ../simulator/ui/telemetry.c
 
-TESTS   := test_telemetry test_control test_ui_face test_nav test_nav_parse test_nav_map test_img_indexed test_face_report test_auto_bright test_bright_parse
+TESTS   := test_telemetry test_control test_ui_face test_nav test_nav_parse test_nav_map test_img_indexed test_face_report test_auto_bright test_bright_parse test_pgi
 
 # iOS 侧导航核心：直接编译 App 的真实源文件（不复制逻辑，避免与实现漂移）
 NAV_SRC      := ../ios/CarDashboardPhone/CarDashboardPhone/Nav/NavCore.swift \
@@ -84,6 +84,9 @@ test_nav_parse: test_nav_parse.c ../simulator/ui/nav_parse.c ../simulator/ui/nav
 
 test_img_indexed: test_img_indexed.c ../simulator/ui/img_indexed.c
 	$(CC) $(CFLAGS) -o $@ $^
+
+# 照片表盘的 .pgi 容器（解析/帧索引/解码一致性 + 跨语言夹具）
+test_pgi: test_pgi.c ../simulator/ui/pgi.c ../simulator/ui/img_indexed.c
 
 # ⚠️ 必须遍历 $(TESTS)，不要在这里逐个硬编码测试名。
 #    曾经硬编码过：新测试加进 $(TESTS) 却**永远不会被执行**，
@@ -213,6 +216,27 @@ $(BC_BIN): $(BC_SRC) ../tools/test_brightness_curve.swift
 
 test-brightness-curve: $(BC_BIN)
 	@./$(BC_BIN)
+
+# 重新生成 .pgi 夹具（需要带 Pillow 的 python3；产物已入库，平时不用跑）
+#
+#   make fixtures-pgi PYTHON=/path/to/python3
+#
+# 两个夹具的源图是现场用 Pillow 画出来的（不额外入库 PNG/GIF）：
+#   pgi_4color.pgi —— 8×8 四色块，单帧（静态）
+#   pgi_3frame.pgi —— 8×8，红/绿/蓝 三帧 @10fps（动图）
+fixtures-pgi:
+	@$(PYTHON) -c "\
+from PIL import Image; \
+im = Image.new('RGB', (8, 8)); \
+px = im.load(); \
+[px.__setitem__((x, y), (255,0,0) if (x<4 and y<4) else (0,255,0) if y<4 else (0,0,255) if x<4 else (255,255,255)) for y in range(8) for x in range(8)]; \
+im.save('/tmp/_pgi_4color.png')"
+	@$(PYTHON) -c "\
+from PIL import Image; \
+fs = [Image.new('RGB', (8, 8), c) for c in [(255,0,0),(0,255,0),(0,0,255)]]; \
+fs[0].save('/tmp/_pgi_3frame.gif', save_all=True, append_images=fs[1:], duration=100, loop=0)"
+	@$(PYTHON) ../tools/pgi.py /tmp/_pgi_4color.png -o fixtures/pgi_4color.pgi --size 8
+	@$(PYTHON) ../tools/pgi.py /tmp/_pgi_3frame.gif -o fixtures/pgi_3frame.pgi --size 8
 
 clean:
 	rm -f $(TESTS) $(NAV_BIN) $(SIM_BIN) $(FACE_BIN) $(BLE_BIN) $(UI_BIN) $(SCOPE_BIN) $(KC_BIN) $(BC_BIN)
