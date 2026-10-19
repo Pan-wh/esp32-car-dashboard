@@ -423,17 +423,30 @@ struct PhotoTabView: View {
                 uploadStatus = "已编码 \(pgi.count / 1024) KB，正在上传…"
             }
             /*
-             * ⚠️ **连热点只是"尽力而为"，失败不能阻塞上传**。
+             * ⚠️ **顺序很重要：先直接传，失败了才去连热点。**
              *
-             * 踩过的坑：用户已经手动连上 `CarDash` 了，但 `NEHotspotConfiguration.apply`
-             * 在"已关联"时会返回 `NEHotspotConfigurationError.internal`（不是
-             * `alreadyAssociated`），于是整个上传被判定为失败 —— 明明网络是通的。
+             * 踩过的坑（两次）：
+             *   1. 一上来就 `apply` 热点配置 —— 用户已经手动连上时会报 `internal`，
+             *      而当时把它当失败抛出去，导致"网络通着却上传失败"；
+             *   2. 改成"先 apply 再传"后报 **"The network connection was lost"** ——
+             *      因为 `NEHotspotConfiguration.apply` 会**重新关联**网络，
+             *      把正在用的那条连接**拆掉了**，请求自然中断。
              *
-             * 改为：先试一下自动连（1 次），**无论成败都继续 POST**；
-             * 只有 POST 本身失败才算失败。
+             * 正确顺序：手机多半已经连着 CarDash（用户手动连的，或上次 joinOnce 留下的），
+             * **直接 POST 一次**；只有它失败才说明真没连上，这时再去 apply 并重试。
              */
-            await joinDeviceHotspotBestEffort()
-            try await post(pgi)
+            do {
+                try await post(pgi)
+            } catch {
+                // 第一次失败 → 尝试连热点，再重试一次
+                await MainActor.run { uploadStatus = "第一次上传失败，正在连接热点后重试…" }
+                if await ensureHotspot() {
+                    try await post(pgi)
+                } else {
+                    throw error
+                }
+            }
+            forgetHotspot()
             await MainActor.run {
                 uploadStatus = "上传成功（\(pgi.count / 1024) KB）"
                 uploading = false
@@ -478,10 +491,15 @@ struct PhotoTabView: View {
     /// 用 `NEHotspotConfiguration` 是为了**免去用户去「设置」里手动选网络** ——
     /// 这正是用户要的"像蓝牙那样，扫到就连上"。
     /// 若系统拒绝（没授权/已连别的网被拒），回退提示用户手动连接。
-    private func joinDeviceHotspotBestEffort() async {
+    /// 尝试连上仪表热点；返回是否"现在应该连着"（失败也会返回 true 让调用方重试一次）
+    private func ensureHotspot() async -> Bool {
         let manager = NEHotspotConfigurationManager.shared
         let cfg = NEHotspotConfiguration(ssid: Self.deviceAPSSID)  // 免密不传 passphrase
-        cfg.joinOnce = true
+        /*
+         * **不用 joinOnce** —— 实测它会配合 `apply` 把已建立的关联拆掉，
+         * 表现为 "The network connection was lost"。
+         * 改为普通加入，传完再显式 `removeConfiguration`（见下）。
+         */
 
         let result: NSError? = await withCheckedContinuation { cont in
             manager.apply(cfg) { error in
@@ -500,8 +518,14 @@ struct PhotoTabView: View {
         } else {
             Self.lastJoinError = nil
             // 刚关联上时 DHCP 还没就绪，稍等一下（只有真的连过才需要）
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
+        return true   // 让调用方重试 —— 到底通不通由 POST 说了算
+    }
+
+    /// 传完把热点配置移掉，避免手机长期"粘"在 CarDash 上
+    private func forgetHotspot() {
+        NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: Self.deviceAPSSID)
     }
 
     /// 把 NEHotspotConfiguration 的错误码翻成人话（否则只会看到 "internal error"）
