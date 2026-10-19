@@ -75,11 +75,9 @@ extern "C" {
  * 放在块之后是唯一两个问题都不犯的位置。
  */
 /*
- * 上传缓冲从默认 2048（实际按 4096 分配）收到 1024 —— 我们在回调里
- * 立刻把数据写进 SD，不需要攒大块。这一步在 include 之前生效。
+ * 照片上传用**裸 WiFiServer**，不再包含 WebServer
+ * （WebServer 依赖 String/HTTPUpload，在 24 KB 堆上不可靠 —— 详见 wifi 段的说明）。
  */
-#define HTTP_UPLOAD_BUFLEN 1024
-#include <WebServer.h>     /* 照片上传：HTTP 接收 .pgi */
 #include <WiFi.h>          /* 照片上传：设备连入同一局域网（STA）*/
 
 #include "ble_telemetry.h" /* BLE Peripheral（固件侧，C++） */
@@ -813,48 +811,51 @@ static void photo_poll(void)
 
 
 /* ═══════════════════════════════════════════════════════════════════════
- * Wi-Fi 照片上传（P5）
+ * 照片管理 HTTP 服务（**裸 WiFiServer，不用 WebServer**）
  *
- * ## 为什么用 **STA** 而不是 AP
+ * ## 为什么换掉 WebServer
  *
- * 设计文档原本写的是"设备起 AP，手机连过去"。实现时改成 **STA**（设备连入家里
- * 的 Wi-Fi），理由：
- *   1. **手机不用切网络** —— 切 Wi-Fi 会断掉 App 的其它连接，体验差；
- *   2. **好测** —— Mac 和手机在同一网段，直接 curl 就能验证，不必先连设备热点；
- *   3. 同网段本来就允许（用户在家/车库上传）。
+ * 开热点后内部堆只剩 **约 24 KB**（ESP-IDF 的 Wi-Fi 协议栈吃掉 50 KB+，
+ * PSRAM 帮不上忙 —— Wi-Fi/String 只能用内部 RAM）。
+ * `WebServer` 依赖 `String`、`HTTPUpload` 等，在这个水位上不可靠：
+ * 实测出现过**写到一半失败**、**留下被截断的坏文件**、甚至 **panic 重启**。
  *
- * ## 安全边界
+ * 换成裸 `WiFiServer` + 手写最小 HTTP 解析后：
+ *   - **不用 String**，只有一块 1.2 KB 的静态请求缓冲；
+ *   - 请求体**直接流式写 SD**，不驻留内存；
+ *   - HTTP/1.0 语义：**一个请求一条连接，回完即关**（客户端也用 Connection: close）。
  *
- *   - 只接受 **POST /upload?name=xxx.pgi**，且文件名**由服务端清洗**（只留 basename、
- *     强制 .pgi 后缀），永不接受客户端指定的路径；
- *   - 只写 `/photos/`；
- *   - 单文件上限 8 MB；
- *   - 上传期间**暂停轮播**（避免同时读写同一文件）；
- *   - 凭据存 NVS，**不回显**（日志只打 SSID 与 IP）。
+ * ## 接口（全部 JSON）
+ *
+ *   GET  /ping                    → {"ok":true}
+ *   GET  /list                    → {"ok":true,"files":[{"name","size","frames","fps","ok"}]}
+ *   POST /delete?name=x.pgi       → {"ok":true} / {"ok":false,"error":"..."}
+ *   POST /upload?name=x.pgi       → 请求体 = **原始 .pgi 字节**（不再要 multipart）
+ *                                    → {"ok":true,"bytes":N}
+ *
+ * 上传会做**三重校验**（落盘大小、头部可解析、大小与头自洽），
+ * 任一不过就**当场删除**，绝不把坏文件留在卡上（那会让表盘显示 LOAD ERROR）。
  * ═══════════════════════════════════════════════════════════════════════ */
 
 #define PHOTO_UPLOAD_MAX (8u * 1024u * 1024u)
+#define HTTP_RX_MAX      1200u
 
-static WebServer *s_http = NULL;
-static bool s_wifi_up = false;
-static bool s_upload_active = false;
-static bool   s_upload_reject = false; /* 本次上传被拒绝/失败（堆不足、写失败、校验不过）*/
-static size_t s_upload_bytes = 0;
-static File   s_upload_file;
-static char   s_upload_name[64];
+static WiFiServer *s_srv = NULL;
+static bool  s_wifi_up = false;
 static String s_wifi_ip;
+static uint8_t s_rx[HTTP_RX_MAX];
 
-/** 从 URL 的 name 参数里取出**安全的**文件名：只留 basename，强制 .pgi 后缀 */
-static void sanitize_name(const String &raw, char *out, size_t cap)
+static const char *const kWifiSsids = "CarDash";
+
+/** 从 `?name=xxx` 里取出安全文件名：只留 basename、剔危险字符、强制 .pgi */
+static void sanitize_name(const char *raw, char *out, size_t cap)
 {
-  const char *p = raw.c_str();
-  const char *base = strrchr(p, '/');
-  if (base != NULL) p = base + 1;
-  base = strrchr(p, '\\');
-  if (base != NULL) p = base + 1;
+  if (raw == NULL) raw = "";
+  const char *p = raw;
+  const char *b = strrchr(p, '/');  if (b != NULL) p = b + 1;
+  b = strrchr(p, '\\');             if (b != NULL) p = b + 1;
 
   snprintf(out, cap, "%s", p);
-  /* 去掉 .pgi 后缀（稍后统一补），并清掉危险字符 */
   char *dot = strrchr(out, '.');
   if (dot != NULL && strcasecmp(dot, ".pgi") == 0) *dot = '\0';
   for (char *q = out; *q != '\0'; q++) {
@@ -862,212 +863,292 @@ static void sanitize_name(const String &raw, char *out, size_t cap)
   }
   if (out[0] == '\0') snprintf(out, cap, "upload");
   size_t n = strlen(out);
-  snprintf(out + n, cap - n, ".pgi");
+  if (n + 4 < cap) snprintf(out + n, cap - n, ".pgi");
 }
 
-/**
- * 上传结束（成功/失败都走这里；失败时删掉半截文件）。
- *
- * ⚠️ **不再清 `s_upload_name` / `s_upload_bytes`** —— 之前它俩在这里被清零，
- * 而调用方紧接着打印"完成 xxx（N 字节）"，于是日志永远显示"完成 （0 字节）"，
- * 把真正的错误线索全盖掉了。**由调用方打印完再调 `upload_reset()`。**
- */
-static void upload_finish(bool ok)
+/** 校验一个 .pgi 文件是否可用（规则与上传时完全一致）*/
+static bool pgi_file_ok(const char *path, size_t *out_size, pgi_header_t *out_hdr)
 {
-  if (s_upload_file) s_upload_file.close();
-  if (!ok && s_upload_name[0] != '\0') {
-    char path[96];
-    snprintf(path, sizeof(path), PHOTO_DIR "/%s", s_upload_name);
-    SD_MMC.remove(path);
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) return false;
+  size_t fsz = (size_t)f.size();
+  uint8_t hdr[PGI_HEADER_BYTES + PGI_MAX_FRAMES * PGI_FRAME_ENTRY_BYTES];
+  size_t got = 0;
+  while (got < sizeof(hdr)) {
+    int r = f.read(hdr + got, sizeof(hdr) - got);
+    if (r <= 0) break;
+    got += (size_t)r;
   }
-  s_upload_active = false;
+  f.close();
+
+  pgi_header_t h;
+  if (got < PGI_HEADER_BYTES || !pgi_parse_header(hdr, got, &h)) return false;
+  const uint32_t fr = (uint32_t)PGI_PALETTE_BYTES + (uint32_t)h.width * h.height;
+  if ((uint32_t)fsz != h.data_off + fr * h.frame_count) return false;
+
+  if (out_size) *out_size = fsz;
+  if (out_hdr) *out_hdr = h;
+  return true;
 }
 
-/** 清理上传状态（打印完再调）*/
-static void upload_reset(void)
+/* ── 应答小工具（都按 HTTP/1.0 一条连接一条请求）── */
+static void http_reply(WiFiClient &c, int code, const char *reason, const char *json)
 {
-  s_upload_name[0] = '\0';
-  s_upload_bytes = 0;
+  size_t bodyLen = strlen(json);
+  c.printf("HTTP/1.0 %d %s\r\n", code, reason);
+  c.print("Content-Type: application/json\r\n");
+  c.print("Connection: close\r\n");
+  c.print("Access-Control-Allow-Origin: *\r\n");
+  c.printf("Content-Length: %u\r\n\r\n", (unsigned)bodyLen);
+  c.print(json);
+  c.flush();
+  c.stop();
 }
 
-static void wifi_start_http(void)
+/** 取 `?key=value` 里的 value（URL 里的 %XX 不解码：我们只允许字母数字_-）*/
+static bool query_arg(const char *url, const char *key, char *out, size_t cap)
 {
-  if (s_http != NULL) return;
-  s_http = new WebServer(80);
+  char pat[24];
+  snprintf(pat, sizeof(pat), "%s=", key);
+  const char *q = strchr(url, '?');
+  if (q == NULL) return false;
+  q++;
+  size_t pl = strlen(pat);
+  while (*q != '\0') {
+    if (strncmp(q, pat, pl) == 0) {
+      q += pl;
+      size_t i = 0;
+      while (*q != '\0' && *q != '&' && i + 1 < cap) out[i++] = *q++;
+      out[i] = '\0';
+      return true;
+    }
+    q = strchr(q, '&');
+    if (q == NULL) return false;
+    q++;
+  }
+  return false;
+}
 
-  /*
-   * /ping —— 最小的连通性探针（不落文件、不碰 SD）。
-   * App 上传前可以先 GET 一下，能把"网络不通"和"上传逻辑有问题"分开。
-   */
-  s_http->on("/ping", HTTP_GET, []() {
-    Serial.println("[上传] 收到 GET /ping ← 网络是通的");
-    s_http->send(200, "application/json", "{\"ok\":true,\"dev\":\"cardash\"}");
-  });
+/** GET /list：列出 /photos/ 下的 .pgi（名字/大小/帧数/fps/是否合法）*/
+static void http_list(WiFiClient &c)
+{
+  if (!sd_mount()) { http_reply(c, 503, "Service Unavailable", "{\"ok\":false,\"error\":\"no_sd\"}"); return; }
 
-  /* 浏览器/调试用：一个极简说明页 */
-  s_http->on("/", HTTP_GET, []() {
-    Serial.printf("[上传] 收到 GET /（来自 %s）\n", s_http->client().remoteIP().toString().c_str());
-    s_http->send(200, "text/plain; charset=utf-8",
-                 "car-dashboard photo upload\n"
-                 "POST /upload?name=xxx.pgi  (raw body, <= 8MB)\n");
-  });
+  /* 手工拼 JSON（不用 String，控制内存）*/
+  static char buf[2048];
+  size_t n = 0;
+  n += snprintf(buf + n, sizeof(buf) - n, "{\"ok\":true,\"files\":[");
+  bool first = true;
 
-  /* 上传：用 upload 流，避免把 8MB 全缓冲进内存 */
-  s_http->on("/upload", HTTP_POST,
-             []() { /* 收尾（upload 回调里已处理，这里只回 200）*/
-               Serial.printf("[上传] 收到 POST /upload（来自 %s，%u 字节）\n",
-                             s_http->client().remoteIP().toString().c_str(),
-                             (unsigned)s_upload_bytes);
-               bool ok = !s_upload_reject;
-               s_http->send(ok ? 200 : 507, "application/json",
-                            String(ok ? "{\"ok\":true,\"bytes\":"
-                                      : "{\"ok\":false,\"error\":\"upload_failed\",\"bytes\":") +
-                                String((unsigned)s_upload_bytes) + "}");
-               s_upload_reject = false;
-             },
-             []() {
-               /*
-                * ⚠️ 这里原本直接 `s_http->upload()`，在客户端发的不是
-                * multipart/form-data 时会解引用 **NULL 的 unique_ptr**，
-                * 触发 LoadProhibited（核心已崩溃重启，手机端表现为 -1005）。
-                *
-                * 服务端无法在 `upload()` 之前判断是否为空（崩溃就在它内部），
-                * 所以真正的修法在客户端（必须发 multipart）。
-                * 这里额外做的是**避免把文件写成半截**：只要状态不对就放弃。
-                */
-               HTTPUpload &up = s_http->upload();
-               if (up.status == UPLOAD_FILE_START) {
-                 if (!sd_mount()) return;
-                 /*
-                  * **堆不足就拒绝**：实测上传时空闲堆只剩 22~24 KB，
-                  * 大文件写到一半会静默失败，留下被截断的坏文件（用户看到 LOAD ERROR）。
-                  * 与其写坏，不如明确拒绝并让 App 报错。
-                  */
-                 if (ESP.getFreeHeap() < 40000u) {
-                   Serial.printf("[上传] 拒绝：空闲堆不足（%u B < 40000 B）\n",
-                                 (unsigned)ESP.getFreeHeap());
-                   s_upload_name[0] = '\0';
-                   s_upload_reject = true;
-                   return;
-                 }
-                 SD_MMC.mkdir(PHOTO_DIR);
-                 sanitize_name(s_http->arg("name"), s_upload_name, sizeof(s_upload_name));
-                 char path[96];
-                 snprintf(path, sizeof(path), PHOTO_DIR "/%s", s_upload_name);
-                 s_upload_file = SD_MMC.open(path, FILE_WRITE);
-                 s_upload_bytes = 0;
-                 s_upload_active = true;
-                 Serial.printf("[上传] 开始 → %s\n", path);
-               } else if (up.status == UPLOAD_FILE_WRITE) {
-                 if (!s_upload_file) return;
-                 if (s_upload_bytes + up.currentSize > PHOTO_UPLOAD_MAX) {
-                   Serial.println("[上传] 超过 8MB，放弃");
-                   upload_finish(false);
-                   upload_reset();
-                   return;
-                 }
-                 // **检查写入结果** —— 原来忽略了返回值，写失败也当成功
-                 size_t w = s_upload_file.write(up.buf, up.currentSize);
-                 if (w != up.currentSize) {
-                   Serial.printf("[上传] 写入失败（%u/%u）→ 中止并删除\n", (unsigned)w,
-                                 (unsigned)up.currentSize);
-                   upload_finish(false);
-                   upload_reset();
-                   s_upload_reject = true;
-                   return;
-                 }
-                 s_upload_bytes += w;
-               } else if (up.status == UPLOAD_FILE_END) {
-                 upload_finish(true);
-                 /*
-                  * **校验真正落盘的大小** —— 之前只看回调里的计数，
-                  * 一旦写入没生效（SD 打开失败等）日志也是"成功"，用户只看到 LOAD ERROR。
-                  */
-                 char path[96];
-                 snprintf(path, sizeof(path), PHOTO_DIR "/%s", s_upload_name);
-                 File chk = SD_MMC.open(path, FILE_READ);
-                 size_t on_disk = chk ? (size_t)chk.size() : 0;
-                 if (chk) chk.close();
-                 /*
-                  * **落盘校验 + 格式校验，任一不过就删掉。**
-                  *
-                  * 这是本次修复的核心：坏文件一旦留在 /photos/，照片表盘轮播到它
-                  * 就显示 LOAD ERROR。与其让用户看到坏图，不如当场拒绝。
-                  */
-                 bool good = (on_disk >= 1500 && on_disk == s_upload_bytes);
-                 if (good) {
-                   File vf = SD_MMC.open(path, FILE_READ);
-                   uint8_t vh[PGI_HEADER_BYTES + PGI_MAX_FRAMES * PGI_FRAME_ENTRY_BYTES];
-                   size_t vg = 0;
-                   if (vf) {
-                     while (vg < sizeof(vh)) {
-                       int r = vf.read(vh + vg, sizeof(vh) - vg);
-                       if (r <= 0) break;
-                       vg += (size_t)r;
-                     }
-                     vf.close();
-                   }
-                   pgi_header_t vhdr;
-                   if (vg < PGI_HEADER_BYTES || !pgi_parse_header(vh, vg, &vhdr)) {
-                     Serial.println("[上传] ✗ 文件头不是合法 .pgi → 删除");
-                     good = false;
-                   } else {
-                     const uint32_t expect_frame = (uint32_t)PGI_PALETTE_BYTES +
-                                                   (uint32_t)vhdr.width * vhdr.height;
-                     const uint32_t expect_total = vhdr.data_off + expect_frame * vhdr.frame_count;
-                     if ((uint32_t)on_disk != expect_total) {
-                       Serial.printf("[上传] ✗ 大小与头不符：文件 %u ≠ 应有 %u → 删除\n",
-                                     (unsigned)on_disk, (unsigned)expect_total);
-                       good = false;
-                     }
-                   }
-                 } else {
-                   Serial.printf("[上传] ⚠️ 落盘异常：收到 %u 字节，文件实际 %u 字节\n",
-                                 (unsigned)s_upload_bytes, (unsigned)on_disk);
-                 }
+  File dir = SD_MMC.open(PHOTO_DIR);
+  if (dir && dir.isDirectory()) {
+    for (File f = dir.openNextFile(); f && n + 200 < sizeof(buf); f = dir.openNextFile()) {
+      if (f.isDirectory()) continue;
+      const char *nm = f.name();
+      size_t len = strlen(nm);
+      if (len < 5 || strcasecmp(nm + len - 4, ".pgi") != 0) continue;
 
-                 if (!good) {
-                   SD_MMC.remove(path);
-                 } else {
-                   Serial.printf("[上传] ✓ 已落盘并校验通过：%u 字节（%s）\n", (unsigned)on_disk,
-                                 path);
-                 }
-                 /*
-                  * ⚠️ **必须让照片表盘重新扫描目录。**
-                  *
-                  * 原来 `photo_poll()` 只在"文件清单为空"时扫一次 `/photos/`
-                  * （结果缓存住）。于是**上传完新文件，表盘根本不知道** ——
-                  * 现象就是"上传成功，但一直显示的还是旧图"（用户实测）。
-                  *
-                  * 这里清空清单与当前文件名，下一次 `photo_poll()` 会重新扫描并
-                  * 从新文件开始播。
-                  */
-                 s_photo.file_count = 0;
-                 s_photo.cur_file = -1;
-                 s_photo_name_count = 0;
-                 s_photo_cur_name[0] = '\0';
-                 s_photo_loading = -1;
-                 Serial.printf("[上传] 完成 %s（%u 字节）→ 已通知照片表盘重新扫描\n",
-                               s_upload_name, (unsigned)s_upload_bytes);
-                 upload_reset();
-               } else if (up.status == UPLOAD_FILE_ABORTED) {
-                 Serial.println("[上传] 中断");
-                 upload_finish(false);
-                 upload_reset();
-               }
-             });
+      const char *base = strrchr(nm, '/');
+      const char *shortname = base ? base + 1 : nm;
 
-  s_http->begin();
-  Serial.println("[上传] HTTP 已启动（端口 80）");
+      char path[96];
+      snprintf(path, sizeof(path), PHOTO_DIR "/%s", shortname);
+      size_t fsz = 0;
+      pgi_header_t h;
+      bool ok = pgi_file_ok(path, &fsz, &h);
+
+      n += snprintf(buf + n, sizeof(buf) - n,
+                    "%s{\"name\":\"%s\",\"size\":%u,\"frames\":%u,\"fps\":%u,\"ok\":%d}",
+                    first ? "" : ",", shortname, (unsigned)fsz,
+                    (unsigned)(ok ? h.frame_count : 0), (unsigned)(ok ? h.fps : 0),
+                    ok ? 1 : 0);
+      first = false;
+    }
+  }
+  snprintf(buf + n, sizeof(buf) - n, "]}");
+  http_reply(c, 200, "OK", buf);
+}
+
+/** POST /delete?name=xxx.pgi */
+static void http_delete(WiFiClient &c, const char *url)
+{
+  char nm[64];
+  if (!query_arg(url, "name", nm, sizeof(nm))) {
+    http_reply(c, 400, "Bad Request", "{\"ok\":false,\"error\":\"missing_name\"}");
+    return;
+  }
+  char safe[64];
+  sanitize_name(nm, safe, sizeof(safe));
+  char path[96];
+  snprintf(path, sizeof(path), PHOTO_DIR "/%s", safe);
+  if (SD_MMC.exists(path) && SD_MMC.remove(path)) {
+    Serial.printf("[上传] 已删除 %s\n", path);
+    s_photo.file_count = 0;  s_photo_name_count = 0;
+    s_photo_cur_name[0] = '\0'; s_photo_loading = -1;
+    http_reply(c, 200, "OK", "{\"ok\":true}");
+  } else {
+    http_reply(c, 404, "Not Found", "{\"ok\":false,\"error\":\"not_found\"}");
+  }
+}
+
+/** POST /upload?name=xxx.pgi，请求体 = 原始 .pgi 字节 */
+static void http_upload(WiFiClient &c, const char *url, size_t contentLen)
+{
+  char nm[64];
+  if (!query_arg(url, "name", nm, sizeof(nm))) snprintf(nm, sizeof(nm), "upload");
+  char safe[64];
+  sanitize_name(nm, safe, sizeof(safe));
+
+  if (contentLen == 0 || contentLen > PHOTO_UPLOAD_MAX) {
+    Serial.printf("[上传] 拒绝：长度非法（%u）\n", (unsigned)contentLen);
+    http_reply(c, 413, "Payload Too Large", "{\"ok\":false,\"error\":\"bad_size\"}");
+    return;
+  }
+  if (ESP.getFreeHeap() < 12000u) {
+    Serial.printf("[上传] 拒绝：堆不足（%u B）\n", (unsigned)ESP.getFreeHeap());
+    http_reply(c, 507, "Insufficient Storage", "{\"ok\":false,\"error\":\"low_heap\"}");
+    return;
+  }
+
+  SD_MMC.mkdir(PHOTO_DIR);
+  char path[96];
+  snprintf(path, sizeof(path), PHOTO_DIR "/%s", safe);
+  File f = SD_MMC.open(path, FILE_WRITE);
+  if (!f) {
+    http_reply(c, 503, "Service Unavailable", "{\"ok\":false,\"error\":\"open_failed\"}");
+    return;
+  }
+
+  /* 流式写：边收边写，不驻留内存 */
+  static uint8_t io[1024];
+  size_t remain = contentLen, total = 0;
+  uint32_t t0 = millis();
+  while (remain > 0) {
+    int avail = c.available();
+    if (avail <= 0) {
+      if (!c.connected()) break;
+      if (millis() - t0 > 30000u) { Serial.println("[上传] 超时"); break; }
+      delay(1);
+      continue;
+    }
+    size_t want = (size_t)avail;
+    if (want > sizeof(io)) want = sizeof(io);
+    if (want > remain) want = remain;
+    int got = c.read(io, want);
+    if (got <= 0) break;
+    size_t w = f.write(io, (size_t)got);
+    if (w != (size_t)got) { Serial.println("[上传] 写盘失败 → 中止"); break; }
+    total += w;
+    remain -= (size_t)got;
+  }
+  f.close();
+
+  /* 三重校验：大小对得上 + 头部可解析 + 大小与头自洽；不过就删 */
+  size_t onDisk = 0;
+  pgi_header_t h;
+  bool good = (total == contentLen) && pgi_file_ok(path, &onDisk, &h) && onDisk == total;
+  if (!good) {
+    SD_MMC.remove(path);
+    Serial.printf("[上传] ✗ 校验不过（收到 %u / 声明 %u）→ 已删除\n", (unsigned)total,
+                  (unsigned)contentLen);
+    http_reply(c, 422, "Unprocessable", "{\"ok\":false,\"error\":\"invalid_pgi\"}");
+    return;
+  }
+
+  Serial.printf("[上传] ✓ %s（%u 字节，%u 帧，%u fps）\n", path, (unsigned)onDisk,
+                (unsigned)h.frame_count, (unsigned)h.fps);
+  /* 通知照片表盘重新扫描 */
+  s_photo.file_count = 0;  s_photo_name_count = 0;
+  s_photo_cur_name[0] = '\0'; s_photo_loading = -1;
+
+  char body[96];
+  snprintf(body, sizeof(body), "{\"ok\":true,\"bytes\":%u}", (unsigned)onDisk);
+  http_reply(c, 200, "OK", body);
+}
+
+/** 处理一个客户端（读完请求头 → 分派 → 关连接）*/
+static void http_serve_one(WiFiClient &c)
+{
+  size_t n = 0;
+  uint32_t t0 = millis();
+  /* 读请求头直到 \r\n\r\n */
+  while (n < HTTP_RX_MAX - 1) {
+    int avail = c.available();
+    if (avail <= 0) {
+      if (!c.connected()) { c.stop(); return; }
+      if (millis() - t0 > 8000u) { c.stop(); return; }
+      delay(1);
+      continue;
+    }
+    int got = c.read(s_rx + n, 1);
+    if (got != 1) break;
+    n++;
+    if (n >= 4 && memcmp(s_rx + n - 4, "\r\n\r\n", 4) == 0) break;
+  }
+  s_rx[n] = '\0';
+
+  /* 第一行：METHOD URL VERSION */
+  char method[8] = {0}, url[192] = {0};
+  if (sscanf((char *)s_rx, "%7s %191s", method, url) != 2) {
+    http_reply(c, 400, "Bad Request", "{\"ok\":false,\"error\":\"bad_request\"}");
+    return;
+  }
+
+  /* Content-Length */
+  size_t contentLen = 0;
+  const char *cl = strcasestr((char *)s_rx, "content-length:");
+  if (cl != NULL) {
+    cl += 15;
+    while (*cl == ' ') cl++;
+    contentLen = (size_t)atol(cl);
+  }
+
+  Serial.printf("[上传] %s %s（来自 %s，%u 字节）\n", method, url,
+                c.remoteIP().toString().c_str(), (unsigned)contentLen);
+
+  /* 分派 */
+  if (strcmp(method, "GET") == 0 && strcmp(url, "/ping") == 0) {
+    http_reply(c, 200, "OK", "{\"ok\":true,\"dev\":\"cardash\"}");
+  } else if (strcmp(method, "GET") == 0 && strcmp(url, "/list") == 0) {
+    http_list(c);
+  } else if (strcmp(method, "POST") == 0 && strncmp(url, "/delete", 7) == 0) {
+    http_delete(c, url);
+  } else if (strcmp(method, "POST") == 0 && strncmp(url, "/upload", 7) == 0) {
+    http_upload(c, url, contentLen);
+  } else if (strcmp(method, "GET") == 0 && strcmp(url, "/") == 0) {
+    http_reply(c, 200, "OK",
+               "{\"ok\":true,\"hint\":\"GET /list, POST /upload?name=, POST /delete?name=\"}");
+  } else {
+    http_reply(c, 404, "Not Found", "{\"ok\":false,\"error\":\"unknown_path\"}");
+  }
+}
+
+/** 开热点（AP 模式）+ 起 HTTP 服务 */
+static bool wifi_start_ap(void)
+{
+  if (s_wifi_up) return true;
+
+  WiFi.mode(WIFI_AP);
+  WiFi.setSleep(true); /* 省电 + 省几 KB 调制解调器缓冲 */
+  if (!WiFi.softAP(kWifiSsids, NULL, 6, 0, 1)) {
+    Serial.println("[上传] 开热点失败");
+    WiFi.mode(WIFI_OFF);
+    return false;
+  }
+  s_wifi_up = true;
+  s_wifi_ip = WiFi.softAPIP().toString();
+
+  s_srv = new WiFiServer(80, 1);
+  s_srv->begin();
+  Serial.printf("[上传] 热点已开：SSID=%s（免密）IP=%s，HTTP 就绪（裸 WiFiServer）\n",
+                kWifiSsids, s_wifi_ip.c_str());
+  Serial.printf("[上传] 此时内部堆 %u B\n", (unsigned)ESP.getFreeHeap());
+  return true;
 }
 
 static void wifi_stop_http(void)
 {
-  if (s_http != NULL) {
-    s_http->stop();
-    delete s_http;
-    s_http = NULL;
-  }
+  if (s_srv != NULL) { s_srv->stop(); delete s_srv; s_srv = NULL; }
   if (s_wifi_up) {
     WiFi.disconnect(true, false);
     WiFi.mode(WIFI_OFF);
@@ -1076,83 +1157,19 @@ static void wifi_stop_http(void)
   }
 }
 
-/*
- * 开热点（AP 模式）。
- *
- * ## 为什么用 AP 而不是连家里 Wi-Fi
- *
- * 用户的原话："能不能像蓝牙那样，扫到设备 Wi-Fi，连上就能传" —— 那正是 AP 模式：
- *   - **不需要家里有 Wi-Fi**（车上、外面都能传）；
- *   - **IP 固定 192.168.4.1** —— App 不用手填、也不用 BLE 传 IP；
- *   - 手机 Wi-Fi 列表里能**直接看到** `CarDash`。
- *
- * 代价：手机连热点时会**暂时断开原网络**（App 的网关连接会断一下），
- * 所以**只在需要上传时才开**，传完关掉。
- */
-#define WIFI_AP_SSID  "CarDash"
-#define WIFI_AP_IP    "192.168.4.1"   /* ESP32 softAP 的默认网关地址 */
-/*
- * **免密热点**（用户要求：连接尽量简单，别输密码）。
- *
- * 安全影响（刻意接受，写在这里免得以后有人以为是漏配）：
- *   - 附近任何人（约 10~30 米）都能连上本热点；
- *   - **但他们拿不走照片** —— HTTP 只有 `/`（一句说明）与 `/upload` 两个端点，
- *     **没有任何读取接口**，SD 卡内容无法被下载；
- *   - 真实风险是**别人往 /photos/ 扔垃圾文件 / 填满卡 / 覆盖同名文件**。
- *     已保留的防护：只接受 POST /upload、文件名由服务端清洗、强制 .pgi 后缀、
- *     单文件 ≤ 8MB。
- *   - 若日后要收紧，改回 `softAP(ssid, "cardash1")` 即可（一行）。 */
-#define WIFI_AP_OPEN  1
-
-static bool wifi_start_ap(void)
-{
-  if (s_wifi_up) return true;
-
-  WiFi.mode(WIFI_AP);
-  /*
-   * 省电模式：默认 `WIFI_PS_NONE`（关省电）会常驻更多调制解调器缓冲。
-   * 上传是**短时突发**，MIN_MODEM 足够，且能省下几 KB 内部堆 + 明显降功耗。
-   */
-  WiFi.setSleep(true);
-  /* 只允许一个客户端：够用，也少一个被占满的可能 */
-#if WIFI_AP_OPEN
-  bool ok = WiFi.softAP(WIFI_AP_SSID, NULL, 6 /*channel*/, 0 /*hidden*/, 1 /*maxConn*/);
-#else
-  bool ok = WiFi.softAP(WIFI_AP_SSID, "cardash1", 6, 0, 1);
-#endif
-  if (!ok) {
-    Serial.println("[上传] 开热点失败");
-    WiFi.mode(WIFI_OFF);
-    return false;
-  }
-  s_wifi_up = true;
-  s_wifi_ip = WiFi.softAPIP().toString();
-#if WIFI_AP_OPEN
-  Serial.printf("[上传] 热点已开启：SSID=%s（**免密**）IP=%s\n", WIFI_AP_SSID, s_wifi_ip.c_str());
-#else
-  Serial.printf("[上传] 热点已开启：SSID=%s 密码=cardash1 IP=%s\n", WIFI_AP_SSID,
-                s_wifi_ip.c_str());
-#endif
-  wifi_start_http();
-  return true;
-}
-
-/** 主循环：处理 HTTP 请求 + 报告客户端数变化 */
+/** 主循环：接连接 + 报客户端数变化 */
 static void wifi_poll(void)
 {
-  if (s_http != NULL) s_http->handleClient();
+  if (s_srv == NULL) return;
 
-  /*
-   * 客户端数变化时打一行 —— 这是排查"手机到底连上热点没有"最直接的证据。
-   * 用户报上传失败时，先看这行：0 = 手机没连上，1 = 连上了但请求没发出来。
-   */
-  if (s_wifi_up) {
-    static int last_sta = -1;
-    int sta = (int)WiFi.softAPgetStationNum();
-    if (sta != last_sta) {
-      Serial.printf("[上传] 热点客户端数：%d\n", sta);
-      last_sta = sta;
-    }
+  WiFiClient c = s_srv->available();
+  if (c) http_serve_one(c);
+
+  static int last_sta = -1;
+  int sta = (int)WiFi.softAPgetStationNum();
+  if (sta != last_sta) {
+    Serial.printf("[上传] 热点客户端数：%d\n", sta);
+    last_sta = sta;
   }
 }
 
@@ -2707,18 +2724,17 @@ static void process_command(char *cmd)
    */
   else if (strncmp(cmd, "wifi", 4) == 0) {
     /*
-     * wifi <ssid> <pass>  —— 连入局域网并启动上传服务
-     * wifi off            —— 断开并关闭
-     * wifi                —— 查状态
-     * 凭据存 NVS（下次上电可用 `wifi auto` 自动连）；日志不回显密码。
+     * wifi on   —— 开热点（开机其实已自动开，这条用于关掉后再开）
+     * wifi off  —— 断开并关闭
+     * wifi      —— 查状态
      */
     const char *arg = cmd + 4;
     while (*arg == ' ') arg++;
     if (*arg == '\0') {
       if (s_wifi_up) {
-        Serial.printf("[上传] 热点 %s 已开启，IP=%s，%s，**已连客户端 %d 个**\n", WIFI_AP_SSID,
-                      s_wifi_ip.c_str(), WIFI_AP_OPEN ? "免密" : "密码 cardash1",
-                      (int)WiFi.softAPgetStationNum());
+        Serial.printf("[上传] 热点 %s 已开启（免密），IP=%s，已连客户端 %d 个，内部堆 %u B\n",
+                      kWifiSsids, s_wifi_ip.c_str(), (int)WiFi.softAPgetStationNum(),
+                      (unsigned)ESP.getFreeHeap());
       } else {
         Serial.println("[上传] 未开启（敲 wifi on 开热点）");
       }

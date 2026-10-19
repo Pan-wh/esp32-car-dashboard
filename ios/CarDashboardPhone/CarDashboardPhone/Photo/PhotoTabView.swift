@@ -63,6 +63,25 @@ struct PhotoTabView: View {
     @State private var pgiBytes = 0
     /// 设备端轮播开关（与固件 photo_slide 命令对应）
     @State private var slideshowOn = true
+    /// 设备端轮播间隔（秒）
+    @State private var intervalSec = 30
+
+    /// 设备上已导入的照片（来自 HTTP GET /list）
+    struct DevicePhoto: Identifiable, Hashable {
+        let name: String
+        let size: Int
+        let frames: Int
+        let fps: Int
+        let ok: Bool
+        var id: String { name }
+        var isAnimated: Bool { frames > 1 }
+        var sizeText: String {
+            size >= 1024 * 1024 ? String(format: "%.1f MB", Double(size) / 1048576)
+                                : "\(size / 1024) KB"
+        }
+    }
+    @State private var devicePhotos: [DevicePhoto] = []
+    @State private var loadingList = false
 
     var body: some View {
         NavigationStack {
@@ -249,7 +268,74 @@ struct PhotoTabView: View {
                     Text("仪表**开机就会开**一个名为 \(Self.deviceAPSSID) 的免密热点（IP 固定 \(Self.deviceAPHost)）。\n点上面的按钮会自动连上它并上传，传完自动断开。\n\n如果自动连失败，手动在「设置 → 无线局域网」里选 \(Self.deviceAPSSID) 也能传。")
                 }
             }
+
+                // ── 设备上的照片 ──
+                Section {
+                    if loadingList {
+                        HStack { ProgressView(); Text("正在读取设备…").font(.footnote) }
+                    } else if devicePhotos.isEmpty {
+                        Text("设备上还没有照片").foregroundStyle(.secondary)
+                    } else {
+                        ForEach(devicePhotos) { p in
+                            HStack {
+                                Image(systemName: p.isAnimated ? "photo.stack" : "photo")
+                                    .foregroundStyle(p.ok ? Color.primary : Color.red)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(p.name).font(.subheadline)
+                                    Text(p.isAnimated ? "\(p.frames) 帧 · \(p.fps) fps · \(p.sizeText)"
+                                                      : "静态图片 · \(p.sizeText)")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if !p.ok { Text("损坏").font(.caption2).foregroundStyle(.red) }
+                            }
+                        }
+                        .onDelete { idx in
+                            let victims = idx.map { devicePhotos[$0] }
+                            for v in victims { Task { await deletePhoto(v) } }
+                        }
+                    }
+                    Button {
+                        Task { await refreshList() }
+                    } label: {
+                        Label("刷新列表", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(loadingList)
+                } header: {
+                    Text("设备上的照片")
+                } footer: {
+                    Text("左滑删除。列表通过仪表的 HTTP 接口读取，需要手机连着 CarDash。")
+                }
+
+                // ── 播放设置（BLE 下发到仪表） ──
+                Section {
+                    Toggle("自动轮播", isOn: Binding(
+                        get: { slideshowOn },
+                        set: { v in
+                            slideshowOn = v
+                            _ = session.ble.sendCommand("{\"cmd\":\"photo_slide\",\"value\":\(v ? 1 : 0)}")
+                        }
+                    ))
+                    Picker("轮播间隔", selection: Binding(
+                        get: { intervalSec },
+                        set: { v in
+                            intervalSec = v
+                            _ = session.ble.sendCommand("{\"cmd\":\"photo_interval\",\"value\":\(v)}")
+                        }
+                    )) {
+                        Text("10 秒").tag(10)
+                        Text("30 秒").tag(30)
+                        Text("1 分钟").tag(60)
+                        Text("5 分钟").tag(300)
+                    }
+                    .disabled(!slideshowOn)
+                } header: {
+                    Text("播放设置")
+                } footer: {
+                    Text("关闭轮播后仪表停在当前那张，并自动开启像素位移防烧屏。")
+                }
             .navigationTitle("照片")
+            .task { await refreshList() }
             .onChange(of: pickedItem) { _, item in
                 guard let item else { return }
                 Task { await load(item) }
@@ -485,6 +571,7 @@ struct PhotoTabView: View {
                 uploadStatus = "上传成功（\(pgi.count / 1024) KB）"
                 uploading = false
             }
+            await refreshList()
         } catch {
             await MainActor.run {
                 var msg = "失败：\(Self.describeNetError(error))"
@@ -647,6 +734,56 @@ struct PhotoTabView: View {
         }
     }
 
+    // MARK: - 设备照片管理
+
+    private func refreshList() async {
+        await MainActor.run { loadingList = true }
+        defer { Task { @MainActor in loadingList = false } }
+        guard let url = URL(string: "http://\(Self.deviceAPHost)/list") else { return }
+        do {
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 8
+            req.setValue("close", forHTTPHeaderField: "Connection")
+            let (d, _) = try await Self.makeSession(timeout: 8).data(for: req)
+            struct Resp: Decodable {
+                struct F: Decodable { let name: String; let size: Int; let frames: Int; let fps: Int; let ok: Int }
+                let files: [F]?
+            }
+            let r = try JSONDecoder().decode(Resp.self, from: d)
+            var list: [DevicePhoto] = []
+            for f in (r.files ?? []) {
+                list.append(DevicePhoto(name: f.name, size: f.size, frames: f.frames,
+                                        fps: f.fps, ok: f.ok != 0))
+            }
+            await MainActor.run { devicePhotos = list.sorted { $0.name < $1.name } }
+        } catch {
+            await MainActor.run { uploadStatus = "读不到设备列表：\(Self.describeNetError(error))" }
+        }
+    }
+
+    private func deletePhoto(_ p: DevicePhoto) async {
+        guard var comps = URLComponents(string: "http://\(Self.deviceAPHost)/delete") else { return }
+        comps.queryItems = [URLQueryItem(name: "name", value: p.name)]
+        guard let url = comps.url else { return }
+        do {
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("0", forHTTPHeaderField: "Content-Length")
+            req.setValue("close", forHTTPHeaderField: "Connection")
+            let (_, resp) = try await Self.makeSession(timeout: 10).data(for: req)
+            if let http = resp as? HTTPURLResponse, http.statusCode == 200 {
+                await MainActor.run {
+                    devicePhotos.removeAll { $0.name == p.name }
+                    uploadStatus = "已删除 \(p.name)"
+                }
+            } else {
+                await MainActor.run { uploadStatus = "删除失败" }
+            }
+        } catch {
+            await MainActor.run { uploadStatus = "删除失败：\(Self.describeNetError(error))" }
+        }
+    }
+
     private func post(_ data: Data) async throws {
         let host = deviceHost.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = "app-\(Int(Date().timeIntervalSince1970)).pgi"
@@ -669,18 +806,19 @@ struct PhotoTabView: View {
          * upload 上下文**；发原始 octet-stream 时它不存在，
          * 回调里 `server.upload()` 一解引用就崩。
          */
-        let boundary = "----CarDash\(UUID().uuidString)"
-        var body = Data()
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
-        body.append(data)
-        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
-
+        /*
+         * **请求体就是原始 .pgi 字节**（不再用 multipart）。
+         *
+         * 设备端已经从 `WebServer` 换成了裸 `WiFiServer`：
+         * 它只读 `Content-Length` 然后把这 N 个字节直接写进 SD ——
+         * 既更省内存，也避免之前 multipart 缺失导致的 NULL 解引用 panic。
+         */
+        let body = data
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 60
+        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        req.setValue("\(data.count)", forHTTPHeaderField: "Content-Length")
+        req.timeoutInterval = 120
 
         /*
          * 走与 probe 相同的会话配置（`Connection: close`）。
