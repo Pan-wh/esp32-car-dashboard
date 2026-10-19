@@ -729,7 +729,13 @@ static void sanitize_name(const String &raw, char *out, size_t cap)
   snprintf(out + n, cap - n, ".pgi");
 }
 
-/** 上传结束（成功/失败都走这里；失败时删掉半截文件）*/
+/**
+ * 上传结束（成功/失败都走这里；失败时删掉半截文件）。
+ *
+ * ⚠️ **不再清 `s_upload_name` / `s_upload_bytes`** —— 之前它俩在这里被清零，
+ * 而调用方紧接着打印"完成 xxx（N 字节）"，于是日志永远显示"完成 （0 字节）"，
+ * 把真正的错误线索全盖掉了。**由调用方打印完再调 `upload_reset()`。**
+ */
 static void upload_finish(bool ok)
 {
   if (s_upload_file) s_upload_file.close();
@@ -739,6 +745,11 @@ static void upload_finish(bool ok)
     SD_MMC.remove(path);
   }
   s_upload_active = false;
+}
+
+/** 清理上传状态（打印完再调）*/
+static void upload_reset(void)
+{
   s_upload_name[0] = '\0';
   s_upload_bytes = 0;
 }
@@ -800,12 +811,28 @@ static void wifi_start_http(void)
                  if (s_upload_bytes + up.currentSize > PHOTO_UPLOAD_MAX) {
                    Serial.println("[上传] 超过 8MB，放弃");
                    upload_finish(false);
+                   upload_reset();
                    return;
                  }
                  s_upload_file.write(up.buf, up.currentSize);
                  s_upload_bytes += up.currentSize;
                } else if (up.status == UPLOAD_FILE_END) {
                  upload_finish(true);
+                 /*
+                  * **校验真正落盘的大小** —— 之前只看回调里的计数，
+                  * 一旦写入没生效（SD 打开失败等）日志也是"成功"，用户只看到 LOAD ERROR。
+                  */
+                 char path[96];
+                 snprintf(path, sizeof(path), PHOTO_DIR "/%s", s_upload_name);
+                 File chk = SD_MMC.open(path, FILE_READ);
+                 size_t on_disk = chk ? (size_t)chk.size() : 0;
+                 if (chk) chk.close();
+                 if (on_disk != s_upload_bytes || on_disk < 1500) {
+                   Serial.printf("[上传] ⚠️ 落盘异常：收到 %u 字节，文件实际 %u 字节（%s）\n",
+                                 (unsigned)s_upload_bytes, (unsigned)on_disk, path);
+                 } else {
+                   Serial.printf("[上传] 已落盘 %u 字节（%s）\n", (unsigned)on_disk, path);
+                 }
                  /*
                   * ⚠️ **必须让照片表盘重新扫描目录。**
                   *
@@ -823,9 +850,11 @@ static void wifi_start_http(void)
                  s_photo_loading = -1;
                  Serial.printf("[上传] 完成 %s（%u 字节）→ 已通知照片表盘重新扫描\n",
                                s_upload_name, (unsigned)s_upload_bytes);
+                 upload_reset();
                } else if (up.status == UPLOAD_FILE_ABORTED) {
                  Serial.println("[上传] 中断");
                  upload_finish(false);
+                 upload_reset();
                }
              });
 
