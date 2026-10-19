@@ -89,10 +89,41 @@ enum PhotoStudio {
         var zoom: CGFloat = 1          // 1...maxZoom
         var panX: CGFloat = 0          // -0.5...0.5（相对边长）
         var panY: CGFloat = 0
+        /// 旋转角度（度）。任意角度都支持；UI 上按 90° 步进（捏合旋转也吸附到 90°）
+        var rotation: CGFloat = 0
 
         static let minZoom: CGFloat = 1
         static let maxZoom: CGFloat = 4
         static let identity = CropTransform()
+    }
+
+    /// 把图片按 `degrees` 旋转（逆时针为正，与 SwiftUI 的 `.rotationEffect` 同向）。
+    ///
+    /// ⚠️ 90°/270° 会**交换宽高**，所以旋转后必须用新的 size 去算 aspect-fill 矩形，
+    /// 否则会算出错误的裁剪比例。
+    static func rotated(_ image: UIImage, degrees: CGFloat) -> UIImage {
+        let norm = degrees.truncatingRemainder(dividingBy: 360)
+        if abs(norm) < 0.01 { return image }
+
+        let radians = norm * .pi / 180
+        let w = image.size.width, h = image.size.height
+        let cosA = abs(cos(radians)), sinA = abs(sin(radians))
+        let newW = w * cosA + h * sinA
+        let newH = w * sinA + h * cosA
+
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = image.scale
+        format.opaque = false
+
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: newW, height: newH),
+                                               format: format)
+        return renderer.image { ctx in
+            let c = ctx.cgContext
+            c.translateBy(x: newW / 2, y: newH / 2)
+            c.rotate(by: radians)
+            // UIImage.draw 用的是"左上原点、y 向下"，先转回中心再画
+            image.draw(in: CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
+        }
     }
 
     /// 居中裁成正方形后缩放到 `size`（无手势）
@@ -114,7 +145,9 @@ enum PhotoStudio {
             UIColor.black.setFill()
             ctx.fill(CGRect(origin: .zero, size: target))
 
-            var rect = CropGeometry.aspectFillRect(imageSize: image.size, target: target)
+            // 先旋转（会改宽高），再算 aspect-fill —— 顺序反了会算错比例
+            let base = rotated(image, degrees: transform.rotation)
+            var rect = CropGeometry.aspectFillRect(imageSize: base.size, target: target)
 
             /*
              * 手势变换：
@@ -133,7 +166,7 @@ enum PhotoStudio {
             rect.origin.x -= transform.panX * target.width
             rect.origin.y -= transform.panY * target.height
 
-            image.draw(in: rect)
+            base.draw(in: rect)
         }
     }
 

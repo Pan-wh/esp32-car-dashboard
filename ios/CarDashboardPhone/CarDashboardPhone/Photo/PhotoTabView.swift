@@ -36,6 +36,8 @@ struct PhotoTabView: View {
     @State private var pan: CGSize = .zero
     @State private var committedZoom: CGFloat = 1
     @State private var committedPan: CGSize = .zero
+    /// 已提交的旋转角（度）；手势期间是"基准 + 实时增量"
+    @State private var committedRotation: CGFloat = 0
 
     /// 未经过手势的原始正方形帧（换素材时填；改手势时在此基础上重新裁切）
     @State private var rawFrames: [StudioFrame] = []
@@ -70,6 +72,12 @@ struct PhotoTabView: View {
                                     .resizable()
                                     .scaledToFill()
                                     .frame(width: side, height: side)
+                                    /*
+                                     * 注意：旋转**只影响预览的示意** ——
+                                     * 真正参与导出的是 squareCropped 里的旋转，
+                                     * 两者角度必须来自同一个 committedRotation。
+                                     */
+                                    .rotationEffect(.degrees(committedRotation))
                                     .scaleEffect(zoom)
                                     .offset(x: pan.width + committedPan.width,
                                             y: pan.height + committedPan.height)
@@ -87,8 +95,11 @@ struct PhotoTabView: View {
                         )
                         .contentShape(Circle())
                         .gesture(
-                            SimultaneousGesture(magnifyGesture(side: side),
-                                                dragGesture(side: side))
+                            SimultaneousGesture(
+                                SimultaneousGesture(magnifyGesture(side: side),
+                                                    dragGesture(side: side)),
+                                rotateGesture()
+                            )
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
@@ -99,6 +110,18 @@ struct PhotoTabView: View {
                         HStack {
                             Text("缩放 \(String(format: "%.1f", zoom))×")
                                 .font(.caption).monospacedDigit()
+                            if committedRotation != 0 {
+                                Text("\(Int(committedRotation))°")
+                                    .font(.caption).monospacedDigit()
+                            }
+                            Spacer()
+                            Button {
+                                rotate90()
+                            } label: {
+                                Label("旋转 90°", systemImage: "rotate.right")
+                            }
+                            .font(.caption)
+                            .buttonStyle(.borderless)
                             Spacer()
                             Button("复位") { resetTransform() }
                                 .font(.caption)
@@ -172,6 +195,30 @@ struct PhotoTabView: View {
             }
     }
 
+    /// 两指旋转：吸附到 90° 的整数倍（自由角度在圆屏裁切里没有意义，还会留黑角）
+    private func rotateGesture() -> some Gesture {
+        RotationGesture()
+            .onEnded { v in
+                let degrees = committedRotation + v.degrees
+                committedRotation = (degrees / 90).rounded() * 90
+                normalizeRotation()
+                reapplyTransform()
+            }
+    }
+
+    private func rotate90() {
+        committedRotation += 90
+        normalizeRotation()
+        reapplyTransform()
+    }
+
+    /// 把角度归到 0..<360，避免长期累加后出现 720°、-90° 这类值
+    private func normalizeRotation() {
+        var r = committedRotation.truncatingRemainder(dividingBy: 360)
+        if r < 0 { r += 360 }
+        committedRotation = r
+    }
+
     private func dragGesture(side: CGFloat) -> some Gesture {
         DragGesture()
             .onChanged { v in
@@ -205,6 +252,7 @@ struct PhotoTabView: View {
         pan = .zero
         committedZoom = 1
         committedPan = .zero
+        committedRotation = 0
         reapplyTransform()
     }
 
@@ -215,7 +263,8 @@ struct PhotoTabView: View {
         let t = PhotoStudio.CropTransform(
             zoom: committedZoom,
             panX: committedPan.width / side,
-            panY: committedPan.height / side
+            panY: committedPan.height / side,
+            rotation: committedRotation
         )
         // 换帧：把 rawFrames 按变换重新画一遍（尺寸用原始 size）
         let w = Int(rawFrames[0].image.width)
@@ -250,6 +299,7 @@ struct PhotoTabView: View {
             await MainActor.run {
                 rawFrames = frames
                 zoom = 1; pan = .zero; committedZoom = 1; committedPan = .zero
+                committedRotation = 0
                 frameCount = frames.count
                 if let first = frames.first {
                     preview = UIImage(cgImage: first.image)
