@@ -115,13 +115,6 @@ struct PhotoTabView: View {
                                     .font(.caption).monospacedDigit()
                             }
                             Spacer()
-                            Button {
-                                rotate90()
-                            } label: {
-                                Label("旋转 90°", systemImage: "rotate.right")
-                            }
-                            .font(.caption)
-                            .buttonStyle(.borderless)
                             Spacer()
                             Button("复位") { resetTransform() }
                                 .font(.caption)
@@ -138,6 +131,22 @@ struct PhotoTabView: View {
                 }
 
                 Section("参数") {
+                    Picker("旋转角度", selection: Binding(
+                        get: { Int(committedRotation) % 360 },
+                        set: { newValue in
+                            committedRotation = CGFloat(newValue)
+                            normalizeRotation()
+                            reapplyTransform()
+                        }
+                    )) {
+                        Text("0°").tag(0)
+                        Text("90°").tag(90)
+                        Text("180°").tag(180)
+                        Text("270°").tag(270)
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(rawFrames.isEmpty)
+
                     Stepper("边长：\(size) px", value: $size, in: 240...466, step: 2)
                     HStack {
                         Text("视频帧率")
@@ -206,6 +215,7 @@ struct PhotoTabView: View {
             }
     }
 
+    /// 保留：手势吸附或调试时按 90° 步进（UI 上是四选一 Picker，不再用这个按钮）
     private func rotate90() {
         committedRotation += 90
         normalizeRotation()

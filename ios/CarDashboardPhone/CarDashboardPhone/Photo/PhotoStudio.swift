@@ -132,6 +132,9 @@ enum PhotoStudio {
     }
 
     /// 居中裁成正方形、缩放到 `size`，并应用手势变换
+    ///
+    /// ⚠️ `image.imageOrientation` **会被正确绘制**（UIKit 的 `draw(in:)` 处理方向），
+    /// 所以调用方只要保证传入的 UIImage 带了方向信息即可。
     static func squareCropped(_ image: UIImage, size: Int,
                               transform: CropTransform) -> UIImage {
         let target = CGSize(width: size, height: size)
@@ -185,17 +188,48 @@ enum PhotoStudio {
         for i in 0..<min(count, maxFrames) {
             guard let cg = CGImageSourceCreateImageAtIndex(src, i, nil) else { continue }
             let props = CGImageSourceCopyPropertiesAtIndex(src, i, nil) as? [CFString: Any]
+
+            /*
+             * ⚠️ **竖拍照片会变横屏的根因就在这一行**。
+             *
+             * 手机竖拍时，传感器像素其实是"横的"，方向靠 EXIF 的 Orientation 标记表达。
+             * `UIImage(cgImage:)` 这个初始化器**不带方向**（等价于 .up），
+             * 于是竖图被当成横图 —— 用户看到的就是"竖屏照片上传后变横屏"。
+             *
+             * 正确做法：把源文件的 Orientation 一起传进去，
+             * 让后续的 `image.draw(in:)` 按方向绘制（UIKit 会正确摆正）。
+             */
+            let orientation = Self.orientation(from: props)
             let gif = props?[kCGImagePropertyGIFDictionary] as? [CFString: Any]
             let delay = (gif?[kCGImagePropertyGIFUnclampedDelayTime] as? Double)
                 ?? (gif?[kCGImagePropertyGIFDelayTime] as? Double)
                 ?? 0.1
-            let ui = UIImage(cgImage: cg)
+            let ui = UIImage(cgImage: cg, scale: 1, orientation: orientation)
             let scaled = squareCropped(ui, size: maxSize)
             guard let scaledCG = scaled.cgImage else { continue }
             out.append(StudioFrame(image: scaledCG, duration: max(delay, 0.02)))
         }
         guard !out.isEmpty else { throw PhotoStudioError.noFrames }
         return out
+    }
+
+    /// 把 ImageIO 的 `kCGImagePropertyOrientation`（1..8）转成 `UIImage.Orientation`
+    private static func orientation(from props: [CFString: Any]?) -> UIImage.Orientation {
+        guard let raw = props?[kCGImagePropertyOrientation] as? UInt32,
+              let o = CGImagePropertyOrientation(rawValue: raw) else {
+            return .up
+        }
+        switch o {
+        case .up: return .up
+        case .upMirrored: return .upMirrored
+        case .down: return .down
+        case .downMirrored: return .downMirrored
+        case .left: return .left
+        case .leftMirrored: return .leftMirrored
+        case .right: return .right
+        case .rightMirrored: return .rightMirrored
+        @unknown default: return .up
+        }
     }
 
     // MARK: - 视频抽帧
