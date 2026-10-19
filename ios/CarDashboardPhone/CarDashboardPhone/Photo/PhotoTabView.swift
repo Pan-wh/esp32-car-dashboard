@@ -637,9 +637,30 @@ struct PhotoTabView: View {
         comps.queryItems = [URLQueryItem(name: "name", value: name)]
         guard let url = comps.url else { throw PgiEncoderError.encodeFailed("IP 格式不对") }
 
+        /*
+         * ⚠️ **必须用 multipart/form-data，不能用 application/octet-stream。**
+         *
+         * 崩溃现场（设备串口 + addr2line 解出的调用栈）：
+         *     WebServer::upload()      ← 我们的上传回调
+         *     HTTPUpload 的 unique_ptr 是 **NULL**
+         *     → LoadProhibited（空指针），设备 panic 重启
+         *     → 手机端看到 URLError -1005「连接被断开」
+         *
+         * 原因：ESP32 的 `WebServer` **只在 `multipart/form-data` 时才创建
+         * upload 上下文**；发原始 octet-stream 时它不存在，
+         * 回调里 `server.upload()` 一解引用就崩。
+         */
+        let boundary = "----CarDash\(UUID().uuidString)"
+        var body = Data()
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+        body.append(data)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 60
 
         /*
@@ -657,7 +678,7 @@ struct PhotoTabView: View {
         var resp: URLResponse?
         for attempt in 0..<3 {
             do {
-                let (_, r) = try await session.upload(for: req, from: data)
+                let (_, r) = try await session.upload(for: req, from: body)
                 resp = r
                 lastError = nil
                 break

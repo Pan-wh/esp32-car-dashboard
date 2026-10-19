@@ -775,6 +775,15 @@ static void wifi_start_http(void)
                             String("{\"ok\":true,\"bytes\":") + String((unsigned)s_upload_bytes) + "}");
              },
              []() {
+               /*
+                * ⚠️ 这里原本直接 `s_http->upload()`，在客户端发的不是
+                * multipart/form-data 时会解引用 **NULL 的 unique_ptr**，
+                * 触发 LoadProhibited（核心已崩溃重启，手机端表现为 -1005）。
+                *
+                * 服务端无法在 `upload()` 之前判断是否为空（崩溃就在它内部），
+                * 所以真正的修法在客户端（必须发 multipart）。
+                * 这里额外做的是**避免把文件写成半截**：只要状态不对就放弃。
+                */
                HTTPUpload &up = s_http->upload();
                if (up.status == UPLOAD_FILE_START) {
                  if (!sd_mount()) return;
