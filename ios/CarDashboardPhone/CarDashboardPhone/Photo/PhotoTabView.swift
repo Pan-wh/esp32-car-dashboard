@@ -44,6 +44,8 @@ struct PhotoTabView: View {
     @State private var rawFrames: [StudioFrame] = []
     /// 视频自动降帧率的提示（跨 await 传递用 static，SwiftUI 里 @State 不方便从非主线程写）
     private static var pendingFPSNote: String?
+    /// 自动连热点的结果（失败也不阻塞上传，但失败时要说清楚）
+    private static var lastJoinError: String?
 
     /*
      * 设备的 AP 模式是**固定 IP**：ESP32 softAP 的网关恒为 192.168.4.1，
@@ -225,7 +227,7 @@ struct PhotoTabView: View {
                 } header: {
                     Text("上传到仪表")
                 } footer: {
-                    Text("仪表会开一个名为 \(Self.deviceAPSSID) 的**免密**热点（IP 固定 \(Self.deviceAPHost)）。\n点上面的按钮会自动连上它并上传，传完自动断开。\n\n手机需先在串口敲 `wifi on` 打开热点。")
+                    Text("仪表**开机就会开**一个名为 \(Self.deviceAPSSID) 的免密热点（IP 固定 \(Self.deviceAPHost)）。\n点上面的按钮会自动连上它并上传，传完自动断开。\n\n如果自动连失败，手动在「设置 → 无线局域网」里选 \(Self.deviceAPSSID) 也能传。")
                 }
             }
             .navigationTitle("照片")
@@ -420,8 +422,17 @@ struct PhotoTabView: View {
                 pgiBytes = pgi.count
                 uploadStatus = "已编码 \(pgi.count / 1024) KB，正在上传…"
             }
-            // 先确保连上仪表热点（已连则直接返回）
-            try await joinDeviceHotspot()
+            /*
+             * ⚠️ **连热点只是"尽力而为"，失败不能阻塞上传**。
+             *
+             * 踩过的坑：用户已经手动连上 `CarDash` 了，但 `NEHotspotConfiguration.apply`
+             * 在"已关联"时会返回 `NEHotspotConfigurationError.internal`（不是
+             * `alreadyAssociated`），于是整个上传被判定为失败 —— 明明网络是通的。
+             *
+             * 改为：先试一下自动连（1 次），**无论成败都继续 POST**；
+             * 只有 POST 本身失败才算失败。
+             */
+            await joinDeviceHotspotBestEffort()
             try await post(pgi)
             await MainActor.run {
                 uploadStatus = "上传成功（\(pgi.count / 1024) KB）"
@@ -429,7 +440,12 @@ struct PhotoTabView: View {
             }
         } catch {
             await MainActor.run {
-                uploadStatus = "失败：\(error.localizedDescription)"
+                var msg = "失败：\(error.localizedDescription)"
+                if let join = Self.lastJoinError {
+                    msg += "\n（自动连热点：\(join)）"
+                }
+                msg += "\n请确认手机已连上 \(Self.deviceAPSSID) 热点"
+                uploadStatus = msg
                 uploading = false
             }
         }
@@ -462,29 +478,52 @@ struct PhotoTabView: View {
     /// 用 `NEHotspotConfiguration` 是为了**免去用户去「设置」里手动选网络** ——
     /// 这正是用户要的"像蓝牙那样，扫到就连上"。
     /// 若系统拒绝（没授权/已连别的网被拒），回退提示用户手动连接。
-    private func joinDeviceHotspot() async throws {
+    private func joinDeviceHotspotBestEffort() async {
         let manager = NEHotspotConfigurationManager.shared
-        // 免密网络：不传 passphrase
-        let cfg = NEHotspotConfiguration(ssid: Self.deviceAPSSID)
-        cfg.joinOnce = true   // 传完就断，不长期占用
+        let cfg = NEHotspotConfiguration(ssid: Self.deviceAPSSID)  // 免密不传 passphrase
+        cfg.joinOnce = true
 
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+        let result: NSError? = await withCheckedContinuation { cont in
             manager.apply(cfg) { error in
-                if let e = error as NSError? {
-                    // 已经连着这个网络时也会报这个错 —— 当作成功
-                    if e.domain == NEHotspotConfigurationErrorDomain,
-                       e.code == NEHotspotConfigurationError.alreadyAssociated.rawValue {
-                        cont.resume()
-                        return
-                    }
-                    cont.resume(throwing: e)
-                    return
-                }
-                cont.resume()
+                cont.resume(returning: error as NSError?)
             }
         }
-        // 拿到 DHCP 需要一点时间
-        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        if let e = result {
+            /*
+             * 常见的三种，全都**不影响**后续上传：
+             *   - alreadyAssociated / internal：手机已经连着这个网络；
+             *   - applicationIsNotInForeground：App 不在前台；
+             *   - systemConfiguration：系统层问题。
+             * 所以这里只记录，不抛错。
+             */
+            Self.lastJoinError = Self.describeHotspotError(e)
+        } else {
+            Self.lastJoinError = nil
+            // 刚关联上时 DHCP 还没就绪，稍等一下（只有真的连过才需要）
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+        }
+    }
+
+    /// 把 NEHotspotConfiguration 的错误码翻成人话（否则只会看到 "internal error"）
+    private static func describeHotspotError(_ e: NSError) -> String {
+        guard e.domain == NEHotspotConfigurationErrorDomain else {
+            return e.localizedDescription
+        }
+        switch NEHotspotConfigurationError(rawValue: e.code) {
+        case .alreadyAssociated: return "已连接该热点"
+        case .invalid: return "热点参数非法"
+        case .invalidSSID: return "热点名非法"
+        case .invalidWPAPassphrase: return "热点密码非法"
+        case .invalidWEPPassphrase: return "热点密码非法（WEP）"
+        case .invalidSSIDPrefix: return "热点名前缀非法"
+        case .userDenied: return "用户拒绝了连接"
+        case .systemConfiguration: return "系统网络配置错误"
+        case .unknown: return "未知错误"
+        case .applicationIsNotInForeground: return "App 不在前台"
+        case .internal: return "系统内部错误（通常是已连着该网络）"
+        case .none: return "调用成功"
+        @unknown default: return e.localizedDescription
+        }
     }
 
     private func post(_ data: Data) async throws {

@@ -2907,6 +2907,15 @@ void setup()
    */
   photo_slide_init(&s_photo, photo_settings_default());
   photo_settings_load();
+
+  /*
+   * **开机就开上传热点**。
+   *
+   * 原本要用户先在串口敲 `wifi on` —— 这对"只是想把图传上去"的人是多余的门槛
+   * （用户实测时也确实卡在"串口 wifi on 是什么意思"）。
+   * 热点功耗不高、且免密，直接开机常开；要关仍可串口 `wifi off`。
+   */
+  wifi_start_ap();
   Serial.printf("[照片] 轮播=%d 间隔=%us 息屏=%d(%umin) 位移=%d\n",
                 (int)s_photo.settings.slideshow,
                 (unsigned)(s_photo.settings.interval_ms / 1000u),
