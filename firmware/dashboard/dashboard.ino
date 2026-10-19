@@ -74,6 +74,11 @@ extern "C" {
  *   - 放**前面** → 它自己内部的 `extern "C"` 会与后续 `static` 声明冲突。
  * 放在块之后是唯一两个问题都不犯的位置。
  */
+/*
+ * 上传缓冲从默认 2048（实际按 4096 分配）收到 1024 —— 我们在回调里
+ * 立刻把数据写进 SD，不需要攒大块。这一步在 include 之前生效。
+ */
+#define HTTP_UPLOAD_BUFLEN 1024
 #include <WebServer.h>     /* 照片上传：HTTP 接收 .pgi */
 #include <WiFi.h>          /* 照片上传：设备连入同一局域网（STA）*/
 
@@ -1104,6 +1109,11 @@ static bool wifi_start_ap(void)
   if (s_wifi_up) return true;
 
   WiFi.mode(WIFI_AP);
+  /*
+   * 省电模式：默认 `WIFI_PS_NONE`（关省电）会常驻更多调制解调器缓冲。
+   * 上传是**短时突发**，MIN_MODEM 足够，且能省下几 KB 内部堆 + 明显降功耗。
+   */
+  WiFi.setSleep(true);
   /* 只允许一个客户端：够用，也少一个被占满的可能 */
 #if WIFI_AP_OPEN
   bool ok = WiFi.softAP(WIFI_AP_SSID, NULL, 6 /*channel*/, 0 /*hidden*/, 1 /*maxConn*/);
@@ -2489,6 +2499,7 @@ static void print_help(void)
   Serial.println("       pgibench [帧] [边长] 生成 .pgi 并测解码耗时（S3：定 fps 目标）");
   Serial.println("       photodump          打印 /photos/ 下每个 .pgi 的头部字段（排格式问题）");
   Serial.println("       photo clean        删除 /photos/ 下不合法的 .pgi（坏文件会让表盘 LOAD ERROR）");
+  Serial.println("       heap              内部堆/最大块/水位（上传可靠性关键指标）");
   Serial.println("       wifi on|off        开/关上传热点（CarDash·免密，IP 192.168.4.1）");
   Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
@@ -2722,6 +2733,18 @@ static void process_command(char *cmd)
     else {
       Serial.println("[上传] 用法：wifi on（开热点）| wifi off（关闭）| wifi（查状态）");
     }
+  }
+  else if (strncmp(cmd, "heap", 4) == 0) {
+    /*
+     * 堆诊断：上传链路的可靠性完全取决于内部堆（PSRAM 帮不上忙 ——
+     * Wi-Fi / WebServer / String 都只能用内部 RAM）。
+     * 这里把关键指标一次打全，方便对比"开 Wi-Fi 前后"。
+     */
+    Serial.printf("[堆] 空闲=%u B 最大块=%u B 最低水位=%u B\n", (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap(), (unsigned)ESP.getMinFreeHeap());
+    Serial.printf("[堆] PSRAM 空闲=%u B\n", (unsigned)ESP.getFreePsram());
+    Serial.printf("[堆] 结论：上传需要 ≥40 KB 才稳定；当前%s\n",
+                  ESP.getFreeHeap() >= 40000u ? "够用" : "**不足**，上传会被拒绝");
   }
   else if (strncmp(cmd, "photo", 5) == 0) {
     /* 照片维护：photo clean（删坏文件）/ photo dump（打印头部）*/
