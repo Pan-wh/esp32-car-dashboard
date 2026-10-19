@@ -564,7 +564,26 @@ struct PhotoTabView: View {
         req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 60
 
-        let (resp, _) = try await URLSession.shared.upload(for: req, from: data)
+        /*
+         * ⚠️ **必须禁止蜂窝网络，否则请求根本发不出去。**
+         *
+         * 实测证据（设备串口日志）：
+         *     [上传] 热点客户端数：1     ← 手机确实连着 CarDash
+         *     收到请求数：0              ← 但一个请求都没到
+         *
+         * 原因：CarDash 是**没有外网**的热点，iOS 会把它标记为"无互联网"，
+         * 于是把 App 的流量**默认路由到蜂窝** —— 请求发向 192.168.4.1 当然走不通。
+         *
+         * `allowsCellularAccess = false` 强制只走 Wi-Fi，请求才会真正发到设备上。
+         */
+        let cfg = URLSessionConfiguration.default
+        cfg.allowsCellularAccess = false
+        cfg.waitsForConnectivity = true
+        cfg.timeoutIntervalForRequest = 60
+        cfg.timeoutIntervalForResource = 120
+        let session = URLSession(configuration: cfg)
+
+        let (resp, _) = try await session.upload(for: req, from: data)
         guard let http = resp as? HTTPURLResponse else {
             throw PgiEncoderError.encodeFailed("没有 HTTP 响应")
         }
