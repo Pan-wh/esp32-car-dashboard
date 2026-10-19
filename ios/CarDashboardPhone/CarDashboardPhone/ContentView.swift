@@ -61,7 +61,15 @@ struct ContentView: View {
     /// 用 @AppStorage 持久化：开发期反复改会烦，且退出 App 后应保留。
     /// 默认地址是开发机的局域网 IP —— 手机访问不到电脑的 127.0.0.1，必须用局域网地址。
     @AppStorage("navGateway") private var navGateway = "http://192.168.5.188:8080"
-    @AppStorage("navToken") private var navToken = ""
+    /**
+     网关令牌来自 **Keychain**（`GatewayToken.shared`），不再是 `@AppStorage`。
+
+     ⚠️ 安全要点：`@AppStorage` 底层是明文 plist，而令牌是这台设备上唯一
+        有价值的凭据（高德 Key 在服务端）。UI 上虽然一直用 `SecureField`
+        显示成圆点，但明文存储给的是**假的安全感**。详见
+        `KeychainTokenStore.swift` 的说明。
+     */
+    @ObservedObject private var tokenStore = GatewayToken.shared
     /// 「测试连接」的结果文字（nil = 还没测过）
     @State private var gatewayTestResult: String?
 
@@ -206,6 +214,13 @@ struct ContentView: View {
                     permissionSection
                     connectionSection
                     screenSection
+                    /*
+                     * 「亮度时段」只在自动模式下显示 —— 手动模式下没有曲线可调，
+                     * 显示出来反而让人以为"手动时还被它管着"。
+                     */
+                    if session.ble.brightnessCurve.enabled {
+                        brightnessCurveSection
+                    }
                     faceSection
                 }
                 .navigationTitle("仪表")
@@ -245,7 +260,7 @@ struct ContentView: View {
         }
         var req = URLRequest(url: url)
         req.timeoutInterval = 8
-        if !navToken.isEmpty { req.setValue("Bearer \(navToken)", forHTTPHeaderField: "authorization") }
+        if !tokenStore.value.isEmpty { req.setValue("Bearer \(tokenStore.value)", forHTTPHeaderField: "authorization") }
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
@@ -279,16 +294,16 @@ struct ContentView: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
-                    SecureField("网关令牌", text: $navToken)
+                    SecureField("网关令牌", text: $tokenStore.value)
                 } header: {
                     Text("导航网关")
                 } footer: {
                     Text("开发期指向你电脑上的 gateway；手机与电脑需在同一局域网。\n默认 http://192.168.5.188:8080 —— 换成你电脑当前的局域网 IP。\n\n⚠️ 网关必须监听 0.0.0.0（默认只监听 127.0.0.1，手机访问不到）。")
                 }
                 .onChange(of: navGateway) { _, v in
-                    session.nav.configure(gateway: v, token: navToken)
+                    session.nav.configure(gateway: v, token: tokenStore.value)
                 }
-                .onChange(of: navToken) { _, v in
+                .onChange(of: tokenStore.value) { _, v in
                     session.nav.configure(gateway: navGateway, token: v)
                 }
 
@@ -299,8 +314,8 @@ struct ContentView: View {
                      * "令牌没填" / "不在同一 Wi-Fi"。把事实摆出来。
                      */
                     LabeledContent("令牌",
-                                   value: navToken.isEmpty
-                                          ? "未填写" : "已填写（\(navToken.count) 字符）")
+                                   value: tokenStore.value.isEmpty
+                                          ? "未填写" : "已填写（\(tokenStore.value.count) 字符）")
                     LabeledContent("导航会话",
                                    value: session.nav.isNavigating ? "导航中" : "空闲")
                     Button {
@@ -330,6 +345,7 @@ struct ContentView: View {
     private var dataTab: some View {
         NavigationView {
             Form {
+                tripSection
                 sendStatusSection
                 liveDataSection
             }
@@ -359,29 +375,120 @@ struct ContentView: View {
                 guard !applyingDeviceState else { return }
                 _ = session.ble.setRotation(deg)
             }
-            // 备注（用户要求写在这里）：说明 90°/270° 为何与另两个角度走不同机制。
-            //
-            // 措辞依据**固件当前实际行为**（dashboard.ino 的 set_display_rotation）：
-            //   const bool hw = (deg == 90 || deg == 270);
-            // 即只有 90°/270° 走面板硬件旋转，0°/180° 仍走 LVGL。
-            // ⚠️ 不要写"若固件是旧版本会撕裂"这类话 —— 固件已修复，那样只会让人误解。
-            Text("90° / 270° 由面板硬件完成旋转（MADCTL），不会撕裂；0° / 180° 由 LVGL 完成，渲染开销最低。方向保存在仪表中，重启后保持。")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            /*
+             * 旋转说明收进折叠区（2026-10-19 UI 优化）。
+             *
+             * 这段是**技术细节**，不是操作必需信息。原先直接铺在屏幕上，
+             * 占掉约 4 行高度，把下面的亮度设置挤到屏幕外 ——
+             * 用户要滚动才能找到最常用的功能。
+             *
+             * 措辞依据**固件当前实际行为**（dashboard.ino 的 set_display_rotation）：
+             *   const bool hw = (deg == 90 || deg == 270);
+             * 即只有 90°/270° 走面板硬件旋转，0°/180° 仍走 LVGL。
+             * ⚠️ 不要写"若固件是旧版本会撕裂"这类话 —— 固件已修复，那样只会让人误解。
+             */
+            DisclosureGroup("关于旋转方式") {
+                Text("90° / 270° 由面板硬件完成旋转（MADCTL），不会撕裂；0° / 180° 由 LVGL 完成，渲染开销最低。方向保存在仪表中，重启后保持。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .font(.footnote)
 
-            HStack {
-                Text("亮度")
-                Slider(value: $brightness, in: 1...255, step: 1) { editing in
+            /*
+             * ── 亮度：手动 / 自动 二选一 ──────────────────────
+             *
+             * ## 为什么要有这个切换（2026-10-19 用户反馈）
+             *
+             * 早先是**两个独立滑块**：「亮度」和「亮度时段」里的「白天亮度」。
+             * 两者数据源完全不同（前者是设备上报的实际亮度，后者是曲线配置），
+             * 却都能改同一个物理亮度 —— 用户改了一个、另一个不动，
+             * 完全分不清"到底哪个说了算"，实测反馈就是"改完没反应"。
+             *
+             * 现在明确成两种模式，**同一个时刻只有一套控件在管亮度**：
+             *   - 手动：只有「亮度」滑块，直接改当前亮度（自动曲线暂停）
+             *   - 自动：只有曲线里的「白天/夜间亮度」，按时间自动切换
+             *
+             * 这样"哪个说了算"一目了然，不会出现两个值打架。
+             */
+            Picker("亮度模式", selection: Binding(
+                get: { session.ble.brightnessCurve.enabled ? 1 : 0 },
+                set: { mode in
+                    var c = session.ble.brightnessCurve
+                    c.enabled = (mode == 1)
                     /*
-                     * 拖动结束才发送，避免高频写 BLE。
-                     * ⚠️ 必须排除"设备上报同步"引起的变化，否则收到一次上报
-                     *    就会回发一次亮度命令。
+                     * 切到「自动」时带 reset：明确告诉设备"恢复自动调节"。
+                     *
+                     * ⚠️ 不能只发曲线 —— 切回自动时曲线值往往没变，
+                     *    设备会当成"重连重发"而保持手动亮度，
+                     *    用户点了"自动"却没反应（实测复现过）。
                      */
-                    if !editing && !applyingDeviceState {
-                        _ = session.ble.setBrightness(Int(brightness))
+                    c.requestReset = (mode == 1)
+                    session.ble.setBrightnessCurve(c)
+                    session.ble.sendBrightnessCurveNow()
+                    /*
+                     * reset 是"一次动作"，发完立刻清掉，
+                     * 免得后续任何一次曲线下发都重复带它。
+                     */
+                    if c.requestReset {
+                        var cleared = session.ble.brightnessCurve
+                        cleared.requestReset = false
+                        session.ble.brightnessCurve = cleared
                     }
                 }
-                Text("\(Int(brightness))").monospacedDigit().frame(width: 34)
+            )) {
+                Text("手动").tag(0)
+                Text("按时段自动").tag(1)
+            }
+            .pickerStyle(.segmented)
+
+            if !session.ble.brightnessCurve.enabled {
+                /* 手动模式：直接拖当前亮度 */
+                HStack {
+                    Text("亮度")
+                    Slider(value: Binding(
+                        get: { brightness },
+                        set: { v in
+                            brightness = v
+                            /*
+                             * ★ 拖动过程中**持续**下发，做到"所见即所得"。
+                             *
+                             * 早先只在松手时发一次 —— 拖动中屏幕完全不动，
+                             * 松手瞬间"啪"地跳到目标值（用户形容"像重置"）。
+                             * 现在每动一格就发（内部 50ms 限流，约 20Hz），
+                             * 屏幕亮度真正跟着手指走。
+                             *
+                             * ⚠️ 必须排除"设备上报同步"引起的变化，否则
+                             *    收到一次上报就会回发一次亮度命令。
+                             */
+                            if !applyingDeviceState {
+                                session.ble.setBrightnessLive(Int(v))
+                            }
+                        }
+                    ), in: 1...255, step: 1) { editing in
+                        /*
+                         * 松手补发**最终值**：拖动中的包被限流跳过了一部分，
+                         * 且 `.withoutResponse` 可能丢包 —— 这里用带确认的
+                         * 命令确保设备一定停在手指松开的位置。
+                         */
+                        if !editing && !applyingDeviceState {
+                            _ = session.ble.setBrightness(Int(brightness))
+                        }
+                    }
+                    Text("\(Int(brightness))").monospacedDigit().frame(width: 34)
+                }
+                Text("亮度由上面滑块直接控制。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            else {
+                /* 自动模式：只显示当前实际值（只读），调节入口在下面的「亮度时段」 */
+                HStack {
+                    Text("当前亮度")
+                    Spacer()
+                    Text("\(Int(brightness))")
+                        .monospacedDigit().foregroundStyle(.secondary)
+                }
+                Text("按「亮度时段」自动调节；要直接改亮度请切到「手动」。")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
 
             /*
@@ -482,6 +589,163 @@ struct ContentView: View {
         } footer: {
             Text("对所有表盘生效，不是单个表盘的设置。")
         }
+    }
+
+    // MARK: - 亮度曲线（按白天/夜间时段自动调亮度）
+
+    /**
+     亮度曲线 UI。
+
+     ## 为什么需要它
+
+     真机痛点：**晚上太亮刺眼、白天太暗看不清** —— 每次都得手动拖滑块。
+
+     ## 设计（2026-10-17 与用户确认）
+
+     **不做天文计算**（不算日出日落）。用户直接给两个时间点，
+     左右滑动调整。比"算日出日落"更简单、可预测、可解释。
+     详见 `BrightnessCurve.swift` 与固件 `auto_bright.h`。
+
+     ## 与上面「亮度」滑块的关系
+
+     - **自动关闭**时：上面的「亮度」滑块说了算（原行为不变）
+     - **自动开启**时：亮度由曲线按时间决定；此时上面的滑块改成
+       **"白天亮度"的快捷入口**（拖动即改白天值，并提示）
+     */
+    /**
+     基于**当前**曲线改一个字段再下发。
+
+     ⚠️ 不要写成 `let curve = session.ble.brightnessCurve` 然后在 setter 里
+     用它 —— 那是**渲染时的快照**。若两次交互之间曲线被别处改过
+     （例如从别的界面改、或设备状态回报触发重算），旧快照会把那次改动
+     覆盖回去，表现为"改了一个值，另一个值莫名回退"。这里每次从
+     `session.ble.brightnessCurve` 取最新值，只改指定字段。
+     */
+    private func updateCurve(_ mutate: (inout BrightnessCurve) -> Void) {
+        var c = session.ble.brightnessCurve
+        mutate(&c)
+        session.ble.setBrightnessCurve(c)
+    }
+
+    /**
+     同上，但**实时**下发（跳过 0.25s 防抖），用于滑块拖动。
+
+     拖动时若走防抖，屏幕会一直不动、松手才跳变（用户反馈"像重置"）。
+     这里每动一格就发（内部 20Hz 限流），亮度真正跟着手指走。
+     */
+    private func updateCurveLive(_ mutate: (inout BrightnessCurve) -> Void) {
+        var c = session.ble.brightnessCurve
+        mutate(&c)
+        session.ble.setBrightnessCurveLive(c)
+    }
+
+    @ViewBuilder
+    private var brightnessCurveSection: some View {
+        let curve = session.ble.brightnessCurve
+
+        Section {
+            /*
+             * ⚠️ 这里**不再**放"启用"开关。
+             *
+             * 上面「屏幕显示」区已经有「手动 / 按时段自动」二选一了，
+             * 再放一个开关就是**两个控件控制同一个 enabled** ——
+             * 用户会疑惑"到底哪个算数"。模式选择器是唯一的入口。
+             *
+             * 本区只在自动模式下出现（由外层 if 控制），
+             * 所以这里直接呈现曲线参数即可。
+             */
+            if curve.enabled {
+                /*
+                 * 时间区间：两个 DatePicker（.hourAndMinute）。
+                 *
+                 * 用 DatePicker 而不是自绘滑块：系统控件已支持**时间**语义、
+                 * 无障碍与滚轮交互，且不会出现"拖到 24:00 越界"这类边界问题。
+                 */
+                DatePicker("白天开始", selection: Binding(
+                    get: { Self.timeDate(curve.dayStartMin) },
+                    set: { d in updateCurve { $0.dayStartMin = Self.minutesOfDay(d) } }
+                ), displayedComponents: .hourAndMinute)
+
+                DatePicker("白天结束", selection: Binding(
+                    get: { Self.timeDate(curve.dayEndMin) },
+                    set: { d in updateCurve { $0.dayEndMin = Self.minutesOfDay(d) } }
+                ), displayedComponents: .hourAndMinute)
+
+                // 白天亮度（拖动时实时下发，见 updateCurveLive）
+                HStack {
+                    Text("白天亮度")
+                    Slider(value: Binding(
+                        get: { Double(curve.dayLevel) },
+                        set: { v in updateCurveLive { $0.dayLevel = Int(v) } }
+                    ), in: 1...255, step: 1) { editing in
+                        /* 松手补发最终值（拖动中的包被限流跳过了一部分）*/
+                        if !editing { session.ble.sendBrightnessCurveNow() }
+                    }
+                    Text("\(curve.dayLevel)").monospacedDigit().frame(width: 34)
+                }
+
+                // 夜间亮度
+                HStack {
+                    Text("夜间亮度")
+                    Slider(value: Binding(
+                        get: { Double(curve.nightLevel) },
+                        set: { v in updateCurveLive { $0.nightLevel = Int(v) } }
+                    ), in: 1...255, step: 1) { editing in
+                        if !editing { session.ble.sendBrightnessCurveNow() }
+                    }
+                    Text("\(curve.nightLevel)").monospacedDigit().frame(width: 34)
+                }
+
+                /*
+                 * 过渡时长：避免日出/日落瞬间亮度骤变刺眼。
+                 * 多数用户不需要改，故收进折叠区，默认 30 分钟。
+                 */
+                DisclosureGroup("过渡时间（\(curve.rampMin) 分钟）") {
+                    Slider(value: Binding(
+                        get: { Double(curve.rampMin) },
+                        set: { v in updateCurve { $0.rampMin = Int(v) } }
+                    ), in: 0...120, step: 5)
+                    Text("在白天开始/结束前后各用这么多分钟平滑过渡，避免亮度骤变刺眼。")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+
+                // 实时预览：此刻按曲线会是多少亮度
+                let nowMin = BrightnessCurve.nowMinutes()
+                let lv = curve.levelAt(nowMin)
+                HStack {
+                    Text("此刻")
+                    Spacer()
+                    Text("\(BrightnessCurve.hhmm(nowMin)) → 亮度 \(lv)")
+                        .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+                }
+
+                if curve.dayStartMin == curve.dayEndMin {
+                    Text("⚠️ 白天开始与结束相同 → 会一直用夜间亮度。请把它们区分开。")
+                        .font(.footnote).foregroundStyle(.orange)
+                }
+            }
+        } header: {
+            Text("亮度时段")
+        } footer: {
+            Text(curve.enabled
+                 ? "由仪表按时段自动调亮度；在上面的「亮度」滑块上手动调节会暂停自动，直到重新打开此开关或重启仪表。"
+                 : "开启后，仪表会在白天时段用较亮、夜间用较暗，避免晚上刺眼、白天看不清。")
+        }
+    }
+
+    /// 分钟数 → 一个可绑定给 DatePicker 的 Date（仅用其时分）
+    private static func timeDate(_ minutes: Int) -> Date {
+        let m = ((minutes % 1440) + 1440) % 1440
+        var c = DateComponents()
+        c.hour = m / 60
+        c.minute = m % 60
+        return Calendar.current.date(from: c) ?? Date()
+    }
+
+    /// Date → 当天分钟数
+    private static func minutesOfDay(_ d: Date) -> Int {
+        let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+        return (c.hour ?? 0) * 60 + (c.minute ?? 0)
     }
 
     @ViewBuilder
@@ -628,6 +892,46 @@ struct ContentView: View {
         }
     }
 
+    /**
+     本次行程（P1-1）。
+
+     ## 数据来源与"为什么是设备说了算"
+
+     里程/最高速/均速/时长都由**仪表**累积，经 faces 上报传给 App。
+     刻意不在 App 本地算：App 会被系统杀掉、免费账号 7 天就要重装一次，
+     本地累计一重启就归零 —— 那时 App 显示的里程与仪表上的数字对不上，
+     比不显示更让人困惑。
+
+     ## 显示原则
+
+     设备没上报时显示占位符而不是 0 —— "还没拿到"与"真的是 0 公里"
+     是两件事。刚出发时里程确实是 0，那时应显示 "0.00 km" 而非 "--"。
+     */
+    @ViewBuilder
+    private var tripSection: some View {
+        let r = session.ble.faces
+        if r.tripDistanceKm != nil || r.tripMaxKmh != nil {
+            Section {
+                row("里程", r.tripDistanceKm.map { String(format: "%.2f km", $0) } ?? "--")
+                row("最高速度", r.tripMaxKmh.map { String(format: "%.0f km/h", $0) } ?? "--")
+                row("平均速度", r.tripAvgKmh.map { String(format: "%.0f km/h", $0) } ?? "--")
+                row("行驶时长", r.tripTimeS.map { Self.durationText($0) } ?? "--")
+            } header: {
+                Text("本次行程")
+            } footer: {
+                Text("由仪表累计，重启 App 不会清零；在仪表上用串口 `trip reset` 可归零。")
+            }
+        }
+    }
+
+    /// 秒 → "1 小时 23 分" / "5 分 20 秒"（开车时看的是量级，不需要秒级精度）
+    private static func durationText(_ seconds: Int) -> String {
+        let h = seconds / 3600, m = (seconds % 3600) / 60, s = seconds % 60
+        if h > 0 { return "\(h) 小时 \(m) 分" }
+        if m > 0 { return "\(m) 分 \(s) 秒" }
+        return "\(s) 秒"
+    }
+
     /// 发送状态（原「驾驶会话」的统计部分）
     @ViewBuilder
     private var sendStatusSection: some View {
@@ -654,15 +958,18 @@ struct ContentView: View {
                 row("定位精度", String(format: "±%.0f m", loc.horizontalAccuracy))
 
                 DisclosureGroup("诊断详情") {
-                    // ---- 诊断：速度为何被判无效（§5 质量门槛）----
+                    // ---- 诊断：速度为何被判无效（§5.4 质量门槛）----
                     // speed_valid 由 TelemetryQuality.isSpeedUsable() 决定，
-                    // 关键门槛：speed >= 0 且 speedAccuracy <= 2.0 m/s
+                    // 门槛**按速度分档**（低速放宽、高速严格），见该文件说明。
                     let speedOK = TelemetryQuality.isSpeedUsable(loc)
                     let locOK = TelemetryQuality.isLocationUsable(loc)
                     row("速度质量", speedOK ? "通过" : "被拦（不发送）")
                     if #available(iOS 17.0, *) {
                         let sa = loc.speedAccuracy
                         row("测速精度", sa >= 0 ? String(format: "±%.2f m/s", sa) : "未知（负值）")
+                        // 显示当前速度对应的门槛，便于理解"为何被拦"
+                        let limit = TelemetryQuality.speedAccuracyLimit(forSpeed: loc.speed)
+                        row("当前门槛", String(format: "±%.2f m/s", limit))
                     }
                     row("定位质量", locOK ? "通过" : "被拦（不发送）")
                     row("speed 原始值", String(format: "%.2f m/s", loc.speed))
@@ -671,6 +978,30 @@ struct ContentView: View {
                     row("高度", String(format: "%.0f m", loc.altitude))
                 }
                 .font(.subheadline)
+
+                /*
+                 * 测速精度分布：**用于按实测数据调阈值**。
+                 *
+                 * 分三个速度档是有意的 —— 误差与速度强相关（低速误差大），
+                 * 混在一起看会被高速样本稀释，看不出低速档到底该放宽到多少。
+                 */
+                if session.speedStats.total > 0 {
+                    DisclosureGroup("测速精度分布（调阈值用）") {
+                        let s = session.speedStats
+                        Text(SpeedAccuracyStats.describe("低速 <10", s.low))
+                            .font(.caption).monospacedDigit()
+                        Text(SpeedAccuracyStats.describe("中速 10-40", s.mid))
+                            .font(.caption).monospacedDigit()
+                        Text(SpeedAccuracyStats.describe("高速 >40", s.high))
+                            .font(.caption).monospacedDigit()
+                        Text(String(format: "合计：被拦 %.0f%%（%d/%d 次）",
+                                    s.rejectRate * 100, s.totalRejected, s.total))
+                            .font(.caption).monospacedDigit()
+                        Button("重置统计") { session.speedStats.reset() }
+                            .font(.caption)
+                    }
+                    .font(.subheadline)
+                }
             } else {
                 Text("等待定位数据…").foregroundColor(.secondary)
             }

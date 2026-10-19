@@ -437,6 +437,26 @@ public final class NavCore {
         snapshot.state = .noData
     }
 
+    /**
+     解除"已到达"锁定，但**保留路线**（P0-2：用户点「继续导航到附近」）。
+
+     与 `clear()` 的区别：
+       - `clear()` 把路线也清掉（结束导航）
+       - 本方法只撤掉到达锁，路线与进度还在 —— 用户到了商圈还要找停车场时，
+         目的地不该被清空，否则"继续导航到附近"就真的只能重新搜了。
+
+     撤锁后 `arrivalStreak` 一并归零：否则下一帧定位仍在到达半径内时
+     会立刻重新锁上，表现为"点了继续又跳回已到达"。
+     */
+    public func leaveArrivedState() {
+        arrivedLatched = false
+        arrivalStreak = 0
+        if snapshot.state == .arrived {
+            snapshot.state = .active
+        }
+        snapshot.arrived = false
+    }
+
     private func resetProgress() {
         lastProgressM = 0
         hasFix = false

@@ -16,6 +16,7 @@
 
 #include "telemetry.h"
 #include "nav_parse.h"
+#include "bright_parse.h"
 #include "nav_map.h"
 
 #define DEVICE_NAME      "CarDashboard"
@@ -74,6 +75,12 @@ static char s_asm[ASM_BUF_MAX];
 static nav_msg_t s_pending_nav;
 static volatile bool s_have_nav = false;
 static uint32_t s_nav_ok = 0;
+
+/* 亮度曲线包暂存（同上：回调只写，主循环消费）*/
+static bright_packet_t s_pending_bright;
+static volatile bool s_have_bright = false;
+static uint32_t s_bright_ok = 0;
+static uint32_t s_bright_err = 0;
 static size_t s_asm_len = 0;
 
 static void inline store_msg(const telemetry_msg_t *m)
@@ -115,6 +122,26 @@ static void dispatch_message(const char *json, size_t len)
              * 该函数内部只做"解析 + 存缓冲"，窗口切换发生在收到 me 时，
              * 都是纯内存操作，适合回调内完成（无硬件副作用）。
              */
+        }
+        else if (bright_is_bright_message(json, len)) {
+            /*
+             * 亮度曲线包（App 每次连接下发一次）：复用本特征，用 "t" 分流。
+             *
+             * ⚠️ 顺序：**nav → 地图 → 亮度 → 遥测**。
+             *    该包没有 "v" 字段，落到遥测分支会解析失败并污染 s_parse_err。
+             *
+             * 回调内**只做解析 + 暂存**，真正的亮度写入留给主循环
+             * （与本文件其他分支一致：硬件副作用不出现在 BLE 回调里）。
+             */
+            bright_packet_t bp;
+            if (bright_parse(json, len, &bp)) {
+                s_pending_bright = bp;
+                s_have_bright = true;
+                s_bright_ok++;
+            }
+            else {
+                s_bright_err++;
+            }
         }
         else {
             telemetry_msg_t m;
@@ -422,6 +449,20 @@ void ble_telemetry_nav_stats(uint32_t *ok)
     if (ok != NULL) *ok = s_nav_ok;
 }
 
+bool ble_telemetry_take_bright(bright_packet_t *out)
+{
+    if (!s_have_bright) return false;
+    if (out != NULL) *out = s_pending_bright;
+    s_have_bright = false; /* 取走即清，避免主循环反复应用同一个包 */
+    return true;
+}
+
+void ble_telemetry_bright_stats(uint32_t *ok, uint32_t *err)
+{
+    if (ok != NULL) *ok = s_bright_ok;
+    if (err != NULL) *err = s_bright_err;
+}
+
 void ble_telemetry_command_stats(uint32_t *ok, uint32_t *err)
 {
     if (ok) *ok = s_cmd_ok;
@@ -441,6 +482,23 @@ void ble_telemetry_set_faces(const char *json)
     if (s_faces == NULL || json == NULL) return;
 
     /*
+     * ⚠️ **未连接时直接跳过**，不要 setValue、不要 notify。
+     *
+     * 理由（2026-10-19 实测）：
+     *   - 未连接时 `notify()` 虽然没有订阅者、不报错，但仍要过一遍
+     *     BLE 栈的句柄查找与锁；
+     *   - `setValue()` 要重新分配/拷贝约 460 字节的 std::string。
+     *
+     * 而这段代码会被「亮度变化」和「每 10 秒行程统计」反复触发，
+     * 未连接时纯属空转。省掉它显著降低主循环负担
+     * （实测循环频率曾从 198 掉到 78 次/秒）。
+     *
+     * 连接后不需要在这里补发：App 连接成功后会主动 Read 该特征
+     * （见 FACES_CHAR_UUID 说明）。
+     */
+    if (!s_connected) return;
+
+    /*
      * 用 (data, len) 形式设置，避免依赖 std::string 的隐式转换；
      * 长度以 strlen 计（JSON 里不会出现裸 NUL）。
      */
@@ -449,7 +507,6 @@ void ble_telemetry_set_faces(const char *json)
     /*
      * Notify 只作"变了"的提示（载荷可能因 MTU 被截断，App 不应依赖其内容，
      * 而应重新 Read 完整值 —— 见 FACES_CHAR_UUID 处的说明）。
-     * 设备未连接 / 未订阅时 notify 无效，属正常情况。
      */
     s_faces->notify();
 }

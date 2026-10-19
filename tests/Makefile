@@ -5,7 +5,7 @@ PYTHON  ?= python3
 CFLAGS  := -O1 -std=gnu99 -Wall -Wextra -I../simulator/ui
 SRC     := ../simulator/ui/telemetry.c
 
-TESTS   := test_telemetry test_control test_ui_face test_nav test_nav_parse test_nav_map test_img_indexed test_face_report
+TESTS   := test_telemetry test_control test_ui_face test_nav test_nav_parse test_nav_map test_img_indexed test_face_report test_auto_bright test_bright_parse
 
 # iOS 侧导航核心：直接编译 App 的真实源文件（不复制逻辑，避免与实现漂移）
 NAV_SRC      := ../ios/CarDashboardPhone/CarDashboardPhone/Nav/NavCore.swift \
@@ -34,6 +34,18 @@ SIM_FIXTURE  := $(abspath ../tools/nav_sim/testdata/route-bundle.json)
 BLE_SRC      := ../ios/CarDashboardPhone/CarDashboardPhone/BLEConnectionPolicy.swift
 BLE_BIN      := test_ble_policy
 
+# App 侧地点联想搜索范围降级（本市 → 本省 → 全国）
+SCOPE_SRC    := ../ios/CarDashboardPhone/CarDashboardPhone/Nav/SearchScope.swift
+SCOPE_BIN    := test_search_scope
+
+# 网关令牌的 Keychain 存储（含明文迁移）
+KC_SRC       := ../ios/CarDashboardPhone/CarDashboardPhone/KeychainTokenStore.swift
+KC_BIN       := test_keychain_token
+
+# App 侧亮度曲线（协议契约 + 与固件 C 实现交叉验证）
+BC_SRC       := ../ios/CarDashboardPhone/CarDashboardPhone/BrightnessCurve.swift
+BC_BIN       := test_brightness_curve
+
 # 导航页状态机（准备/选地点/选路线/导航中）+ 展示格式化
 UI_SRC       := ../ios/CarDashboardPhone/CarDashboardPhone/Nav/NavUIState.swift
 UI_BIN       := test_nav_ui_state
@@ -59,6 +71,14 @@ test_face_report: test_face_report.c ../simulator/ui/face_report.c ../simulator/
 test_nav_map: test_nav_map.c ../simulator/ui/nav_map.c
 	$(CC) $(CFLAGS) -I../simulator/ui -o $@ $^
 
+# auto_bright 用到 math.h（sin/cos/acos），必须链 -lm
+test_auto_bright: test_auto_bright.c ../simulator/ui/auto_bright.c
+	$(CC) $(CFLAGS) -o $@ $^ -lm
+
+# 亮度曲线包解析：依赖 auto_bright（配置结构体）
+test_bright_parse: test_bright_parse.c ../simulator/ui/bright_parse.c ../simulator/ui/auto_bright.c
+	$(CC) $(CFLAGS) -o $@ $^ -lm
+
 test_nav_parse: test_nav_parse.c ../simulator/ui/nav_parse.c ../simulator/ui/nav.c
 	$(CC) $(CFLAGS) -o $@ $^
 
@@ -83,6 +103,12 @@ run: $(TESTS)
 	@$(MAKE) --no-print-directory test-ble-policy
 	@echo "--- 导航页状态机（按钮语义/ETA/常用目的地）---"
 	@$(MAKE) --no-print-directory test-nav-ui
+	@echo "--- 地点联想搜索范围（本市→本省→全国）---"
+	@$(MAKE) --no-print-directory test-search-scope
+	@echo "--- 网关令牌 Keychain 存储 ---"
+	@$(MAKE) --no-print-directory test-keychain-token
+	@echo "--- 亮度曲线（协议契约 + 与固件交叉验证）---"
+	@$(MAKE) --no-print-directory test-brightness-curve
 	@echo "--- 导航网关（Node，零依赖，全部离线）---"
 	@if command -v node >/dev/null 2>&1; then \
 		(cd ../gateway && node --test "test/**/*.test.js") ; \
@@ -158,7 +184,37 @@ $(UI_BIN): $(UI_SRC) ../tools/test_nav_ui_state.swift
 test-nav-ui: $(UI_BIN)
 	@./$(UI_BIN)
 
-clean:
-	rm -f $(TESTS) $(NAV_BIN) $(SIM_BIN) $(FACE_BIN) $(BLE_BIN) $(UI_BIN)
+$(SCOPE_BIN): $(SCOPE_SRC) ../tools/test_search_scope.swift
+	@if ! command -v swiftc >/dev/null 2>&1; then \
+		echo "  跳过：未找到 swiftc"; \
+		exit 0; \
+	fi
+	swiftc -O -o $(SCOPE_BIN) $(SCOPE_SRC) ../tools/test_search_scope.swift
 
-.PHONY: all run clean test-nav-core test-nav-sim test-device-faces test-ble-policy test-nav-ui
+test-search-scope: $(SCOPE_BIN)
+	@./$(SCOPE_BIN)
+
+$(KC_BIN): $(KC_SRC) ../tools/test_keychain_token.swift
+	@if ! command -v swiftc >/dev/null 2>&1; then \
+		echo "  跳过：未找到 swiftc"; \
+		exit 0; \
+	fi
+	swiftc -O -o $(KC_BIN) $(KC_SRC) ../tools/test_keychain_token.swift
+
+test-keychain-token: $(KC_BIN)
+	@./$(KC_BIN)
+
+$(BC_BIN): $(BC_SRC) ../tools/test_brightness_curve.swift
+	@if ! command -v swiftc >/dev/null 2>&1; then \
+		echo "  跳过：未找到 swiftc"; \
+		exit 0; \
+	fi
+	swiftc -O -o $(BC_BIN) $(BC_SRC) ../tools/test_brightness_curve.swift
+
+test-brightness-curve: $(BC_BIN)
+	@./$(BC_BIN)
+
+clean:
+	rm -f $(TESTS) $(NAV_BIN) $(SIM_BIN) $(FACE_BIN) $(BLE_BIN) $(UI_BIN) $(SCOPE_BIN) $(KC_BIN) $(BC_BIN)
+
+.PHONY: all run clean test-nav-core test-nav-sim test-device-faces test-ble-policy test-nav-ui test-search-scope test-keychain-token test-brightness-curve

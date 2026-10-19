@@ -72,20 +72,66 @@ struct TelemetryPacket: Codable {
 struct TelemetryQuality {
     static let maxHorizontalAccuracyMeters: CLLocationAccuracy = 50
     static let maxSpeedAccuracyMPS: Double = 2.0
-    static let minMeaningfulSpeedMPS: Double = 0.0
+    static let maxSpeedAccuracyLowSpeedMPS: Double = 5.0
+    static let maxSpeedAccuracyMidSpeedMPS: Double = 2.5
+    static let lowSpeedBandMPS: Double = 10.0 / 3.6
+    static let midSpeedBandMPS: Double = 40.0 / 3.6
+
+    static func speedAccuracyLimit(forSpeed speedMPS: Double) -> Double {
+        if speedMPS < lowSpeedBandMPS { return maxSpeedAccuracyLowSpeedMPS }
+        if speedMPS < midSpeedBandMPS { return maxSpeedAccuracyMidSpeedMPS }
+        return maxSpeedAccuracyMPS
+    }
 
     static func isLocationUsable(_ l: CLLocation) -> Bool {
         guard l.horizontalAccuracy >= 0 else { return false }
         return l.horizontalAccuracy <= maxHorizontalAccuracyMeters
     }
     static func isSpeedUsable(_ l: CLLocation) -> Bool {
-        guard l.speed >= minMeaningfulSpeedMPS else { return false }
+        guard l.speed >= 0 else { return false }
         if #available(iOS 17.0, macOS 14.0, *) {
             let sa = l.speedAccuracy
-            if sa >= 0 && sa > maxSpeedAccuracyMPS { return false }
+            if sa >= 0 && sa > speedAccuracyLimit(forSpeed: l.speed) { return false }
         }
         return true
     }
+}
+
+/// 测速精度分布统计（与 App 侧 TelemetryQuality.swift 同源语义；改动需同步）
+struct SpeedAccuracyStats {
+    struct Band {
+        var count = 0
+        var rejected = 0
+        var accuracyCount = 0
+        var maxAccuracy: Double = 0
+        var sumAccuracy: Double = 0
+        var sumSpeed: Double = 0
+        var avgAccuracy: Double { accuracyCount > 0 ? sumAccuracy / Double(accuracyCount) : 0 }
+        var avgSpeedKmh: Double { count > 0 ? (sumSpeed / Double(count)) * 3.6 : 0 }
+        var rejectRate: Double { count > 0 ? Double(rejected) / Double(count) : 0 }
+    }
+    var low = Band()
+    var mid = Band()
+    var high = Band()
+    var total: Int { low.count + mid.count + high.count }
+    var totalRejected: Int { low.rejected + mid.rejected + high.rejected }
+    var rejectRate: Double { total > 0 ? Double(totalRejected) / Double(total) : 0 }
+
+    mutating func record(speedMPS: Double, speedAccuracy: Double, usable: Bool) {
+        let band: WritableKeyPath<SpeedAccuracyStats, Band>
+        if speedMPS < TelemetryQuality.lowSpeedBandMPS { band = \.low }
+        else if speedMPS < TelemetryQuality.midSpeedBandMPS { band = \.mid }
+        else { band = \.high }
+        self[keyPath: band].count += 1
+        self[keyPath: band].sumSpeed += speedMPS
+        if !usable { self[keyPath: band].rejected += 1 }
+        if speedAccuracy >= 0 {
+            self[keyPath: band].accuracyCount += 1
+            self[keyPath: band].sumAccuracy += speedAccuracy
+            self[keyPath: band].maxAccuracy = max(self[keyPath: band].maxAccuracy, speedAccuracy)
+        }
+    }
+    mutating func reset() { self = SpeedAccuracyStats() }
 }
 
 // ---- 极简断言 ----
@@ -175,6 +221,86 @@ do {
     check(near(p.speedMps!, 25.0), "速度保持")
     check(near(p.courseDeg!, 135.0), "航向保持")
     check(p.locationValid && p.speedValid, "均有效")
+}
+
+// 7) 测速精度门槛**按速度分档**（真机问题驱动：低速时几乎必然被拦）
+//
+// 背景：GPS 测速是位置差分，误差与速度强相关（低速相对误差爆炸）。
+// 原先固定 2.0 m/s，导致起步/堵车时 speed_valid 频繁为 false，
+// 仪表从 LIVE 掉到 `--`，而高速时反而正常。
+//
+// 注：CLLocation.speedAccuracy 是只读的、无法在测试里构造，故这里直接
+//     验证**纯决策函数** speedAccuracyLimit(forSpeed:) —— 分档逻辑全在这里，
+//     isSpeedUsable 只是取 limit 后做一次比较。
+do {
+    func kmh(_ k: Double) -> Double { k / 3.6 }
+
+    // 分档边界必须与注释一致：<10 km/h 低速、10–40 中速、≥40 高速
+    check(TelemetryQuality.speedAccuracyLimit(forSpeed: 0) == 5.0, "静止应属低速档（±5.0）")
+    check(TelemetryQuality.speedAccuracyLimit(forSpeed: kmh(5)) == 5.0, "5 km/h 属低速档")
+    check(TelemetryQuality.speedAccuracyLimit(forSpeed: kmh(9.9)) == 5.0, "9.9 km/h 仍在低速档")
+    check(TelemetryQuality.speedAccuracyLimit(forSpeed: kmh(10)) == 2.5, "10 km/h 应进入中速档（±2.5）")
+    check(TelemetryQuality.speedAccuracyLimit(forSpeed: kmh(30)) == 2.5, "30 km/h 属中速档")
+    check(TelemetryQuality.speedAccuracyLimit(forSpeed: kmh(39.9)) == 2.5, "39.9 km/h 仍在中速档")
+    check(TelemetryQuality.speedAccuracyLimit(forSpeed: kmh(40)) == 2.0, "40 km/h 应进入高速档（±2.0）")
+    check(TelemetryQuality.speedAccuracyLimit(forSpeed: kmh(80)) == 2.0, "80 km/h 属高速档")
+    check(TelemetryQuality.speedAccuracyLimit(forSpeed: kmh(120)) == 2.0, "120 km/h 属高速档")
+
+    // 单调性：速度越高，门槛越**严**（绝不能反过来 —— 反过来会在高速放过漂移）
+    let speeds = stride(from: 0.0, through: 140.0, by: 5.0).map { kmh($0) }
+    let limits = speeds.map { TelemetryQuality.speedAccuracyLimit(forSpeed: $0) }
+    var monotonic = true
+    for i in 1..<limits.count where limits[i] > limits[i - 1] { monotonic = false }
+    check(monotonic, "★ 门槛必须随速度单调收紧（否则高速会放过漂移数据）")
+
+    // ★ 核心回归：低速的"坏"精度值现在应被放行（原先固定 2.0 时全被拦）
+    // ±4.0 m/s 在 5 km/h 时：旧门槛拦掉，新门槛放行
+    check(4.0 > 2.0, "前提：4.0 确实超过旧的固定门槛 2.0")
+    check(4.0 <= TelemetryQuality.speedAccuracyLimit(forSpeed: kmh(5)),
+          "★ 低速下 ±4.0 应放行（这正是用户报的『低速总被拦』场景）")
+
+    // ★ 反向保护：高速时不能放宽（避免把漂移当真实车速）
+    check(4.0 > TelemetryQuality.speedAccuracyLimit(forSpeed: kmh(80)),
+          "★ 高速下 ±4.0 仍必须被拦（表显 80 实际 60 比显示 -- 更危险）")
+}
+
+// 8) 测速精度分布统计（调阈值的事实依据）
+do {
+    var s = SpeedAccuracyStats()
+    check(s.total == 0 && s.rejectRate == 0, "初始应为空且不除零")
+
+    // 低速样本：被拦
+    s.record(speedMPS: 1.0, speedAccuracy: 6.0, usable: false)
+    // 低速样本：通过
+    s.record(speedMPS: 2.0, speedAccuracy: 1.0, usable: true)
+    // 高速样本：通过
+    s.record(speedMPS: 25.0, speedAccuracy: 0.5, usable: true)
+
+    check(s.total == 3, "总样本应为 3，实际 \(s.total)")
+    check(s.low.count == 2, "低速档应有 2 个样本")
+    check(s.mid.count == 0, "中速档无样本")
+    check(s.high.count == 1, "高速档应有 1 个样本")
+    check(s.totalRejected == 1, "应记录 1 次被拦")
+    check(abs(s.rejectRate - 1.0 / 3.0) < 1e-9, "被拦比例应为 1/3")
+    check(abs(s.low.maxAccuracy - 6.0) < 1e-9, "低速档最大值应为 6.0")
+    check(abs(s.low.avgAccuracy - 3.5) < 1e-9, "低速档均值应为 (6+1)/2=3.5")
+
+    // speedAccuracy 为负（iOS 未提供）不应污染精度均值，但仍计入次数与被拦
+    //
+    // ⚠️ 这里曾写出一个 bug：均值除以 count（含未知精度的样本），
+    //    导致"精度未知"的样本把均值**拉低** —— 调阈值时会误判为
+    //    "实际精度很好"而错误收紧门槛。现在均值只除以 accuracyCount。
+    let beforeAvg = s.low.avgAccuracy
+    let beforeCount = s.low.count
+    s.record(speedMPS: 1.0, speedAccuracy: -1, usable: false)
+    check(s.low.count == beforeCount + 1, "未知精度也应计入样本数")
+    check(abs(s.low.avgAccuracy - beforeAvg) < 1e-9,
+          "★ 负精度不得污染均值（均值应只按有精度估计的样本算）")
+    check(s.low.rejected == 2, "未知精度的样本若被拦也应计入")
+
+    s.reset()
+    check(s.total == 0, "reset 后应清空")
+    check(s.rejectRate == 0, "reset 后不应除零")
 }
 
 print("结果: \(pass) 通过, \(fail) 失败")

@@ -189,7 +189,7 @@ int main(void)
     CHECK(strstr(buf, "\"screen\"") == NULL, "未设置息屏 → 不应上报 screen");
 
     /* 2) 设置后应如实带出 */
-    face_report_set_display(&(face_report_display_t){ 70, 90, 1 });
+    face_report_set_display(&(face_report_display_t){ .brightness = 70, .rotation = 90, .screen_on = 1 });
     len = face_report_build(buf, sizeof(buf));
     CHECK(strstr(buf, "\"bright\":70") != NULL, "应上报亮度 70");
     CHECK(strstr(buf, "\"rot\":90") != NULL, "应上报方向 90");
@@ -197,14 +197,23 @@ int main(void)
 
     /* 3) 0 是**有效值**，必须照实上报，不能当成"未设置"省略。
      *    这是最容易写错的地方：把 0 与"未知"混为一谈，App 就永远显示不出息屏。 */
-    face_report_set_display(&(face_report_display_t){ 0, 0, 0 });
+    face_report_set_display(&(face_report_display_t){ .brightness = 0, .rotation = 0, .screen_on = 0 });
     len = face_report_build(buf, sizeof(buf));
     CHECK(strstr(buf, "\"bright\":0") != NULL, "亮度 0 是有效值，必须上报");
     CHECK(strstr(buf, "\"rot\":0") != NULL, "方向 0° 是有效值，必须上报");
     CHECK(strstr(buf, "\"screen\":0") != NULL, "screen=0（息屏）必须上报");
 
-    /* 4) 部分设置：只带已设置的那一项 */
-    face_report_set_display(&(face_report_display_t){ 128, -1, -1 });
+    /*
+     * 4) 部分设置：只带已设置的那一项。
+     *
+     * ⚠️ 必须**显式**把不要的字段写成 -1：C 的指定初始化会把未列出的字段
+     *    清零，而 0 对 screen_on/rotation 是**有效值**（息屏 / 0°），
+     *    会被当成"设备确实上报了 0"——这正是"0 与未设置必须区分"的坑。
+     */
+    face_report_set_display(&(face_report_display_t){
+        .brightness = 128, .rotation = -1, .screen_on = -1,
+        .trip_distance_km = -1, .trip_max_kmh = -1, .trip_avg_kmh = -1, .trip_time_s = -1,
+    });
     len = face_report_build(buf, sizeof(buf));
     CHECK(strstr(buf, "\"bright\":128") != NULL, "应上报亮度 128");
     CHECK(strstr(buf, "\"rot\"") == NULL, "方向未设置 → 不应出现");
@@ -218,7 +227,7 @@ int main(void)
     /* 6) ★ 截断时仍必须带出显示状态 —— 否则表盘一多 App 就退回默认值，
      *      又回到"亮度被凭空改掉"的老 bug。 */
     face_report_reset_for_test();
-    face_report_set_display(&(face_report_display_t){ 70, 90, 1 });
+    face_report_set_display(&(face_report_display_t){ .brightness = 70, .rotation = 90, .screen_on = 1 });
     ui_face_reset();
     char many[20][16];
     for (int i = 0; i < 20; i++) {
@@ -232,6 +241,44 @@ int main(void)
     CHECK(strstr(buf, "\"rot\":90") != NULL, "★ 截断时也必须带出方向");
     CHECK(strstr(buf, "\"screen\":1") != NULL, "★ 截断时也必须带出息屏状态");
     CHECK(len <= FACE_REPORT_MAX_PAYLOAD, "加了显示状态后截断仍须在上限内（%d）", len);
+
+    printf("=== 行程统计（P1-1）===\n");
+    /*
+     * 行程由**设备**累积并上报（App 本地算会在重启后归零，与仪表数字对不上）。
+     * 这里验证字段存在性、未设置时省略、以及**加了行程后仍不超载荷上限**。
+     */
+    ui_face_reset();
+    register_five();
+    face_report_reset_for_test();
+
+    /* 未设置 → 不应出现 */
+    len = face_report_build(buf, sizeof(buf));
+    CHECK(strstr(buf, "\"trip_km\"") == NULL, "未设置时不应上报 trip_km");
+    CHECK(strstr(buf, "\"trip_max\"") == NULL, "未设置时不应上报 trip_max");
+
+    /* 设置后如实带出（含 0 —— 刚出发时里程就是 0，必须能上报） */
+    face_report_set_display(&(face_report_display_t){
+        .brightness = 200, .rotation = 0, .screen_on = 1,
+        .trip_distance_km = 12.34, .trip_max_kmh = 87.6,
+        .trip_avg_kmh = 45.25, .trip_time_s = 977,
+    });
+    len = face_report_build(buf, sizeof(buf));
+    CHECK(len > 0, "带行程的报告应能生成");
+    CHECK(strstr(buf, "\"trip_km\":12.34") != NULL, "应上报里程 12.34km");
+    CHECK(strstr(buf, "\"trip_max\":87.60") != NULL, "应上报最高速 87.60km/h");
+    CHECK(strstr(buf, "\"trip_avg\":45.25") != NULL, "应上报均速 45.25km/h");
+    CHECK(strstr(buf, "\"trip_s\":977") != NULL, "应上报行驶时长 977s");
+    CHECK(len <= FACE_REPORT_MAX_PAYLOAD,
+          "★ 加上行程字段后仍须在上限内（%d ≤ %d）", len, FACE_REPORT_MAX_PAYLOAD);
+
+    /* ★ 里程 0 是**有效值**（刚出发），必须与"未设置"区分 */
+    face_report_set_display(&(face_report_display_t){
+        .brightness = -1, .rotation = -1, .screen_on = -1,
+        .trip_distance_km = 0.0, .trip_max_kmh = 0.0,
+        .trip_avg_kmh = 0.0, .trip_time_s = 0,
+    });
+    len = face_report_build(buf, sizeof(buf));
+    CHECK(strstr(buf, "\"trip_km\":0.00") != NULL, "★ 里程 0 是有效值，必须上报");
 
     face_report_reset_for_test(); /* 复位，避免影响后续新增用例 */
 

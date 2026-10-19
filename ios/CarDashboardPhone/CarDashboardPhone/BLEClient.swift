@@ -277,11 +277,128 @@ final class BLEClient: NSObject, ObservableObject {
         return true
     }
 
-    /// 便捷方法：亮度 0-255
+    /// 便捷方法：亮度 0-255（单次发送，不等确认）
     @discardableResult
     func setBrightness(_ value: Int) -> Bool {
         sendCommand("{\"cmd\":\"brightness\",\"value\":\(max(0, min(255, value)))}")
     }
+
+    /**
+     拖动亮度滑块时**持续**下发（做到"所见即所得"）。
+
+     ## 为什么需要它
+
+     早先只在滑块**松手**时发一次 —— 拖动过程中屏幕完全不动，
+     松手瞬间才"啪"地跳到目标值。用户反馈很准确："像发个时间包重置的感觉"，
+     因为确实是**一次跳变**而不是连续跟随。
+
+     ## 限流策略
+
+     不能每拖一格都发（1 秒可能几十次，会堵住 BLE 链路，连遥测都发不出去）。
+     这里用 **50ms 最小间隔**（20Hz）—— 人手拖动大约 60-120Hz 采样，
+     20Hz 已经足够顺滑，人眼看不出一格一格的。
+     用 `.withoutResponse` 是因为亮度**不要确认**，延迟越低越好；
+     丢一两个中间值无所谓（后面的会覆盖），最终值由松手时补发保证。
+
+     - Parameter value: 目标亮度 0-255
+     */
+    func setBrightnessLive(_ value: Int) {
+        let v = max(0, min(255, value))
+        /* 限流：50ms 内只发一次 */
+        let now = Date().timeIntervalSince1970
+        if now - lastLiveBrightnessAt < 0.05 { return }
+        lastLiveBrightnessAt = now
+        guard let per = peripheral, let ch = commandChar, isConnected else { return }
+        let json = "{\"cmd\":\"brightness\",\"value\":\(v)}"
+        guard let data = json.data(using: .utf8) else { return }
+        per.writeValue(data, for: ch, type: .withoutResponse)
+    }
+
+    /// 上次"实时亮度"下发的时间戳（限流用）
+    private var lastLiveBrightnessAt: TimeInterval = 0
+
+    /**
+     拖动「白天/夜间亮度」滑块时**实时**下发曲线（跳过 0.25s 防抖）。
+
+     ## 为什么不能沿用防抖
+
+     防抖的本意是"拖动停止后再发最终值"，但那样拖动过程中屏幕**完全不动**，
+     松手才跳变 —— 用户形容"像发个时间包重置"。见 setBrightnessLive 的说明。
+
+     ## 限流
+
+     50ms（20Hz），与手动亮度一致。用 `.withResponse` 而不是
+     `.withoutResponse` —— 曲线是**配置**，乱序会让设备停在错误的值上
+     （实测过 9 个包乱序到达）。这里牺牲一点延迟换正确性。
+
+     ⚠️ 只在**白天/夜间对应的时段**才影响屏幕亮度：白天拖「夜间亮度」
+        屏幕本来就不该变，这是正确行为，不是 bug。
+     */
+    func setBrightnessCurveLive(_ curve: BrightnessCurve) {
+        brightnessCurve = curve
+        Self.savedCurve = curve
+        let now = Date().timeIntervalSince1970
+        if now - lastLiveCurveAt < 0.05 { return }
+        lastLiveCurveAt = now
+        guard let per = peripheral, let ch = telemetryChar, isConnected else { return }
+        guard let data = try? curve.encode() else { return }
+        per.writeValue(data, for: ch, type: .withResponse)
+    }
+
+    /// 上次"实时曲线"下发的时间戳（限流用）
+    private var lastLiveCurveAt: TimeInterval = 0
+
+    // MARK: - 亮度曲线（按时段自动调亮度）
+
+    /**
+     当前亮度曲线（供 UI 绑定）。
+
+     初值从 UserDefaults 读（用户偏好），改了就立刻下发设备。
+     设备**不持久化**该曲线，所以每次连接都要重发（见 didDiscoverCharacteristicsFor）。
+     */
+    @Published var brightnessCurve: BrightnessCurve = BLEClient.savedCurve
+
+    /**
+     设置并下发亮度曲线。
+
+     - Parameter curve: 新曲线；会保存到 UserDefaults 并立即发给设备。
+     */
+    func setBrightnessCurve(_ curve: BrightnessCurve) {
+        brightnessCurve = curve
+        Self.savedCurve = curve
+        /*
+         * 防抖：拖动滑块时 setter 会被高频调用（每次 1 个刻度）。
+         * 若每次都发 BLE，几十个包挤在一起 —— 即使 `.withResponse` 保证了
+         * 顺序，也会把链路堵住、让拖动明显卡顿。
+         *
+         * 这里只在"停止操作 0.25 秒后"发**最终值**。曲线本身是
+         * "最终一致"语义（设备只关心最后是什么），中间值没有意义。
+         *
+         * ⚠️ 关闭/打开这种**离散操作**不该等 0.25 秒 —— 单独用
+         *    `sendBrightnessCurveNow()` 立即发（见下面的 enabled 处理）。
+         */
+        curveSendDebounce?.invalidate()
+        curveSendDebounce = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) {
+            [weak self] _ in
+            guard let self else { return }
+            self.sendBrightnessCurve(self.brightnessCurve)
+        }
+    }
+
+    /**
+     立即下发当前曲线（不走防抖）。
+
+     用于**离散**操作（如"手动/自动"模式切换）—— 这类操作分次数少、
+     用户期望立刻见效，等 0.25 秒反而像"没反应"。
+     */
+    func sendBrightnessCurveNow() {
+        curveSendDebounce?.invalidate()
+        curveSendDebounce = nil
+        sendBrightnessCurve(brightnessCurve)
+    }
+
+    /// 曲线下发防抖定时器（见 setBrightnessCurve）
+    private var curveSendDebounce: Timer?
 
     /**
      演示速度（App 的「模拟速度测试」滑块）。
@@ -420,9 +537,98 @@ final class BLEClient: NSObject, ObservableObject {
         guard isConnected, telemetryChar != nil, !didSendTimeOnConnect else { return }
         let nowUtcMs = Int64(Date().timeIntervalSince1970 * 1000)
         guard let data = try? TelemetryPacket.timeOnly(nowUtcMs: nowUtcMs).encode() else { return }
-        peripheral?.writeValue(data, for: telemetryChar!, type: .withResponse)
+        /*
+         * 用 `.withoutResponse`：连接初始化阶段已经串了
+         * discoverServices → discoverCharacteristics → setNotifyValue×2，
+         * 每一步都要等回包。若这里再用 `.withResponse`，每包还要再等一次确认，
+         * 初始化总耗时明显变长（实测用户反馈"初始化同步很慢"）。
+         *
+         * 校时包本身是幂等的（设备每次收到都重校），丢一次也无妨 ——
+         * 后续遥测包都带 ts_utc_ms，会把时间再校回来。
+         */
+        peripheral?.writeValue(data, for: telemetryChar!, type: .withoutResponse)
         didSendTimeOnConnect = true
         NSLog("[BLE] 已下发纯时间包（连接校时）")
+    }
+
+    /**
+     下发亮度曲线（与时间包**同一时机**：每次连接一次）。
+
+     ## 为什么由 App 决定曲线
+
+     曲线是**用户偏好**，而 App 才是用户改设置的地方；设备只负责按时段应用。
+     设备也**不持久化**它 —— 每次连接 App 都重发，避免两边各存一份后不一致
+     （那会导致"App 显示 07:00 但设备按 06:00 跑"这类极难排查的问题）。
+
+     - Parameter curve: 要下发的曲线；传 nil 则用本地保存的
+     */
+    func sendBrightnessCurve(_ curve: BrightnessCurve? = nil) {
+        guard isConnected, let ch = telemetryChar else {
+            /* 未连接：不排队 —— 连接后 didDiscoverCharacteristicsFor 会补发 */
+            return
+        }
+        let c = curve ?? Self.savedCurve
+        guard let data = try? c.encode() else { return }
+        /*
+         * 同样用 `.withoutResponse` 降低初始化延迟。
+         *
+         * 安全性：设备端对"曲线内容是否变化"做了判断（见 bright_poll），
+         * 且 App 每次连接都会重发，偶发丢失会被下一次连接补上。
+         * 另外这里**不参与**"地图窗口"那套按序发送机制 —— 那个机制是为了
+         * 保证 mw/mr/mb/mp/me 不被 BLE 栈合并，与单包曲线无关。
+         */
+        guard let per = peripheral else { return }
+        /*
+         * ⚠️ **必须用 `.withResponse`**，不能用 `.withoutResponse`。
+         *
+         * 实测（2026-10-19）：短时间内连发 9 个曲线包，
+         * 设备收到的顺序是 130,160,170,140,120,110,180,100,150 —— **完全乱序**，
+         * 最终亮度停在 150 而不是最后发的 180。
+         *
+         * 原因：`.withoutResponse` 是"即发即忘"，BLE 栈按自己的调度发送，
+         * 不保证到达顺序。而曲线是**配置**，必须先来后到 ——
+         * App 里拖动滑块会连发多个值，乱序就会让设备停在某个中间值，
+         * 用户看到的就是"拖到最后没反应/亮度乱跳"。
+         *
+         * 用 `.withResponse` 后每包都有确认，交给 didWriteValueFor 统一按序处理；
+         * 曲线不是高频包（拖滑块也只有几到几十次），这点延时可接受。
+         */
+        per.writeValue(data, for: ch, type: .withResponse)
+        NSLog("[BLE] 已下发亮度曲线：%@", c.summary)
+    }
+
+
+
+    /**
+     当前生效的亮度曲线（**本地保存**，连接时下发）。
+
+     用 UserDefaults 存：这是 App 自己的用户偏好，不是设备状态
+     （设备状态一律走 BLE 上报，见 DeviceFaces）。因此不需要 Keychain ——
+     里面没有凭据。
+     */
+    static var savedCurve: BrightnessCurve {
+        get {
+            let d = UserDefaults.standard
+            var c = BrightnessCurve()
+            if d.object(forKey: "bright.enabled") != nil {
+                c.enabled = d.bool(forKey: "bright.enabled")
+            }
+            if d.object(forKey: "bright.ds") != nil { c.dayStartMin = d.integer(forKey: "bright.ds") }
+            if d.object(forKey: "bright.de") != nil { c.dayEndMin = d.integer(forKey: "bright.de") }
+            if d.object(forKey: "bright.day") != nil { c.dayLevel = d.integer(forKey: "bright.day") }
+            if d.object(forKey: "bright.night") != nil { c.nightLevel = d.integer(forKey: "bright.night") }
+            if d.object(forKey: "bright.ramp") != nil { c.rampMin = d.integer(forKey: "bright.ramp") }
+            return c
+        }
+        set {
+            let d = UserDefaults.standard
+            d.set(newValue.enabled, forKey: "bright.enabled")
+            d.set(newValue.dayStartMin, forKey: "bright.ds")
+            d.set(newValue.dayEndMin, forKey: "bright.de")
+            d.set(newValue.dayLevel, forKey: "bright.day")
+            d.set(newValue.nightLevel, forKey: "bright.night")
+            d.set(newValue.rampMin, forKey: "bright.ramp")
+        }
     }
 
     /// 下发导航消息（与遥测**共用同一个特征**，靠载荷里的 `"t":"nav"` 分流）。
@@ -656,6 +862,14 @@ extension BLEClient: CBPeripheralDelegate {
         }
         // 特征就绪后补发一次纯时间包（连接校时，仅一次）
         sendTimeOnConnect()
+        /*
+         * 同时下发亮度曲线 —— 与时间包同一时机（每次连接一次）。
+         *
+         * 放在这里而不是 didConnect：此时 telemetryChar 才就绪。
+         * 设备端不持久化该曲线，所以**每次连接都要发**，
+         * 否则设备会退回内置默认值（表现为"重连后亮度时段不对"）。
+         */
+        sendBrightnessCurve()
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {

@@ -64,6 +64,23 @@ struct DeviceFaceReport: Equatable {
     /// 是否点亮（false = 息屏）；nil = 设备未上报
     var screenOn: Bool?
 
+    // ── 行程统计（由**设备**累积，App 只显示）────────────────────
+    //
+    // 为什么不让 App 自己算：行程是"这一趟车"的累计值，由仪表持续累积。
+    // App 可能被系统杀掉/重装（免费账号 7 天就要重装一次），
+    // 本地算会一重启就归零 —— 与仪表上显示的数字对不上，比不显示更糟。
+    //
+    // 同样用 Optional 区分"没上报"与"确实是 0"（刚出发里程就是 0）。
+
+    /// 累计里程（公里）；nil = 设备未上报
+    var tripDistanceKm: Double?
+    /// 最高速度（公里/小时）；nil = 设备未上报
+    var tripMaxKmh: Double?
+    /// 加权平均速度（公里/小时）；nil = 设备未上报
+    var tripAvgKmh: Double?
+    /// 有效行驶时长（秒）；nil = 设备未上报
+    var tripTimeS: Int?
+
     /// 按分组聚合，保持设备给出的顺序（分组首次出现的先后）
     var grouped: [(group: String, faces: [DeviceFace])] {
         var order: [String] = []
@@ -126,6 +143,15 @@ enum DeviceFaceParser {
         report.rotation = root["rot"] as? Int
         if let s = root["screen"] as? Int { report.screenOn = (s != 0) }
         else if let b = root["screen"] as? Bool { report.screenOn = b }
+
+        /*
+         * 行程统计（可选）。JSONSerialization 对小数一律给 Double/NSNumber，
+         * 用 as? Double 即可；整数（trip_s）单独取。
+         */
+        report.tripDistanceKm = root["trip_km"] as? Double
+        report.tripMaxKmh = root["trip_max"] as? Double
+        report.tripAvgKmh = root["trip_avg"] as? Double
+        report.tripTimeS = root["trip_s"] as? Int
         return report
     }
 }

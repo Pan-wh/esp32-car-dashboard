@@ -97,6 +97,7 @@ struct TestNavUIState {
         }
     }
     check(seen.count == 4, "16 种组合只产生 4 种状态（实际 \(seen.count) 种：\(seen.sorted())）")
+    /* 加上到达维度后：未到达分支仍是 4 种，到达分支另有 arrived（见 2b）*/
 
     // ─────────────────────────────────────────────────────────────
     // 2) 按钮可见性：P0-2 的验收标准
@@ -114,6 +115,60 @@ struct TestNavUIState {
           "准备/选地点显示搜索框")
     check(!L.showsSearchField(.pickingRoute), "选路线时不显示搜索框（此步已不需要输入）")
     check(!L.showsSearchField(.navigating), "导航中不显示搜索框")
+
+    // ─────────────────────────────────────────────────────────────
+    // 2b) 「已到达」状态（P0-2：导航流程必须有终点）
+    // ─────────────────────────────────────────────────────────────
+    print("--- 已到达（P0-2）---")
+    /* 到达是既成事实：即便 isNavigating 仍为 true（NavSession 还没 stop），
+       也必须切到到达态 —— 否则回到"到了却还显示导航中"的老问题 */
+    check(L.state(isNavigating: true, hasCandidates: false, queryIsEmpty: true,
+                  isLoading: false, hasArrived: true) == .arrived,
+          "★ 已到达时即使仍在导航也必须显示到达态")
+    check(L.state(isNavigating: false, hasCandidates: false, queryIsEmpty: true,
+                  isLoading: false, hasArrived: true) == .arrived,
+          "未导航 + 已到达 → 到达态")
+    /* 但用户明确点「换一条路线」时不结束：到达优先于导航，却让位于主动换路 */
+    check(L.state(isNavigating: true, hasCandidates: true, queryIsEmpty: true,
+                  isLoading: false, isChoosingRoute: true, hasArrived: true) == .pickingRoute,
+          "★ 已到达但用户主动换路线 → 进选路线（不把他锁死在到达页）")
+    /* 未到达时行为不变（向后兼容） */
+    check(L.state(isNavigating: true, hasCandidates: false, queryIsEmpty: true,
+                  isLoading: false, hasArrived: false) == .navigating,
+          "未到达时导航态不变")
+
+    /* 按钮可见性：到达态给"结束行程"，**不给**"结束导航"（语义不同，避免两个都点） */
+    check(L.showsArrivalCard(.arrived), "到达态显示到达卡片")
+    check(!L.showsArrivalCard(.navigating), "导航中不显示到达卡片")
+    check(!L.showsStopButton(.arrived),
+          "★ 到达态不显示「结束导航」（那时该显示「结束行程」，否则两个按钮语义重叠）")
+    check(!L.showsSearchField(.arrived),
+          "到达态不显示搜索框（要先点「继续导航到附近」才回到搜索）")
+
+    // ─────────────────────────────────────────────────────────────
+    // 2c) 剩余摘要（P1-2：开车时最常问的"还有多久到"）
+    // ─────────────────────────────────────────────────────────────
+    print("--- 剩余摘要（P1-2）---")
+    /* 固定时刻，避免依赖真实时钟（测试必须可重复）*/
+    let t0 = Date(timeIntervalSince1970: 1_791_792_000)  // 固定基准
+    let full = NavCandidateFormat.remainingSummaryText(distanceM: 12300, durationS: 1080, now: t0, calendar: fixedCal)
+    check(full.contains("12.3 km"), "★ 剩余摘要应含距离，实际：\(full)")
+    check(full.contains("18 分钟"), "★ 剩余摘要应含时长，实际：\(full)")
+    check(full.contains("到"), "★ 剩余摘要应含到达时刻，实际：\(full)")
+    check(full.components(separatedBy: " · ").count == 3,
+          "三段信息用 ' · ' 连接（不换行、好扫），实际：\(full)")
+
+    /* 拿不到总时长（网关没给 duration）时退化为只有距离 —— 不能显示 "nil" 或崩 */
+    let distOnly = NavCandidateFormat.remainingSummaryText(distanceM: 800, durationS: nil, now: t0, calendar: fixedCal)
+    check(distOnly.contains("800 m"), "无时长时仍应显示距离，实际：\(distOnly)")
+    check(!distOnly.contains("nil"), "★ 不得把 nil 显示给用户，实际：\(distOnly)")
+    check(!distOnly.contains("·"), "无时长时不应留下多余的分隔符，实际：\(distOnly)")
+
+    /* 异常时长（负 / 非有限）也要退化，不能算出 "0 分钟" 或崩溃 */
+    let negDur = NavCandidateFormat.remainingSummaryText(distanceM: 800, durationS: -5, now: t0, calendar: fixedCal)
+    check(!negDur.contains("·"), "★ 负时长应退化为只有距离，实际：\(negDur)")
+    let nanDur = NavCandidateFormat.remainingSummaryText(distanceM: 800, durationS: .nan, now: t0, calendar: fixedCal)
+    check(!nanDur.contains("nan"), "★ NaN 不得泄漏到界面，实际：\(nanDur)")
 
     // ─────────────────────────────────────────────────────────────
     // 3) 策略人话（P1-3）

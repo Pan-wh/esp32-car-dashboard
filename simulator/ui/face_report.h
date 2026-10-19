@@ -101,6 +101,17 @@ typedef struct {
     int brightness; /**< 0-255；负数表示"尚未设置"，不上报该字段 */
     int rotation;   /**< 0/90/180/270；负数表示"尚未设置" */
     int screen_on;  /**< 1 亮 / 0 息屏；负数表示"尚未设置" */
+    /*
+     * 行程统计（2026-10-16 新增，P1-1）。
+     *
+     * 为什么由**设备**上报而不是 App 自己算：行程是"这一趟车"的累计值，
+     * 由仪表持续累积（App 可能中途重启/被系统杀掉）。App 本地算会
+     * 一重启就归零，与仪表上显示的数字对不上 —— 那比不显示更糟。
+     */
+    double trip_distance_km; /**< 累计里程（km）；负数表示不上报 */
+    double trip_max_kmh;     /**< 最高速度（km/h）；负数表示不上报 */
+    double trip_avg_kmh;     /**< 加权平均速度（km/h）；负数表示不上报 */
+    long trip_time_s;        /**< 有效行驶时长（秒）；负数表示不上报 */
 } face_report_display_t;
 
 /**

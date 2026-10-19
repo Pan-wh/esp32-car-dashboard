@@ -19,7 +19,7 @@
 
 import Foundation
 
-/// 导航页的四个界面状态（文档 §二 的状态机）
+/// 导航页的界面状态（文档 §二 的状态机）
 public enum NavUIState: Equatable, Sendable {
     /// 准备：搜索目的地（未输入、未导航）
     case ready
@@ -29,6 +29,22 @@ public enum NavUIState: Equatable, Sendable {
     case pickingRoute
     /// 导航中
     case navigating
+    /**
+     已到达目的地（2026-10-16 新增，P0-2）。
+
+     ## 为什么必须是一个独立状态
+
+     此前 `NavCore` 早就有 `.arrived`、`statusText` 也会变成"已到达目的地"，
+     但**界面状态机完全不认它** —— 于是到达后界面仍停在「导航中」：
+     继续显示"距下一动作 -- 米"、继续占着定位、也没有明确的"结束"入口。
+     用户到了地方看着一个还在"导航中"的界面，不知道要不要手动点结束
+     —— 这是导航流程**没有终点**，体验上像"没做完"。
+
+     独立成状态后，到达可以给一个明确的收尾卡片（结束行程 / 继续导航到附近），
+     并且可以自动停掉定位省电。注意**不能**沿用导航态然后把按钮换掉 ——
+     那样"导航中"和"已到达"就无法区分，测试也穷举不出来。
+     */
+    case arrived
 }
 
 public enum NavUIStateLogic {
@@ -50,13 +66,20 @@ public enum NavUIStateLogic {
                              hasCandidates: Bool,
                              queryIsEmpty: Bool,
                              isLoading: Bool,
-                             isChoosingRoute: Bool = false) -> NavUIState {
+                             isChoosingRoute: Bool = false,
+                             hasArrived: Bool = false) -> NavUIState {
         /*
-         * `isChoosingRoute`（P2-4）：导航中用户主动点「换一条路线」时，
-         * 要**在导航中**显示候选列表 —— 否则会永远停在导航态、换不了路。
-         * 它优先于 isNavigating，因为这是用户刚刚表达的意图。
+         * 「已到达」优先于一切（除"主动换路线"之外）。
+         *
+         * 顺序理由：到达是**既成事实**，此时即便 isNavigating 仍为 true
+         * （NavSession 尚未 stop），界面也必须切到到达态 —— 否则就回到
+         * "到达了却还在显示导航中"的老问题。
+         *
+         * 但 `isChoosingRoute` 仍要优先：用户明确点了「换一条路线」，
+         * 说明他不想结束（比如目的地停车场没找到，想换个地方）。
          */
         if isChoosingRoute && hasCandidates { return .pickingRoute }
+        if hasArrived { return .arrived }
         if isNavigating { return .navigating }
         if hasCandidates { return .pickingRoute }
         if !queryIsEmpty || isLoading { return .pickingPlace }
@@ -68,12 +91,17 @@ public enum NavUIStateLogic {
         s == .pickingRoute
     }
 
-    /// 导航中才显示「结束导航」
+    /// 只有导航中才显示「结束导航」；**到达态不给它** —— 那时该显示「结束行程」
     public static func showsStopButton(_ s: NavUIState) -> Bool {
         s == .navigating
     }
 
-    /// 只有准备/选地点状态才需要搜索框（选路线与导航中都不该再输入）
+    /// 到达态才显示到达卡片（结束行程 / 继续导航到附近）
+    public static func showsArrivalCard(_ s: NavUIState) -> Bool {
+        s == .arrived
+    }
+
+    /// 只有准备/选地点状态才需要搜索框（选路线、导航中、已到达都不该再输入）
     public static func showsSearchField(_ s: NavUIState) -> Bool {
         s == .ready || s == .pickingPlace
     }
@@ -159,6 +187,31 @@ public enum NavCandidateFormat {
                                      strategy: Int,
                                      isFastest: Bool) -> String {
         "\(distanceText(distanceM)) · \(strategyLabel(strategy, isFastest: isFastest))"
+    }
+
+    /**
+     导航中的"剩余"摘要（P1-2）：`12.3 km · 18 分钟 · 14:32 到`。
+
+     ## 为什么要单独做一个
+
+     此前导航中把**全程剩余**用 `.subheadline` + 灰色显示，
+     视觉层级低于"距下一动作"。但驾驶员最常想知道的是"还有多久到" ——
+     次要信息被弱化得过分了。
+
+     现在把它提炼成一行可复用的文案，界面上用更大的字号呈现。
+     三段信息用 `·` 连接：短、好扫、不换行。
+
+     - Parameters:
+       - distanceM: 剩余距离（米）
+       - durationS: 剩余预计耗时（秒）；nil 时省略时长与到达时刻
+     */
+    public static func remainingSummaryText(distanceM: Double,
+                                            durationS: Double?,
+                                            now: Date = Date(),
+                                            calendar: Calendar = .current) -> String {
+        let dist = distanceText(distanceM)
+        guard let d = durationS, d.isFinite, d >= 0 else { return dist }
+        return "\(dist) · \(durationText(d)) · \(etaText(durationS: d, now: now, calendar: calendar))"
     }
 }
 

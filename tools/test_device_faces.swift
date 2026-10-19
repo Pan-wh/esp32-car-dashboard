@@ -253,6 +253,60 @@ func testDisplayState() {
     }
 }
 
+func testTripStats() {
+    print("--- 行程统计（P1-1）---")
+
+    // 1) 完整上报：四个字段都应解析出来
+    let full = """
+    {"t":"faces","cur":0,"bright":200,"rot":0,"screen":1,\
+    "trip_km":12.34,"trip_max":87.6,"trip_avg":45.25,"trip_s":977,\
+    "faces":[{"id":0,"name":"analog","label":"Analog","group":"clock","on":1}]}
+    """
+    guard let r = DeviceFaceParser.parse(Data(full.utf8)) else {
+        check(false, "解析失败"); return
+    }
+    check(r.tripDistanceKm == 12.34, "应解析里程 12.34，实际 \(String(describing: r.tripDistanceKm))")
+    check(r.tripMaxKmh == 87.6, "应解析最高速 87.6")
+    check(r.tripAvgKmh == 45.25, "应解析均速 45.25")
+    check(r.tripTimeS == 977, "应解析时长 977s")
+
+    // 2) ★ 缺省必须是 nil（"设备没说"），不能兜底成 0。
+    //    否则刚启动时会显示"里程 0.00 km"——看起来像"这一趟白跑了"。
+    let bare = "{\"t\":\"faces\",\"faces\":[{\"id\":0,\"name\":\"a\",\"group\":\"clock\"}]}"
+    if let r2 = DeviceFaceParser.parse(Data(bare.utf8)) {
+        check(r2.tripDistanceKm == nil, "★ 缺 trip_km 应为 nil（不得伪造 0）")
+        check(r2.tripMaxKmh == nil, "缺 trip_max 应为 nil")
+        check(r2.tripAvgKmh == nil, "缺 trip_avg 应为 nil")
+        check(r2.tripTimeS == nil, "缺 trip_s 应为 nil")
+    } else {
+        check(false, "应能解析")
+    }
+
+    // 3) ★ 0 是**有效值**（刚出发里程就是 0），必须解析成 0 而非 nil
+    let zeros = """
+    {"t":"faces","cur":0,"trip_km":0.0,"trip_max":0.0,"trip_avg":0.0,"trip_s":0,\
+    "faces":[{"id":0,"name":"a","group":"clock","on":1}]}
+    """
+    if let r3 = DeviceFaceParser.parse(Data(zeros.utf8)) {
+        check(r3.tripDistanceKm == 0.0, "★ 里程 0 是有效值，应解析为 0（不是 nil）")
+        check(r3.tripMaxKmh == 0.0, "最高速 0 是有效值")
+        check(r3.tripTimeS == 0, "时长 0 是有效值")
+    } else {
+        check(false, "应能解析")
+    }
+
+    // 4) 整数形式的小数也应容忍（固件若发 "trip_km":12 而非 12.00）
+    let intForm = """
+    {"t":"faces","trip_km":12,"faces":[{"id":0,"name":"a","group":"clock","on":1}]}
+    """
+    if let r4 = DeviceFaceParser.parse(Data(intForm.utf8)) {
+        check(r4.tripDistanceKm == 12.0,
+              "整数形式的里程也应解析（实际 \(String(describing: r4.tripDistanceKm))）")
+    } else {
+        check(false, "应能解析")
+    }
+}
+
 func testFaceSymbols() {
     print("--- 表盘图标映射 ---")
     // 已知表盘应有各自的图标（不能都一样，否则区分不了）
@@ -280,6 +334,7 @@ struct TestDeviceFaces {
         testPartialFieldTolerance()
         testCurrentFace()
         testDisplayState()
+        testTripStats()
         testFaceSymbols()
         print("结果: \(gPass) 通过, \(gFail) 失败")
         exit(gFail == 0 ? 0 : 1)

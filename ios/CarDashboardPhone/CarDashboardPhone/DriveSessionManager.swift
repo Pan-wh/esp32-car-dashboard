@@ -23,6 +23,9 @@ final class DriveSessionManager: ObservableObject {
     /// 最近一次收到的定位样本时间戳（CLLocation.timestamp，用于判断"定位数据旧"）
     @Published var lastLocationTime: Date?
 
+    /// 测速精度分布统计（诊断用，供界面显示以便按实测数据调阈值）
+    @Published var speedStats = SpeedAccuracyStats()
+
     let location = LocationService()
     let ble = BLEClient()
     /// 导航会话（定位 → 导航核心 → 下发仪表）。由本类的 tick 驱动，不自起定时器。
@@ -113,6 +116,20 @@ final class DriveSessionManager: ObservableObject {
          */
 
         guard let packet = location.makePacket(nowUtcMs: nowUtcMs) else { return }
+
+        /*
+         * 记录测速精度分布（诊断用）。
+         *
+         * 为什么要在这里记：阈值（TelemetryQuality 的 5.0/2.5/2.0 分档）需要
+         * **按实测数据调**，而"被拦"只体现在 speedValid 上，事后无法回溯
+         * speedAccuracy 到底抖到多少。这里顺带把分布攒起来，界面上就能直接
+         * 看到"低速档平均±X 最大±Y 被拦 Z%"，从而用数据而不是感觉来调阈值。
+         */
+        if let loc = location.lastLocation {
+            speedStats.record(speedMPS: loc.speed,
+                              speedAccuracy: loc.speedAccuracy,
+                              usable: packet.speedValid)
+        }
 
         ble.send(packet: packet)
         lastSendTime = now

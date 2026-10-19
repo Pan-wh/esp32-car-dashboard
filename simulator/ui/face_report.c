@@ -36,7 +36,7 @@ void face_report_set_current(int face_id)
  * 这一点很重要：App 收到省略的字段会保持原值，而收到 0 会显示成 0
  * —— 那正是"亮度被凭空改掉"的 bug 形态。
  */
-static face_report_display_t s_display = { -1, -1, -1 };
+static face_report_display_t s_display = { -1, -1, -1, -1, -1, -1, -1 };
 
 void face_report_set_display(const face_report_display_t *d)
 {
@@ -44,6 +44,10 @@ void face_report_set_display(const face_report_display_t *d)
         s_display.brightness = -1;
         s_display.rotation = -1;
         s_display.screen_on = -1;
+        s_display.trip_distance_km = -1;
+        s_display.trip_max_kmh = -1;
+        s_display.trip_avg_kmh = -1;
+        s_display.trip_time_s = -1;
         return;
     }
     s_display = *d;
@@ -57,9 +61,7 @@ face_report_display_t face_report_get_display(void)
 void face_report_reset_for_test(void)
 {
     s_current = -1;
-    s_display.brightness = -1;
-    s_display.rotation = -1;
-    s_display.screen_on = -1;
+    face_report_set_display(NULL);
 }
 
 static void sb_init(sb_t *sb, char *buf, size_t cap)
@@ -155,6 +157,24 @@ static void sb_put_display(sb_t *sb)
     }
     if (s_display.screen_on >= 0) {
         sb_printf(sb, ",\"screen\":%d", s_display.screen_on ? 1 : 0);
+    }
+    /*
+     * 行程统计（P1-1）。用 %.2f 控制体积：里程/速度保留两位小数足够
+     * （里程 0.01km=10m 分辨率，速度 0.01km/h 远超仪表显示精度）。
+     * ⚠️ 这几个字段会让载荷变长，故**放在最后** —— 一旦触到上限，
+     *    被牺牲的是行程数字而不是表盘列表本身。
+     */
+    if (s_display.trip_distance_km >= 0) {
+        sb_printf(sb, ",\"trip_km\":%.2f", s_display.trip_distance_km);
+    }
+    if (s_display.trip_max_kmh >= 0) {
+        sb_printf(sb, ",\"trip_max\":%.2f", s_display.trip_max_kmh);
+    }
+    if (s_display.trip_avg_kmh >= 0) {
+        sb_printf(sb, ",\"trip_avg\":%.2f", s_display.trip_avg_kmh);
+    }
+    if (s_display.trip_time_s >= 0) {
+        sb_printf(sb, ",\"trip_s\":%ld", s_display.trip_time_s);
     }
 }
 

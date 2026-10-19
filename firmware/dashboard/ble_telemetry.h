@@ -20,6 +20,7 @@
 
 #include "control.h"
 #include "nav_parse.h"
+#include "bright_parse.h"
 #include "telemetry.h"
 
 /* 初始化 BLE Peripheral 并开始广播；成功返回 true */
@@ -87,5 +88,21 @@ bool ble_telemetry_take_nav(nav_msg_t *out);
 
 /* 导航消息累计接收数（含被跳过的畸形包另计）*/
 void ble_telemetry_nav_stats(uint32_t *ok);
+
+/*
+ * ---- 亮度曲线包 ----
+ *
+ * 与遥测同一特征下行，用 "t":"bright" 区分。App 在**每次连接时**下发一次
+ * （与纯时间包同一时机），设备据此按时段自动调亮度。
+ *
+ * 取用语义与 ble_telemetry_take_nav 一致：**取走即清标记**，
+ * 保证主循环不会反复应用同一个包。
+ *
+ * @return true 表示本次取到一个新亮度包（内容写入 *out）。
+ */
+bool ble_telemetry_take_bright(bright_packet_t *out);
+
+/* 亮度包统计：ok = 成功解析数，err = 畸形/解析失败数 */
+void ble_telemetry_bright_stats(uint32_t *ok, uint32_t *err);
 
 #endif /* BLE_TELEMETRY_H */

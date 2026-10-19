@@ -126,18 +126,38 @@ final class NavSession: ObservableObject {
     @Published private(set) var isChoosingRoute = false
 
     /**
-     导航中的**剩余 ETA**（如 "14:32 到"）。
+     导航中的**剩余耗时**（秒）。
 
      ⚠️ `NavSnapshot` 里**没有剩余耗时**字段（只有剩余里程），所以这里按
      `剩余里程 / 总里程` 的比例去缩放总耗时 —— 是个估算，但比"不显示"有用得多：
      用户开车时想知道的是"我几点到"，不是"还剩 12.3 公里"。
+
+     从 `remainingEtaText` 里抽出来，是因为 P1-2 还需要**时长本身**
+     （"18 分钟"），不能只有到达时刻。
      */
-    var remainingEtaText: String? {
+    var remainingDurationS: Double? {
         guard isNavigating,
               let totalD = activeRouteDistanceM, totalD > 0,
               let totalS = activeRouteDurationS else { return nil }
         let frac = max(0.0, min(1.0, snapshot.remainingDistanceM / totalD))
-        return NavCandidateFormat.etaText(durationS: totalS * frac)
+        return totalS * frac
+    }
+
+    /// 导航中的**剩余 ETA**（如 "14:32 到"）
+    var remainingEtaText: String? {
+        guard let d = remainingDurationS else { return nil }
+        return NavCandidateFormat.etaText(durationS: d)
+    }
+
+    /**
+     导航中的"剩余"摘要（P1-2）：`12.3 km · 18 分钟 · 14:32 到`。
+
+     拿不到总时长时退化为只有距离（仍比什么都不显示好）。
+     */
+    var remainingSummaryText: String {
+        NavCandidateFormat.remainingSummaryText(
+            distanceM: snapshot.remainingDistanceM,
+            durationS: remainingDurationS)
     }
 
     /// 进入「换一条路线」（P2-4）
@@ -145,6 +165,19 @@ final class NavSession: ObservableObject {
 
     /// 放弃「换一条路线」，回到导航
     func cancelChoosingRoute() { isChoosingRoute = false }
+
+    /**
+     解除"已到达"状态，但保留路线（P0-2：用户点「继续导航到附近」）。
+
+     到达后界面会给两个选项：结束行程 / 继续导航到附近。后者需要**退出到达态**
+     但不清目的地 —— 否则用户想找停车场时还得重新搜一遍目的地。
+     */
+    func leaveArrivedState() {
+        core.leaveArrivedState()
+        /* 快照要跟着更新，否则界面下一帧仍是 arrived（状态是快照驱动的）*/
+        snapshot = core.snapshot
+        updateStatusText(snapshot)
+    }
 
     /// 最近一次定位（WGS84）。取候选与逆地理编码都要用它做起点。
     private var lastVehicleWGS84: GeoPoint?

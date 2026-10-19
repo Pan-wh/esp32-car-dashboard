@@ -51,6 +51,8 @@ extern "C" {
 #include "nav.h"         /* 导航状态/动作枚举与文案（纯 C，共用） */
 #include "ui_clock.h"    /* 数字时钟页（时间同步状态标签） */
 #include "ui_timesrc.h"
+#include "auto_bright.h"   /* 亮度曲线：按时段自动调 */
+#include "bright_parse.h"   /* 亮度曲线包解析（App → 设备）*/
 #include "telemetry.h"   /* BLE 遥测协议解析（纯 C，模拟器/固件共用） */
 }
 
@@ -581,12 +583,112 @@ static bool s_screen_off = false;    /* 息屏状态 */
  */
 static void sync_display_report_state(void);
 
-/* 应用亮度（带限幅；0 视为最低可见亮度，见 control_clamp_brightness） */
+/**
+ * 亮度曲线状态（App 经 BLE 下发，见 bright_parse.h）。
+ *
+ * 为什么由 **App** 决定曲线而不是设备自己存：曲线是"用户偏好"，
+ * 而 App 才是用户改设置的地方；设备只负责按时段应用。
+ * 每次连接 App 都会重发，所以设备**不需要**持久化（也避免两边不一致）。
+ *
+ * ⚠️ 声明必须放在 `apply_brightness_user()` **之前**（C++ 先声明后使用）。
+ */
+static auto_bright_config_t s_bright_cfg;
+static bool s_bright_cfg_valid = false; /* 是否收到过 App 的曲线 */
+/**
+ 用户是否手动调过亮度（**手动优先**）。
+
+ 一旦为 true，自动曲线就**不再改亮度**，直到：
+   - App 重发曲线（用户在 App 里重新打开自动开关），或
+   - 设备重启
+ 否则会出现"我调好了它又给我改回去"的经典烦躁体验。
+ */
+static bool s_bright_user_override = false;
+/** 上次应用过的亮度值（避免每帧重复写面板命令）*/
+static int s_bright_last_applied = -1;
+/**
+ 本次开机是否已成功同步过一次曲线。
+
+ 用于区分"开机后首次收到曲线"与"蓝牙重连重发"：
+   - 首次：必须应用（否则曲线永远不生效）
+   - 重连且内容相同：**不应用**（否则会覆盖用户手动调的亮度，
+     表现为"亮度突然像被重置"）
+ */
+static bool s_bright_first_sync = false;
+/**
+ 请求亮度曲线**立即**重算（跳过 20 秒节流）。
+ 
+ 由 `time_sync_maybe()` 在校时成功后置位：RTC 时间可能大幅跳变
+ （如开机时 RTC 无效、App 连上才校到真实时间），若仍等满 20 秒，
+ 屏幕会在这段时间里停在按 00:00 算出的夜间亮度上。
+ 
+ 必须声明在此处（apply_brightness / time_sync_maybe 都会用到）。
+ */
+static volatile bool s_bright_recalc_now = false;
+
+/**
+ 亮度**平滑过渡**（目标值），-1 表示无过渡在进行。
+ 
+ ## 为什么需要
+ 
+ App 拖动滑块时以 20Hz 连发亮度，但固件对 BLE 命令做的是 **latest-wins 合并**
+ （`s_pending_cmd` 只有一个槽位）。多条命令在同一个主循环帧之前到达时，
+ 中间值被丢弃 → 屏幕**跳变**到最终值，而不是逐格跟随。
+ 用户形容就是"发个包重置的感觉"。
+ 
+ ## 做法
+ 
+ 命令只设置**目标值**，主循环每帧朝目标推进一小步（`BRIGHT_STEP_PER_FRAME`）。
+ 这样：
+   - 不依赖命令到达频率（丢了多少中间值都无所谓，最终会走到目标）
+   - 视觉上是连续渐变，不会"啪"地跳
+ */
+static int s_bright_target = -1;
+
+/** 每帧亮度最多变化多少（255 满量程约 1.3 秒走完，与拖动速度匹配）*/
+#define BRIGHT_STEP_PER_FRAME 3
+
+/**
+ 应用亮度（底层，**不要直接调用**）。
+ 
+ ⚠️ 请改用下面两个语义明确的入口：
+   - `apply_brightness_user()`  —— 用户在 App/串口上手动调的
+   - `apply_brightness_auto()`  —— 自动曲线调的
+ 用两个入口而不是一个，是为了让"手动优先"这条规则**由类型区分**，
+ 而不是靠调用方记得去置标志位（那样迟早会漏一处，
+ 表现为"用户调完亮度又被自动改回去"，且极难复现）。
+ */
 static void apply_brightness(uint8_t v)
 {
   s_brightness = v;
   gfx->setBrightness(v);
   sync_display_report_state();
+}
+
+/**
+ 用户**手动**改亮度 → 置"手动优先"，自动曲线从此让位。
+ 直到 App 重发曲线（用户在 App 里重开自动）或设备重启。
+ */
+static void apply_brightness_user(uint8_t v)
+{
+  apply_brightness(v);
+  /*
+   * 只有"自动本来是开着的"才需要置覆盖标志：
+   * 若自动本就没开，用户拖亮度是常规操作，不该被记成"覆盖"。
+   */
+  if (s_bright_cfg_valid && s_bright_cfg.enabled) {
+    if (!s_bright_user_override) {
+      Serial.println("[亮度] 用户手动调节 → 自动曲线暂停（重开自动或重启后恢复）");
+    }
+    s_bright_user_override = true;
+  }
+  /* 让自动曲线知道"当前值就是它算的那个"，避免下一帧又写一次 */
+  s_bright_last_applied = (int)v;
+}
+
+/** 自动曲线应用亮度（不置覆盖标志）*/
+static void apply_brightness_auto(uint8_t v)
+{
+  apply_brightness(v);
 }
 
 static void apply_screen(bool off)
@@ -660,6 +762,16 @@ static void sync_display_report_state(void)
   d.brightness = (int)s_brightness;
   d.rotation = s_display_rot; /* -1 = 尚未设置 → 上报时省略该字段 */
   d.screen_on = s_screen_off ? 0 : 1;
+  /*
+   * 行程统计（P1-1）：由**设备**累积并上报，App 只显示。
+   *
+   * ⚠️ 每个字段都必须显式赋值 —— C 的结构体局部变量**不会自动清零**，
+   *    漏掉的字段会带上栈上的垃圾值（可能被当成合法里程发出去）。
+   */
+  d.trip_distance_km = s_trip.distance_km;
+  d.trip_max_kmh = (double)s_trip.max_kmh;
+  d.trip_avg_kmh = (double)telemetry_trip_avg_kmh(&s_trip);
+  d.trip_time_s = (long)(s_trip.time_ms / 1000);
   face_report_set_display(&d);
   s_faces_dirty = true; /* 让主循环立刻重新上报 */
 }
@@ -887,7 +999,22 @@ static void control_poll(void)
   switch (cmd.kind) {
     case CONTROL_BRIGHTNESS: {
       uint8_t v = control_clamp_brightness(cmd.value);
-      apply_brightness(v);
+      /*
+       * ⚠️ 只设**目标值**，不直接写面板。
+       *
+       * 原因：App 拖动滑块时以 20Hz 连发，而固件对命令是 latest-wins 合并 ——
+       * 直接应用会让屏幕**跳变**到最终值（用户形容"像发个包重置"）。
+       * 设目标后由主循环逐帧逼近，视觉上是连续渐变。
+       *
+       * 同时置"手动优先"（用户明确调了亮度）。
+       */
+      s_bright_target = (int)v;
+      if (s_bright_cfg_valid && s_bright_cfg.enabled) {
+        if (!s_bright_user_override) {
+          Serial.println("[亮度] 用户手动调节 → 自动曲线暂停（重开自动或重启后恢复）");
+        }
+        s_bright_user_override = true;
+      }
       Serial.printf("[控制] 亮度 → %u\n", (unsigned)v);
       break;
     }
@@ -1652,7 +1779,8 @@ static void process_command(char *cmd)
       Serial.println("       用法：bright <0-255>");
     }
     else {
-      apply_brightness(control_clamp_brightness(v));
+      /* 串口也是"用户手动调" → 同样置手动优先，保持行为一致 */
+      apply_brightness_user(control_clamp_brightness(v));
       Serial.printf("[控制] 亮度 → %u\n", (unsigned)s_brightness);
     }
   }
@@ -1949,6 +2077,14 @@ static bool time_sync_maybe(int64_t utc_ms)
                 lt->tm_min, lt->tm_sec, (int)TZ_OFFSET_HOURS);
 
   ble_telemetry_set_status("time-synced");
+
+  /*
+   * 时间刚被校准 → 让亮度曲线立刻重算一次。
+   * 典型场景：开机时 RTC 无效（或电池掉电后时间归零），App 连上校时
+   * 到真实时间。若不等这一步，屏幕会在最长 20 秒里停在按 00:00 算出的
+   * 夜间亮度上。
+   */
+  s_bright_recalc_now = true;
   return true;
 }
 
@@ -2041,8 +2177,205 @@ static void nav_poll(void)
   }
 }
 
+/**
+ * 消费 App 下发的亮度曲线包（主循环调用，BLE 回调只暂存）。
+ *
+ * 状态变量（s_bright_cfg / s_bright_user_override 等）声明在文件上方
+ * `apply_brightness_user()` 之前 —— C++ 要求先声明后使用。
+ */
+static void bright_poll(void)
+{
+  /*
+   * ── 亮度平滑过渡 ──────────────────────────────
+   *
+   * 每帧朝 s_bright_target 推进一步。放在最前面，因为它是**每帧**都要做的
+   * （而曲线重算受 20 秒节流限制）。
+   */
+  if (s_bright_target >= 0) {
+    const int cur = (int)s_brightness;
+    if (cur == s_bright_target) {
+      s_bright_target = -1; /* 到位 */
+    }
+    else {
+      int step = s_bright_target - cur;
+      if (step > BRIGHT_STEP_PER_FRAME) step = BRIGHT_STEP_PER_FRAME;
+      else if (step < -BRIGHT_STEP_PER_FRAME) step = -BRIGHT_STEP_PER_FRAME;
+      /*
+       * ⚠️ 直接写面板，**不走** apply_brightness() ——
+       * 后者会调 sync_display_report_state() → 置 s_faces_dirty → 触发 BLE 上报。
+       * 过渡期间每帧都上报会把链路刷爆（这正是之前"卡死"那类问题的形态）。
+       * 只更新 s_brightness 与面板，上报留到**到位那一帧**做一次。
+       */
+      s_brightness = (uint8_t)(cur + step);
+      gfx->setBrightness(s_brightness);
+      if (s_brightness == s_bright_target) {
+        s_bright_target = -1;
+        sync_display_report_state(); /* 到位：同步一次给 App */
+      }
+      return; /* 过渡中：本帧不再处理曲线 */
+    }
+  }
+
+  bright_packet_t pkt;
+  if (ble_telemetry_take_bright(&pkt)) {
+    if (!s_bright_cfg_valid) {
+      s_bright_cfg = auto_bright_default_config();
+      s_bright_cfg_valid = true;
+    }
+
+    /*
+     * ⚠️ 先记下旧配置，用来判断"这次收到的曲线**内容**是否真的变了"。
+     *
+     * 为什么必须判断：App 在**每次 BLE 连接**都会重发曲线（这是刻意的，
+     * 因为设备不持久化）。若收到包就无条件解除"手动优先"，那么蓝牙任何
+     * 一次抖动重连都会把用户手动调好的亮度**打回曲线值** ——
+     * 实测现象就是"亮度突然像被重置了一样，一下子变得很暗"
+     * （用户手动调到 220，重连后曲线在夜间时段 → 骤降到 40）。
+     *
+     * 所以规则改为：
+     *   - 曲线**内容变了** → 用户在 App 里改过设置 → 解除手动优先（正确意图）
+     *   - 曲线**内容没变** → 只是重连重发 → **保留**手动优先，不动亮度
+     */
+    const auto_bright_config_t before = s_bright_cfg;
+    bright_apply_packet(&s_bright_cfg, &pkt);
+
+    const bool changed =
+        (before.enabled != s_bright_cfg.enabled) ||
+        (before.day_start_min != s_bright_cfg.day_start_min) ||
+        (before.day_end_min != s_bright_cfg.day_end_min) ||
+        (before.day_level != s_bright_cfg.day_level) ||
+        (before.night_level != s_bright_cfg.night_level) ||
+        (before.ramp_min != s_bright_cfg.ramp_min);
+
+    /*
+     * 曲线内容变了 = 用户在 App 里**明确表达**了意图 → 解除手动覆盖。
+     * 这条是"手动优先"的出口：否则用户拖过滑块后，就再也没有办法
+     * 让自动重新生效（只能重启设备）。
+     *
+     * 若内容没变（重连重发）则**不解除** —— 见上面的说明。
+     */
+    /*
+     * `reset` = App 明确请求"恢复自动调节"（用户在 App 里点「按时段自动」）。
+     *
+     * 为什么不能只靠 changed 判断：切回自动时曲线内容**往往没变**
+     * （还是原来那些值），会被当成"重连重发"而保持手动亮度 ——
+     * 用户点了"自动"却没反应。
+     */
+    const bool want_reset = (pkt.has_reset && pkt.reset != 0);
+
+    if (changed || want_reset) {
+      s_bright_first_sync = true; /* ⚠️ 必须在这里也置位：否则重发时会被误判成"首次" */
+      s_bright_user_override = false;
+      /*
+       * 立刻按新曲线应用一次。
+       *
+       * ⚠️ 除了清 last_applied，还必须置 s_bright_recalc_now ——
+       *    否则会被 20 秒的 RTC 读取节流挡住，用户改完设置要等最多
+       *    20 秒才看到变化（实测确认：改完亮度立刻查询仍是旧值，
+       *    等 22 秒后才正确）。
+       */
+      s_bright_last_applied = -1;
+      s_bright_recalc_now = true;
+
+      Serial.printf("[亮度] 曲线更新：%s 白天 %02d:%02d-%02d:%02d 亮度 %d/%d 过渡 %d 分\n",
+                    s_bright_cfg.enabled ? "启用" : "关闭",
+                    s_bright_cfg.day_start_min / 60, s_bright_cfg.day_start_min % 60,
+                    s_bright_cfg.day_end_min / 60, s_bright_cfg.day_end_min % 60,
+                    s_bright_cfg.day_level, s_bright_cfg.night_level, s_bright_cfg.ramp_min);
+    }
+    else if (!s_bright_first_sync) {
+      s_bright_first_sync = true;
+      /* 首次收到（本次开机还没收到过）→ 应用一次，让曲线立刻生效 */
+      s_bright_user_override = false;
+      s_bright_last_applied = -1;
+      s_bright_recalc_now = true; /* 同上：跳过 20 秒节流 */
+
+      Serial.printf("[亮度] 曲线首次同步：%s 白天 %02d:%02d-%02d:%02d 亮度 %d/%d 过渡 %d 分\n",
+                    s_bright_cfg.enabled ? "启用" : "关闭",
+                    s_bright_cfg.day_start_min / 60, s_bright_cfg.day_start_min % 60,
+                    s_bright_cfg.day_end_min / 60, s_bright_cfg.day_end_min % 60,
+                    s_bright_cfg.day_level, s_bright_cfg.night_level, s_bright_cfg.ramp_min);
+    }
+    else {
+      /* 重连重发且内容相同：什么都不做，保住用户手动调的亮度 */
+      Serial.println("[亮度] 收到相同曲线（重连重发）→ 保持当前亮度，不覆盖");
+    }
+    return;
+  }
+
+  /*
+   * 每帧都算一次其实很便宜（几次整数比较），但**写面板命令**不便宜，
+   * 且会打断显示。所以只在"算出来的值与上次不同"时才写。
+   *
+   * ⚠️ 必须用 RTC 时间而不是 millis()：曲线是按"钟点"而非"开机时长"。
+   */
+  if (!s_bright_cfg_valid || !s_bright_cfg.enabled) return;
+  if (s_bright_user_override) return;
+
+  /*
+   * ⚠️ 性能关键：**不要每帧读 RTC**。
+   *
+   * `ui_timesrc_now()` 在真机上会通过 I2C 读 PCF85063 的 7 字节寄存器。
+   * 主循环约 100-200 次/秒，每帧读一次 I2C 会把循环频率**腰斩**
+   * （实测：198 次/秒 → 78~97 次/秒），并间接拖慢渲染
+   * （渲染最大耗时从 4ms 涨到 57ms）。
+   *
+   * 而亮度曲线只需要"分钟"级精度 —— 所以按 millis() 节流，
+   * 每 20 秒才真正读一次 RTC。
+   *
+   * 用 `!=` 比较而不是"每次加 20 秒"，是为了让 millis() 回绕时
+   * 也能自然恢复（回绕后差值仍可能满足条件，不会永久卡死）。
+   */
+  static uint32_t s_last_rtc_ms = 0;
+  static bool s_rtc_read_once = false;
+  const uint32_t now_ms = millis();
+  /*
+   * s_bright_recalc_now 由 time_sync_maybe() 置位：校时后时间可能大跳，
+   * 必须立刻重算，不能等满 20 秒（否则屏幕在这段时间里是错的亮度）。
+   */
+  if (!s_bright_recalc_now) {
+    if (s_rtc_read_once && (now_ms - s_last_rtc_ms) < 20000u) return;
+  }
+  s_bright_recalc_now = false;
+  s_last_rtc_ms = now_ms;
+  s_rtc_read_once = true;
+
+  /*
+   * ★ RTC 无效时**不要**按曲线调亮度。
+   *
+   * `rtc_time_provider()` 在 rtc_ok=false 时把 tm 清零（"不伪造时间"），
+   * 于是 now_min 恒为 0（00:00），曲线会一直判定为夜间 →
+   * **白天也把屏幕调到夜间亮度**，在阳光下几乎看不清。
+   *
+   * 这比"不调亮度"更糟：用户会觉得设备坏了。所以 RTC 不可用时
+   * 直接放弃自动调节，保持当前亮度不动（用户仍可手动调）。
+   *
+   * 何时会发生：RTC 芯片焊接不良 / 纽扣电池耗尽 / I2C 异常。
+   * 本机 rtc_init() 失败时会置 rtc_ok=false（见 print_time 的同名判断）。
+   */
+  if (!rtc_ok) return;
+
+  struct tm now;
+  ui_timesrc_now(&now);
+  /*
+   * 再兜一层：即使 rtc_ok=true，个别情况下读回的日期也可能是 0
+   * （例如电池刚掉、寄存器复位）。年份 < 2020 视为"时间不可信"，
+   * 同样不据此调亮度。
+   */
+  if (now.tm_year + 1900 < 2020) return;
+
+  const int now_min = auto_bright_minutes_of_day(now.tm_hour, now.tm_min);
+
+  const int want = auto_bright_level_at(now_min, &s_bright_cfg);
+  if (want == s_bright_last_applied) return;
+
+  apply_brightness_auto((uint8_t)want);
+  s_bright_last_applied = want;
+}
+
 static void ble_poll(void)
 {
+  bright_poll(); /* 亮度曲线：先应用（与会话/时序无关，尽快生效）*/
   nav_poll();
   nav_map_tick(millis()); /* 地图窗口：累积超时与过期检查 */
   ui_nav_map_update();  /* 地图层：按航向/位移节流重算（无窗口时自动隐藏）*/
@@ -2224,10 +2557,53 @@ void loop()
       Serial.printf("[表盘] 当前 → %d(%s)（已存 NVS，断电后沿用）\n", cur,
                     ui_pages_current_face_name());
     }
-    /* App 改动过启用/隐藏状态 → 重新上报，保持两端一致 */
+    /*
+     * App 改动过启用/隐藏状态 → 重新上报，保持两端一致。
+     *
+     * ⚠️ **必须节流**，否则会引发"同步好几次才对"和卡死：
+     *
+     * `sync_display_report_state()` 会置 s_faces_dirty，而它被
+     *   - 每次亮度变化（自动曲线 / 用户调）
+     *   - 每 10 秒的行程统计
+     * 调用。若不节流，整份表盘列表（约 460 字节）就会被反复推给 App，
+     * App 每次都要重新 Read → 又触发一轮同步 → 雪崩。
+     *
+     * 实测症状（2026-10-19）：表盘列表在 1 秒内上报 3 次、之后每 13 秒一次，
+     * 循环频率从 198 次/秒掉到 78 次/秒，最终卡死。
+     *
+     * 现在限制为**最快 2 秒一次**。表盘列表本身几乎不变，延迟 2 秒
+     * 用户完全无感；而状态字段（亮度/方向/行程）由 App 周期 Read 获取，
+     * 不依赖这条通知。
+     */
     if (s_faces_dirty) {
-      s_faces_dirty = false;
-      publish_faces_report();
+      static uint32_t s_last_faces_report_ms = 0;
+      const uint32_t now_f = millis();
+      /* 首次（s_last_faces_report_ms==0）立即上报，之后按 2 秒节流 */
+      if (s_last_faces_report_ms == 0 || (now_f - s_last_faces_report_ms) >= 2000u) {
+        s_last_faces_report_ms = now_f;
+        s_faces_dirty = false;
+        publish_faces_report();
+      }
+    }
+    /*
+     * 行程统计周期性上报（P1-1）。
+     *
+     * ⚠️ **必须节流**：行程每帧都在变，若跟着主循环上报会以数百 Hz 刷 BLE，
+     *    把遥测和地图消息挤掉（地图队列本来就对带宽敏感）。
+     *    10 秒一次足够 —— 用户看的是"跑了多少公里"，不是秒级精度。
+     *
+     * 只在**有效行驶**（trip.time_ms 在增长）时才上报，停车时不必刷。
+     */
+    {
+      static uint32_t last_trip_report_ms = 0;
+      static uint32_t last_trip_time_ms = 0;
+      uint32_t now_t = millis();
+      if (s_trip.time_ms != last_trip_time_ms &&
+          now_t - last_trip_report_ms >= 10000) {
+        last_trip_report_ms = now_t;
+        last_trip_time_ms = s_trip.time_ms;
+        sync_display_report_state(); /* 会把 s_faces_dirty 置位，下一帧真正上报 */
+      }
     }
   }
   ph_end(PH_FACE);
