@@ -461,6 +461,72 @@ static int photo_scan_dir(photo_file_meta_t *metas, char names[][64], int cap, i
 }
 
 
+
+/**
+ * [诊断] 打印 `/photos/` 下每个 .pgi 的关键字段，用于**逐字段对比**：
+ *   - 设备自己用 `pgibench` 生成的（能正常播放）
+ *   - App 上传的（播放时 LOAD ERROR）
+ *
+ * 打印内容：文件大小 / magic / 宽高 / 帧数 / fps / flags / 表偏移 / 数据偏移 /
+ *           第 0 帧的偏移与长度 / 该帧长度是否等于 `1024 + w*h`。
+ *
+ * **这是排"格式对不上"最快的办法** —— 不用猜，直接看哪一项不一样。
+ */
+static void photo_dump_dir(void)
+{
+  if (!sd_mount()) {
+    Serial.println("[转储] 未检测到 TF 卡");
+    return;
+  }
+  File dir = SD_MMC.open(PHOTO_DIR);
+  if (!dir || !dir.isDirectory()) {
+    Serial.println("[转储] 打不开 /photos/");
+    return;
+  }
+  int n = 0;
+  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+    if (f.isDirectory()) continue;
+    const char *nm = f.name();
+    size_t len = strlen(nm);
+    if (len < 5 || strcasecmp(nm + len - 4, ".pgi") != 0) continue;
+
+    size_t fsz = (size_t)f.size();
+    uint8_t hdr[PGI_HEADER_BYTES + PGI_MAX_FRAMES * PGI_FRAME_ENTRY_BYTES];
+    size_t got = 0;
+    f.seek(0);
+    while (got < sizeof(hdr)) {
+      int r = f.read(hdr + got, sizeof(hdr) - got);
+      if (r <= 0) break;
+      got += (size_t)r;
+    }
+
+    pgi_header_t h;
+    bool ok = pgi_parse_header(hdr, got, &h);
+    Serial.printf("[转储] %s  大小=%u 解析=%s\n", nm, (unsigned)fsz, ok ? "OK" : "失败");
+    if (!ok) continue;
+
+    /* 第 0 帧：直接从表里读（与 photo_poll 的做法一致）*/
+    uint32_t off = 0, size = 0;
+    if (h.frame_table_off + PGI_FRAME_ENTRY_BYTES <= got) {
+      const uint8_t *e = hdr + h.frame_table_off;
+      off = (uint32_t)e[0] | ((uint32_t)e[1] << 8) | ((uint32_t)e[2] << 16) | ((uint32_t)e[3] << 24);
+      size = (uint32_t)e[4] | ((uint32_t)e[5] << 8) | ((uint32_t)e[6] << 16) | ((uint32_t)e[7] << 24);
+    }
+    const uint32_t expect = (uint32_t)PGI_PALETTE_BYTES + (uint32_t)h.width * h.height;
+    Serial.printf("         w=%u h=%u 帧=%u fps=%u flags=%u 表=%u 数据=%u\n",
+                  (unsigned)h.width, (unsigned)h.height, (unsigned)h.frame_count,
+                  (unsigned)h.fps, (unsigned)h.flags, (unsigned)h.frame_table_off,
+                  (unsigned)h.data_off);
+    Serial.printf("         帧0: off=%u size=%u（应为 %u）%s\n", (unsigned)off,
+                  (unsigned)size, (unsigned)expect, (size == expect) ? "✓" : "✗ 不符");
+    Serial.printf("         应有总大小=%u（%u 字节/帧 × %u 帧 + 头表）\n",
+                  (unsigned)(h.data_off + expect * h.frame_count), (unsigned)expect,
+                  (unsigned)h.frame_count);
+    n++;
+  }
+  if (n == 0) Serial.println("[转储] /photos/ 里没有 .pgi");
+}
+
 /* ── 打开当前文件 / 取帧信息 ─────────────────────────────────── */
 static bool photo_open_file(const char *name)
 {
@@ -2293,6 +2359,7 @@ static void print_help(void)
   Serial.println("       sd [list]                TF 卡状态（`sd list` 连根目录一起列）");
   Serial.println("       sdbench [KB]      SD 读写测速（S1：决定要不要 RLE）");
   Serial.println("       pgibench [帧] [边长] 生成 .pgi 并测解码耗时（S3：定 fps 目标）");
+  Serial.println("       photodump          打印 /photos/ 下每个 .pgi 的头部字段（排格式问题）");
   Serial.println("       wifi on|off        开/关上传热点（CarDash·免密，IP 192.168.4.1）");
   Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
@@ -2526,6 +2593,10 @@ static void process_command(char *cmd)
     else {
       Serial.println("[上传] 用法：wifi on（开热点）| wifi off（关闭）| wifi（查状态）");
     }
+  }
+  else if (strncmp(cmd, "photodump", 9) == 0) {
+    /* [诊断] 打印 /photos/ 下每个 .pgi 的头部关键字段 */
+    photo_dump_dir();
   }
   else if (strncmp(cmd, "sdbench", 7) == 0) {
     /* [S1] SD 顺序读写测速：sdbench [KB] */
