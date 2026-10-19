@@ -824,8 +824,19 @@ static void wifi_stop_http(void)
  * 所以**只在需要上传时才开**，传完关掉。
  */
 #define WIFI_AP_SSID  "CarDash"
-#define WIFI_AP_PASS  "cardash1"      /* WPA2 最少 8 位 */
 #define WIFI_AP_IP    "192.168.4.1"   /* ESP32 softAP 的默认网关地址 */
+/*
+ * **免密热点**（用户要求：连接尽量简单，别输密码）。
+ *
+ * 安全影响（刻意接受，写在这里免得以后有人以为是漏配）：
+ *   - 附近任何人（约 10~30 米）都能连上本热点；
+ *   - **但他们拿不走照片** —— HTTP 只有 `/`（一句说明）与 `/upload` 两个端点，
+ *     **没有任何读取接口**，SD 卡内容无法被下载；
+ *   - 真实风险是**别人往 /photos/ 扔垃圾文件 / 填满卡 / 覆盖同名文件**。
+ *     已保留的防护：只接受 POST /upload、文件名由服务端清洗、强制 .pgi 后缀、
+ *     单文件 ≤ 8MB。
+ *   - 若日后要收紧，改回 `softAP(ssid, "cardash1")` 即可（一行）。 */
+#define WIFI_AP_OPEN  1
 
 static bool wifi_start_ap(void)
 {
@@ -833,7 +844,11 @@ static bool wifi_start_ap(void)
 
   WiFi.mode(WIFI_AP);
   /* 只允许一个客户端：够用，也少一个被占满的可能 */
-  bool ok = WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASS, 6 /*channel*/, 0 /*hidden*/, 1 /*maxConn*/);
+#if WIFI_AP_OPEN
+  bool ok = WiFi.softAP(WIFI_AP_SSID, NULL, 6 /*channel*/, 0 /*hidden*/, 1 /*maxConn*/);
+#else
+  bool ok = WiFi.softAP(WIFI_AP_SSID, "cardash1", 6, 0, 1);
+#endif
   if (!ok) {
     Serial.println("[上传] 开热点失败");
     WiFi.mode(WIFI_OFF);
@@ -841,8 +856,12 @@ static bool wifi_start_ap(void)
   }
   s_wifi_up = true;
   s_wifi_ip = WiFi.softAPIP().toString();
-  Serial.printf("[上传] 热点已开启：SSID=%s 密码=%s IP=%s\n", WIFI_AP_SSID, WIFI_AP_PASS,
+#if WIFI_AP_OPEN
+  Serial.printf("[上传] 热点已开启：SSID=%s（**免密**）IP=%s\n", WIFI_AP_SSID, s_wifi_ip.c_str());
+#else
+  Serial.printf("[上传] 热点已开启：SSID=%s 密码=cardash1 IP=%s\n", WIFI_AP_SSID,
                 s_wifi_ip.c_str());
+#endif
   wifi_start_http();
   return true;
 }
@@ -2194,7 +2213,7 @@ static void print_help(void)
   Serial.println("       sd [list]                TF 卡状态（`sd list` 连根目录一起列）");
   Serial.println("       sdbench [KB]      SD 读写测速（S1：决定要不要 RLE）");
   Serial.println("       pgibench [帧] [边长] 生成 .pgi 并测解码耗时（S3：定 fps 目标）");
-  Serial.println("       wifi on|off        开/关上传热点（CarDash，IP 192.168.4.1）");
+  Serial.println("       wifi on|off        开/关上传热点（CarDash·免密，IP 192.168.4.1）");
   Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
   Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
@@ -2410,8 +2429,8 @@ static void process_command(char *cmd)
     while (*arg == ' ') arg++;
     if (*arg == '\0') {
       if (s_wifi_up) {
-        Serial.printf("[上传] 热点 %s 已开启，IP=%s，密码=%s\n", WIFI_AP_SSID,
-                      s_wifi_ip.c_str(), WIFI_AP_PASS);
+        Serial.printf("[上传] 热点 %s 已开启，IP=%s，%s\n", WIFI_AP_SSID, s_wifi_ip.c_str(),
+                      WIFI_AP_OPEN ? "免密" : "密码 cardash1");
       } else {
         Serial.println("[上传] 未开启（敲 wifi on 开热点）");
       }

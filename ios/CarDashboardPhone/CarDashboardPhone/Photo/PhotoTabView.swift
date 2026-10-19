@@ -51,7 +51,7 @@ struct PhotoTabView: View {
      */
     private static let deviceAPHost = "192.168.4.1"
     private static let deviceAPSSID = "CarDash"
-    private static let deviceAPPass = "cardash1"
+    /* 热点是**免密**的（见固件 WIFI_AP_OPEN），所以这里不需要密码 */
 
     @State private var deviceHost: String = PhotoTabView.deviceAPHost
     @State private var uploadStatus = ""
@@ -225,7 +225,7 @@ struct PhotoTabView: View {
                 } header: {
                     Text("上传到仪表")
                 } footer: {
-                    Text("仪表会开一个名为 \(Self.deviceAPSSID) 的热点（IP 固定 \(Self.deviceAPHost)）。\n点上面的按钮会自动连上它并上传，传完自动断开。\n\n手机需先在串口敲 `wifi on` 打开热点。")
+                    Text("仪表会开一个名为 \(Self.deviceAPSSID) 的**免密**热点（IP 固定 \(Self.deviceAPHost)）。\n点上面的按钮会自动连上它并上传，传完自动断开。\n\n手机需先在串口敲 `wifi on` 打开热点。")
                 }
             }
             .navigationTitle("照片")
@@ -464,11 +464,8 @@ struct PhotoTabView: View {
     /// 若系统拒绝（没授权/已连别的网被拒），回退提示用户手动连接。
     private func joinDeviceHotspot() async throws {
         let manager = NEHotspotConfigurationManager.shared
-        let cfg = NEHotspotConfiguration(
-            ssid: Self.deviceAPSSID,
-            passphrase: Self.deviceAPPass,
-            isWEP: false
-        )
+        // 免密网络：不传 passphrase
+        let cfg = NEHotspotConfiguration(ssid: Self.deviceAPSSID)
         cfg.joinOnce = true   // 传完就断，不长期占用
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
