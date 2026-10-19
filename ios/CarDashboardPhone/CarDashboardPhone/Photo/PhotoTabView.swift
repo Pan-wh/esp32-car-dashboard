@@ -44,6 +44,13 @@ struct PhotoTabView: View {
     /// 视频自动降帧率的提示（跨 await 传递用 static，SwiftUI 里 @State 不方便从非主线程写）
     private static var pendingFPSNote: String?
 
+    /// 设备 IP（上传用）。先手动填 —— BLE 自动发现留待下一步。
+    @State private var deviceHost: String =
+        UserDefaults.standard.string(forKey: "photoDeviceHost") ?? ""
+    @State private var uploadStatus = ""
+    @State private var uploading = false
+    @State private var pgiBytes = 0
+
     var body: some View {
         NavigationStack {
             Form {
@@ -180,7 +187,38 @@ struct PhotoTabView: View {
                             .foregroundStyle(.green)
                     }
                 } footer: {
-                    Text("导出的 GIF 会存进系统相册，可直接查看播放效果。\n（传到设备需要 Wi-Fi 上传，在后续版本接入。）")
+                    Text("导出的 GIF 会存进系统相册，可直接查看播放效果。")
+                }
+
+                // ── 上传到仪表 ──
+                Section {
+                    HStack {
+                        Text("仪表 IP")
+                        TextField("192.168.1.23", text: $deviceHost)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .onChange(of: deviceHost) { _, v in
+                                UserDefaults.standard.set(v, forKey: "photoDeviceHost")
+                            }
+                    }
+                    Button {
+                        Task { await upload() }
+                    } label: {
+                        Label(uploading ? "正在上传…" : "上传到仪表", systemImage: "paperplane")
+                    }
+                    .disabled(uploading || rawFrames.isEmpty || deviceHost.isEmpty)
+
+                    if !uploadStatus.isEmpty {
+                        Text(uploadStatus)
+                            .font(.footnote)
+                            .foregroundStyle(uploading ? .orange : .secondary)
+                    }
+                } header: {
+                    Text("上传到仪表")
+                } footer: {
+                    Text("先在串口敲 `wifi <SSID> <密码>` 让仪表连上同一网络，\n屏幕/串口会显示它的 IP。\n上传的是设备的 .pgi 格式（不是 GIF）。")
                 }
             }
             .navigationTitle("照片")
@@ -358,6 +396,79 @@ struct PhotoTabView: View {
             return try PhotoStudio.frames(from: data, maxSize: size)
         }
         throw PhotoStudioError.cannotReadSource
+    }
+
+    // MARK: - 上传到仪表
+
+    private func upload() async {
+        await MainActor.run {
+            uploading = true
+            uploadStatus = "正在编码 .pgi…"
+        }
+        do {
+            // 用**当前（已裁切/变换后）的帧**编码，而不是原始帧
+            let frames = try currentFrames()
+            let pgi = try PgiEncoder.encode(frames: frames, fps: Int(fps.rounded()))
+            await MainActor.run {
+                pgiBytes = pgi.count
+                uploadStatus = "已编码 \(pgi.count / 1024) KB，正在上传…"
+            }
+            try await post(pgi)
+            await MainActor.run {
+                uploadStatus = "上传成功（\(pgi.count / 1024) KB）"
+                uploading = false
+            }
+        } catch {
+            await MainActor.run {
+                uploadStatus = "失败：\(error.localizedDescription)"
+                uploading = false
+            }
+        }
+    }
+
+    /// 取"当前变换下"的帧（与预览一致）
+    private func currentFrames() throws -> [CGImage] {
+        guard !rawFrames.isEmpty else { throw PgiEncoderError.noFrames }
+        let side = 300.0
+        let t = PhotoStudio.CropTransform(
+            zoom: committedZoom,
+            panX: committedPan.width / side,
+            panY: committedPan.height / side,
+            rotation: committedRotation
+        )
+        let w = Int(rawFrames[0].image.width)
+        var out: [CGImage] = []
+        for f in rawFrames {
+            let ui = UIImage(cgImage: f.image)
+            let cropped = PhotoStudio.squareCropped(ui, size: w, transform: t)
+            guard let cg = cropped.cgImage else { continue }
+            out.append(cg)
+        }
+        guard !out.isEmpty else { throw PgiEncoderError.noFrames }
+        return out
+    }
+
+    private func post(_ data: Data) async throws {
+        let host = deviceHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = "app-\(Int(Date().timeIntervalSince1970)).pgi"
+        guard var comps = URLComponents(string: "http://\(host)/upload") else {
+            throw PgiEncoderError.encodeFailed("IP 格式不对")
+        }
+        comps.queryItems = [URLQueryItem(name: "name", value: name)]
+        guard let url = comps.url else { throw PgiEncoderError.encodeFailed("IP 格式不对") }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 60
+
+        let (resp, _) = try await URLSession.shared.upload(for: req, from: data)
+        guard let http = resp as? HTTPURLResponse else {
+            throw PgiEncoderError.encodeFailed("没有 HTTP 响应")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw PgiEncoderError.encodeFailed("HTTP \(http.statusCode)")
+        }
     }
 
     private func exportGIF() async {

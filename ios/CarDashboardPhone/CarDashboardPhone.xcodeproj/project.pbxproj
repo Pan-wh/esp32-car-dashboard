@@ -12,6 +12,7 @@
 		1B29D7BD67889A0DD744AEB2 /* DeviceFaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = E64BAD111E15074881588DA9 /* DeviceFaces.swift */; };
 		1C5E05BEF4B31F6822AF15AB /* NavSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0F08529A4B704779DCBA324 /* NavSession.swift */; };
 		2CAD85C2A35EDE6F108759D5 /* LinkDiagnosticsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE45E92AB18790F5DEEC4D67 /* LinkDiagnosticsUITests.swift */; };
+		3018B8CC27327830A0ED7E61 /* PgiEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5F6B915D99002C13202454C /* PgiEncoder.swift */; };
 		3239D7D58593FE67CC934905 /* SearchScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2406B7F1DD46956082EA1FB2 /* SearchScope.swift */; };
 		3325EE76B686D6EB495C914E /* BLEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DE0D4C728A95FAA998B576A /* BLEClient.swift */; };
 		46438450E48C6B4345A8C6CB /* GatewayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56BCEAC1DF235542021ED285 /* GatewayClient.swift */; };
@@ -76,6 +77,7 @@
 		B0D22E82D27FEF70D93C0BC2 /* CarDashboardPhoneUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarDashboardPhoneUITests.swift; sourceTree = "<group>"; };
 		B0F08529A4B704779DCBA324 /* NavSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavSession.swift; sourceTree = "<group>"; };
 		BE45E92AB18790F5DEEC4D67 /* LinkDiagnosticsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkDiagnosticsUITests.swift; sourceTree = "<group>"; };
+		D5F6B915D99002C13202454C /* PgiEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PgiEncoder.swift; sourceTree = "<group>"; };
 		DF05B783835A0124086B067A /* MapWindowPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapWindowPacket.swift; sourceTree = "<group>"; };
 		E64BAD111E15074881588DA9 /* DeviceFaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceFaces.swift; sourceTree = "<group>"; };
 		F24318EB88B2A85793A51CDA /* DriveSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DriveSessionManager.swift; sourceTree = "<group>"; };
@@ -121,6 +123,7 @@
 		708943520AF86F88DBC74662 /* Photo */ = {
 			isa = PBXGroup;
 			children = (
+				D5F6B915D99002C13202454C /* PgiEncoder.swift */,
 				17E6C9F5FC9F24EA0245320B /* PhotoStudio.swift */,
 				3CB72B88040EFB021774BEDE /* PhotoTabView.swift */,
 			);
@@ -270,6 +273,7 @@
 				1C5E05BEF4B31F6822AF15AB /* NavSession.swift in Sources */,
 				7AF96BA573D86CC751645EA3 /* NavTabView.swift in Sources */,
 				F1113ED7DB3204F0330C15D1 /* NavUIState.swift in Sources */,
+				3018B8CC27327830A0ED7E61 /* PgiEncoder.swift in Sources */,
 				C9D472A467D95CDEE9321D54 /* PhotoStudio.swift in Sources */,
 				9D6068EC79797F94053E11A1 /* PhotoTabView.swift in Sources */,
 				3239D7D58593FE67CC934905 /* SearchScope.swift in Sources */,
