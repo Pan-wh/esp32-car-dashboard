@@ -68,6 +68,15 @@ extern "C" {
 #include "telemetry.h"   /* BLE 遥测协议解析（纯 C，模拟器/固件共用） */
 }
 
+/*
+ * ⚠️ C++ 的头（WebServer / WiFi）要放在 `extern "C" { ... }` 块**之后**：
+ *   - 放**里面** → "template with C linkage"（WebServer 的类模板不能有 C 链接）；
+ *   - 放**前面** → 它自己内部的 `extern "C"` 会与后续 `static` 声明冲突。
+ * 放在块之后是唯一两个问题都不犯的位置。
+ */
+#include <WebServer.h>     /* 照片上传：HTTP 接收 .pgi */
+#include <WiFi.h>          /* 照片上传：设备连入同一局域网（STA）*/
+
 #include "ble_telemetry.h" /* BLE Peripheral（固件侧，C++） */
 
 /* ---------------- 可调参数 ---------------- */
@@ -665,6 +674,171 @@ static void photo_poll(void)
     ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
   }
   s_photo_loading = -1;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Wi-Fi 照片上传（P5）
+ *
+ * ## 为什么用 **STA** 而不是 AP
+ *
+ * 设计文档原本写的是"设备起 AP，手机连过去"。实现时改成 **STA**（设备连入家里
+ * 的 Wi-Fi），理由：
+ *   1. **手机不用切网络** —— 切 Wi-Fi 会断掉 App 的其它连接，体验差；
+ *   2. **好测** —— Mac 和手机在同一网段，直接 curl 就能验证，不必先连设备热点；
+ *   3. 同网段本来就允许（用户在家/车库上传）。
+ *
+ * ## 安全边界
+ *
+ *   - 只接受 **POST /upload?name=xxx.pgi**，且文件名**由服务端清洗**（只留 basename、
+ *     强制 .pgi 后缀），永不接受客户端指定的路径；
+ *   - 只写 `/photos/`；
+ *   - 单文件上限 8 MB；
+ *   - 上传期间**暂停轮播**（避免同时读写同一文件）；
+ *   - 凭据存 NVS，**不回显**（日志只打 SSID 与 IP）。
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+#define PHOTO_UPLOAD_MAX (8u * 1024u * 1024u)
+
+static WebServer *s_http = NULL;
+static bool s_wifi_up = false;
+static bool s_upload_active = false;
+static size_t s_upload_bytes = 0;
+static File   s_upload_file;
+static char   s_upload_name[64];
+static String s_wifi_ip;
+
+/** 从 URL 的 name 参数里取出**安全的**文件名：只留 basename，强制 .pgi 后缀 */
+static void sanitize_name(const String &raw, char *out, size_t cap)
+{
+  const char *p = raw.c_str();
+  const char *base = strrchr(p, '/');
+  if (base != NULL) p = base + 1;
+  base = strrchr(p, '\\');
+  if (base != NULL) p = base + 1;
+
+  snprintf(out, cap, "%s", p);
+  /* 去掉 .pgi 后缀（稍后统一补），并清掉危险字符 */
+  char *dot = strrchr(out, '.');
+  if (dot != NULL && strcasecmp(dot, ".pgi") == 0) *dot = '\0';
+  for (char *q = out; *q != '\0'; q++) {
+    if (!isalnum((unsigned char)*q) && *q != '_' && *q != '-') *q = '_';
+  }
+  if (out[0] == '\0') snprintf(out, cap, "upload");
+  size_t n = strlen(out);
+  snprintf(out + n, cap - n, ".pgi");
+}
+
+/** 上传结束（成功/失败都走这里；失败时删掉半截文件）*/
+static void upload_finish(bool ok)
+{
+  if (s_upload_file) s_upload_file.close();
+  if (!ok && s_upload_name[0] != '\0') {
+    char path[96];
+    snprintf(path, sizeof(path), PHOTO_DIR "/%s", s_upload_name);
+    SD_MMC.remove(path);
+  }
+  s_upload_active = false;
+  s_upload_name[0] = '\0';
+  s_upload_bytes = 0;
+}
+
+static void wifi_start_http(void)
+{
+  if (s_http != NULL) return;
+  s_http = new WebServer(80);
+
+  /* 浏览器/调试用：一个极简说明页 */
+  s_http->on("/", HTTP_GET, []() {
+    s_http->send(200, "text/plain; charset=utf-8",
+                 "car-dashboard photo upload\n"
+                 "POST /upload?name=xxx.pgi  (raw body, <= 8MB)\n");
+  });
+
+  /* 上传：用 upload 流，避免把 8MB 全缓冲进内存 */
+  s_http->on("/upload", HTTP_POST,
+             []() { /* 收尾（upload 回调里已处理，这里只回 200）*/
+               s_http->send(200, "application/json",
+                            String("{\"ok\":true,\"bytes\":") + String((unsigned)s_upload_bytes) + "}");
+             },
+             []() {
+               HTTPUpload &up = s_http->upload();
+               if (up.status == UPLOAD_FILE_START) {
+                 if (!sd_mount()) return;
+                 SD_MMC.mkdir(PHOTO_DIR);
+                 sanitize_name(s_http->arg("name"), s_upload_name, sizeof(s_upload_name));
+                 char path[96];
+                 snprintf(path, sizeof(path), PHOTO_DIR "/%s", s_upload_name);
+                 s_upload_file = SD_MMC.open(path, FILE_WRITE);
+                 s_upload_bytes = 0;
+                 s_upload_active = true;
+                 Serial.printf("[上传] 开始 → %s\n", path);
+               } else if (up.status == UPLOAD_FILE_WRITE) {
+                 if (!s_upload_file) return;
+                 if (s_upload_bytes + up.currentSize > PHOTO_UPLOAD_MAX) {
+                   Serial.println("[上传] 超过 8MB，放弃");
+                   upload_finish(false);
+                   return;
+                 }
+                 s_upload_file.write(up.buf, up.currentSize);
+                 s_upload_bytes += up.currentSize;
+               } else if (up.status == UPLOAD_FILE_END) {
+                 upload_finish(true);
+                 Serial.printf("[上传] 完成 %s（%u 字节）\n", s_upload_name, (unsigned)s_upload_bytes);
+               } else if (up.status == UPLOAD_FILE_ABORTED) {
+                 Serial.println("[上传] 中断");
+                 upload_finish(false);
+               }
+             });
+
+  s_http->begin();
+  Serial.println("[上传] HTTP 已启动（端口 80）");
+}
+
+static void wifi_stop_http(void)
+{
+  if (s_http != NULL) {
+    s_http->stop();
+    delete s_http;
+    s_http = NULL;
+  }
+  if (s_wifi_up) {
+    WiFi.disconnect(true, false);
+    WiFi.mode(WIFI_OFF);
+    s_wifi_up = false;
+    s_wifi_ip = "";
+  }
+}
+
+/** 连入局域网（凭据存 NVS）。成功返回 true。 */
+static bool wifi_join(const char *ssid, const char *pass, uint32_t timeout_ms)
+{
+  if (ssid == NULL || ssid[0] == '\0') return false;
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false); /* 关省电：上传时延更稳，代价是功耗略高 */
+  WiFi.begin(ssid, pass);
+
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < timeout_ms) {
+    delay(100);
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.printf("[上传] 连不上 Wi-Fi（%s），状态=%d\n", ssid, (int)WiFi.status());
+    WiFi.mode(WIFI_OFF);
+    return false;
+  }
+  s_wifi_up = true;
+  s_wifi_ip = WiFi.localIP().toString();
+  Serial.printf("[上传] 已连入 %s，IP = %s（RSSI %d dBm）\n", ssid, s_wifi_ip.c_str(),
+                (int)WiFi.RSSI());
+  wifi_start_http();
+  return true;
+}
+
+/** 主循环：处理 HTTP 请求 */
+static void wifi_poll(void)
+{
+  if (s_http != NULL) s_http->handleClient();
 }
 
 /* ── S1 / S3 spike：SD 读速与 .pgi 解码耗时 ────────────────────────
@@ -2008,6 +2182,7 @@ static void print_help(void)
   Serial.println("       sd [list]                TF 卡状态（`sd list` 连根目录一起列）");
   Serial.println("       sdbench [KB]      SD 读写测速（S1：决定要不要 RLE）");
   Serial.println("       pgibench [帧] [边长] 生成 .pgi 并测解码耗时（S3：定 fps 目标）");
+  Serial.println("       wifi <ssid> <密码>   连入局域网并启动照片上传（wifi off / wifi auto）");
   Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
   Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
@@ -2212,6 +2387,49 @@ static void process_command(char *cmd)
    * 也匹配进去（当时确实踩了 —— 敲 sdbench 却走了 sd_report，什么测速都没有）。
    * 前缀匹配的命令，长名字必须排在短名字前面。
    */
+  else if (strncmp(cmd, "wifi", 4) == 0) {
+    /*
+     * wifi <ssid> <pass>  —— 连入局域网并启动上传服务
+     * wifi off            —— 断开并关闭
+     * wifi                —— 查状态
+     * 凭据存 NVS（下次上电可用 `wifi auto` 自动连）；日志不回显密码。
+     */
+    const char *arg = cmd + 4;
+    while (*arg == ' ') arg++;
+    if (*arg == '\0') {
+      Serial.printf("[上传] %s，IP=%s\n", s_wifi_up ? "已连接" : "未连接",
+                    s_wifi_up ? s_wifi_ip.c_str() : "-");
+    }
+    else if (strncmp(arg, "off", 3) == 0) {
+      wifi_stop_http();
+      Serial.println("[上传] 已断开");
+    }
+    else if (strncmp(arg, "auto", 4) == 0) {
+      Preferences pr;
+      String ssid, pass;
+      if (pr.begin(PHOTO_PREF_NS, true)) {
+        ssid = pr.getString("wssid", "");
+        pass = pr.getString("wpass", "");
+        pr.end();
+      }
+      if (ssid.length() == 0) Serial.println("[上传] NVS 里没有 Wi-Fi 凭据");
+      else wifi_join(ssid.c_str(), pass.c_str(), 15000);
+    }
+    else {
+      char ssid[40] = {0}, pass[64] = {0};
+      if (sscanf(arg, "%39s %63s", ssid, pass) == 2) {
+        Preferences pr;
+        if (pr.begin(PHOTO_PREF_NS, false)) {
+          pr.putString("wssid", ssid);
+          pr.putString("wpass", pass);
+          pr.end();
+        }
+        wifi_join(ssid, pass, 15000);
+      } else {
+        Serial.println("[上传] 用法：wifi <ssid> <密码> | wifi off | wifi auto");
+      }
+    }
+  }
   else if (strncmp(cmd, "sdbench", 7) == 0) {
     /* [S1] SD 顺序读写测速：sdbench [KB] */
     int kb = 1024;
@@ -3227,6 +3445,7 @@ void loop()
   ph_begin();
   control_poll();             /* BLE 下行控制：亮度 / 息屏 / 表盘 */
   photo_poll();              /* 照片表盘：仅在它可见时工作（轮播/读帧/解码）*/
+  wifi_poll();               /* 照片上传：处理 HTTP（未连接时是空操作）*/
   rotation_poll();            /* 合并后的方向切换（见 s_pending_rot 说明）*/
 
   /*
