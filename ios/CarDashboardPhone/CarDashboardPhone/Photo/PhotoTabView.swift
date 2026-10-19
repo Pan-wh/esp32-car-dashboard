@@ -28,6 +28,18 @@ struct PhotoTabView: View {
     /// 视频转 GIF 的目标帧率
     @State private var fps: Double = 12
 
+    /// 手势变换：捏合缩放 + 拖动选取。
+    ///
+    /// `zoom` / `pan` 是**实时**值（跟手），`committed*` 是**手势结束时**的基准，
+    /// 两者相加得到当前变换。这样捏合过程中能即时预览，松手后才重新裁切。
+    @State private var zoom: CGFloat = 1
+    @State private var pan: CGSize = .zero
+    @State private var committedZoom: CGFloat = 1
+    @State private var committedPan: CGSize = .zero
+
+    /// 未经过手势的原始正方形帧（换素材时填；改手势时在此基础上重新裁切）
+    @State private var rawFrames: [StudioFrame] = []
+
     var body: some View {
         NavigationStack {
             Form {
@@ -44,23 +56,56 @@ struct PhotoTabView: View {
 
                 // ── 预览（圆屏遮罩，所见即所得）──
                 Section("预览") {
-                    ZStack {
-                        Color.black
-                        if let preview {
-                            Image(uiImage: preview)
-                                .resizable()
-                                .scaledToFill()
-                        } else {
-                            Text("还没有素材")
-                                .foregroundStyle(.secondary)
+                    GeometryReader { geo in
+                        let side = min(geo.size.width, geo.size.height)
+                        ZStack {
+                            Color.black
+                            if let preview {
+                                /*
+                                 * 预览 = 裁好的正方形 + **与导出一致的变换**。
+                                 * 顺序很重要：先 scale 再 offset（与 squareCropped 里的
+                                 * "先绕中心放大、再按比例平移"是同一套语义）。
+                                 */
+                                Image(uiImage: preview)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: side, height: side)
+                                    .scaleEffect(zoom)
+                                    .offset(x: pan.width + committedPan.width,
+                                            y: pan.height + committedPan.height)
+                            } else {
+                                Text("还没有素材")
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                        .frame(width: side, height: side)
+                        // 圆形遮罩：与设备圆屏一致，也是"最终会显示的区域"
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+                        )
+                        .contentShape(Circle())
+                        .gesture(
+                            SimultaneousGesture(magnifyGesture(side: side),
+                                                dragGesture(side: side))
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                     .frame(height: 300)
-                    .frame(maxWidth: .infinity)
-                    // 圆形遮罩：与设备的圆屏一致
-                    .clipShape(Circle())
-                    .overlay(Circle().strokeBorder(.white.opacity(0.15), lineWidth: 1))
                     .padding(.vertical, 6)
+
+                    if preview != nil {
+                        HStack {
+                            Text("缩放 \(String(format: "%.1f", zoom))×")
+                                .font(.caption).monospacedDigit()
+                            Spacer()
+                            Button("复位") { resetTransform() }
+                                .font(.caption)
+                                .buttonStyle(.borderless)
+                        }
+                        .foregroundStyle(.secondary)
+                    }
 
                     if !status.isEmpty {
                         Text(status)
@@ -112,6 +157,82 @@ struct PhotoTabView: View {
         }
     }
 
+    // MARK: - 手势
+
+    private func magnifyGesture(side: CGFloat) -> some Gesture {
+        MagnificationGesture()
+            .onChanged { v in
+                let raw = committedZoom * v
+                zoom = min(max(raw, PhotoStudio.CropTransform.minZoom), PhotoStudio.CropTransform.maxZoom)
+            }
+            .onEnded { _ in
+                committedZoom = zoom
+                pan = .zero
+                reapplyTransform()
+            }
+    }
+
+    private func dragGesture(side: CGFloat) -> some Gesture {
+        DragGesture()
+            .onChanged { v in
+                pan = v.translation
+            }
+            .onEnded { v in
+                committedPan.width += v.translation.width
+                committedPan.height += v.translation.height
+                pan = .zero
+                clampCommittedPan(side: side)
+                reapplyTransform()
+            }
+    }
+
+    /// 把平移夹到"图片仍能铺满圆"的范围内
+    private func clampCommittedPan(side: CGFloat) {
+        guard side > 0 else { return }
+        /*
+         * 可平移的极限：图片放大后超出的部分的一半。
+         * 边长 = side * zoom，圆形区域 = side；最大偏移 = (side*zoom - side)/2。
+         * 用比例保存（除以 side），所以预览/导出尺寸变化都通用。
+         */
+        let limitX = (committedZoom - 1) / 2
+        let limitY = (committedZoom - 1) / 2
+        committedPan.width = min(max(committedPan.width / side, -limitX), limitX) * side
+        committedPan.height = min(max(committedPan.height / side, -limitY), limitY) * side
+    }
+
+    private func resetTransform() {
+        zoom = 1
+        pan = .zero
+        committedZoom = 1
+        committedPan = .zero
+        reapplyTransform()
+    }
+
+    /// 手势结束后：用当前变换重新裁切所有帧，并重新编码 GIF
+    private func reapplyTransform() {
+        guard !rawFrames.isEmpty else { return }
+        let side = 300.0   // 只用它的**倒数**做比例换算，具体值不影响结果
+        let t = PhotoStudio.CropTransform(
+            zoom: committedZoom,
+            panX: committedPan.width / side,
+            panY: committedPan.height / side
+        )
+        // 换帧：把 rawFrames 按变换重新画一遍（尺寸用原始 size）
+        let w = Int(rawFrames[0].image.width)
+        var out: [StudioFrame] = []
+        out.reserveCapacity(rawFrames.count)
+        for f in rawFrames {
+            let ui = UIImage(cgImage: f.image)
+            let cropped = PhotoStudio.squareCropped(ui, size: w, transform: t)
+            guard let cg = cropped.cgImage else { continue }
+            out.append(StudioFrame(image: cg, duration: f.duration))
+        }
+        guard !out.isEmpty else { return }
+        frameCount = out.count
+        preview = UIImage(cgImage: out[0].image)
+        gifData = try? PhotoStudio.gifData(from: out)
+    }
+
     // MARK: - 载入
 
     private func load(_ item: PhotosPickerItem) async {
@@ -127,6 +248,8 @@ struct PhotoTabView: View {
         do {
             let frames = try await loadFrames(from: item)
             await MainActor.run {
+                rawFrames = frames
+                zoom = 1; pan = .zero; committedZoom = 1; committedPan = .zero
                 frameCount = frames.count
                 if let first = frames.first {
                     preview = UIImage(cgImage: first.image)

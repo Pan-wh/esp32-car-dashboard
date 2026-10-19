@@ -81,8 +81,28 @@ enum PhotoStudio {
 
     // MARK: - 裁切
 
-    /// 居中裁成正方形后缩放到 `size`
+    /// 手势变换（缩放 + 平移），与预览上的手势一一对应。
+    ///
+    /// `panFraction` 是**相对预览边长的比例**（不是像素、也不是点）——
+    /// 这样预览尺寸变了、导出尺寸变了，同一个值都能用，**所见即所得**。
+    struct CropTransform: Equatable {
+        var zoom: CGFloat = 1          // 1...maxZoom
+        var panX: CGFloat = 0          // -0.5...0.5（相对边长）
+        var panY: CGFloat = 0
+
+        static let minZoom: CGFloat = 1
+        static let maxZoom: CGFloat = 4
+        static let identity = CropTransform()
+    }
+
+    /// 居中裁成正方形后缩放到 `size`（无手势）
     static func squareCropped(_ image: UIImage, size: Int) -> UIImage {
+        squareCropped(image, size: size, transform: .identity)
+    }
+
+    /// 居中裁成正方形、缩放到 `size`，并应用手势变换
+    static func squareCropped(_ image: UIImage, size: Int,
+                              transform: CropTransform) -> UIImage {
         let target = CGSize(width: size, height: size)
         let format = UIGraphicsImageRendererFormat.default()
         format.scale = 1            // 1x：输出就是 size×size 像素，避免 Retina 放大
@@ -94,7 +114,25 @@ enum PhotoStudio {
             UIColor.black.setFill()
             ctx.fill(CGRect(origin: .zero, size: target))
 
-            let rect = CropGeometry.aspectFillRect(imageSize: image.size, target: target)
+            var rect = CropGeometry.aspectFillRect(imageSize: image.size, target: target)
+
+            /*
+             * 手势变换：
+             *   - 缩放围绕**画布中心** → 同时放大 rect 并保持中心不动；
+             *   - 平移用**相对边长的比例**，乘上目标边长换算成像素。
+             * 与预览上的 `.scaleEffect(zoom) + .offset(...)` 是同一套语义。
+             */
+            let zoom = max(CropTransform.minZoom, min(transform.zoom, CropTransform.maxZoom))
+            if zoom != 1 {
+                let cx = rect.midX, cy = rect.midY
+                rect = CGRect(x: cx - rect.width * zoom / 2,
+                              y: cy - rect.height * zoom / 2,
+                              width: rect.width * zoom,
+                              height: rect.height * zoom)
+            }
+            rect.origin.x -= transform.panX * target.width
+            rect.origin.y -= transform.panY * target.height
+
             image.draw(in: rect)
         }
     }
