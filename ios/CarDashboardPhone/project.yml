@@ -31,6 +31,10 @@ targets:
         NSLocationAlwaysAndWhenInUseUsageDescription: 锁屏/后台驾驶时继续更新车速
         NSBluetoothAlwaysUsageDescription: 连接车载仪表并发送驾驶数据
         NSBluetoothPeripheralUsageDescription: 连接车载仪表并发送驾驶数据
+        # 照片页要把生成的 GIF 存进相册
+        NSPhotoLibraryAddUsageDescription: 把裁切生成的 GIF 保存到相册
+        # PhotosPicker 本身不需要读权限，但导出后用户可能想再选回来
+        NSPhotoLibraryUsageDescription: 选择图片或视频作为照片表盘的素材
         UIBackgroundModes:
           - location
           - bluetooth-central

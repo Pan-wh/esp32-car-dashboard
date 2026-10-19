@@ -144,8 +144,11 @@ struct ContentView: View {
             NavTabView(session: session)
                 .tag(2)
                 .tabItem { Label("导航", systemImage: "location.north.line") }
-            settingsTab
+            PhotoTabView()
                 .tag(3)
+                .tabItem { Label("照片", systemImage: "photo.on.rectangle") }
+            settingsTab
+                .tag(4)
                 .tabItem { Label("设置", systemImage: "gearshape") }
         }
         /*
@@ -156,10 +159,11 @@ struct ContentView: View {
          */
         .onAppear {
             #if DEBUG
-            // 便于截图/验收：-tab 0|1|2 指定初始标签页（正常运行由用户点切换）
+            // 便于截图/验收：-tab 0..4 指定初始标签页（正常运行由用户点切换）
+            // ⚠️ 上界要跟着 Tab 数量走：加了「照片」页后忘了改，-tab 3 会被静默丢掉。
             let args = ProcessInfo.processInfo.arguments
             if let i = args.firstIndex(of: "-tab"), i + 1 < args.count,
-               let t = Int(args[i + 1]), (0...2).contains(t) {
+               let t = Int(args[i + 1]), (0...4).contains(t) {
                 selectedTab = t
             }
             if BLEClient.demoModeEnabled && !session.ble.facesReady {

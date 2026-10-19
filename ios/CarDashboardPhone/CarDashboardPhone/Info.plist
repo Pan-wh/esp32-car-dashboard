@@ -28,6 +28,10 @@
 	<string>锁屏/后台驾驶时继续更新车速</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>驾驶会话中读取您的车速、航向与位置</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>把裁切生成的 GIF 保存到相册</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>选择图片或视频作为照片表盘的素材</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
