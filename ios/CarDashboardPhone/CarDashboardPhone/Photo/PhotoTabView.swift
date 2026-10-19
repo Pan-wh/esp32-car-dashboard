@@ -506,6 +506,30 @@ struct PhotoTabView: View {
     /// 用 `NEHotspotConfiguration` 是为了**免去用户去「设置」里手动选网络** ——
     /// 这正是用户要的"像蓝牙那样，扫到就连上"。
     /// 若系统拒绝（没授权/已连别的网被拒），回退提示用户手动连接。
+    /*
+     * 面向 ESP32 `WebServer` 的会话配置。
+     *
+     * ⚠️ **关键：`Connection: close`**。
+     *
+     * 现象：Safari 打开 `http://192.168.4.1/ping` 正常，但 App 里 URLSession 报
+     * **URLError -1005（连接被断开）**。
+     * 差别在**连接复用**：Safari 每次新开连接，而 URLSession 默认会复用（keep-alive）。
+     * ESP32 的 `WebServer` 对 keep-alive 支持很差 —— 它处理完一个请求就断开，
+     * 下一次复用这条连接时就被判成"连接被断开"。
+     *
+     * 强制 `Connection: close` 后，每个请求都是新连接，与 Safari 行为一致。
+     */
+    private static func makeSession(timeout: TimeInterval) -> URLSession {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = timeout
+        cfg.timeoutIntervalForResource = timeout * 2
+        cfg.httpShouldUsePipelining = false
+        cfg.httpMaximumConnectionsPerHost = 1
+        cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+        cfg.httpAdditionalHeaders = ["Connection": "close"]
+        return URLSession(configuration: cfg)
+    }
+
     /// 最小连通性探针：GET /ping。成功返回 nil，失败返回"错误码 + 说明"。
     private func probe() async -> String? {
         guard let url = URL(string: "http://\(Self.deviceAPHost)/ping") else {
@@ -513,9 +537,8 @@ struct PhotoTabView: View {
         }
         var req = URLRequest(url: url)
         req.timeoutInterval = 8
-        let cfg = URLSessionConfiguration.default
-        cfg.allowsCellularAccess = false
-        let session = URLSession(configuration: cfg)
+        req.setValue("close", forHTTPHeaderField: "Connection")
+        let session = Self.makeSession(timeout: 8)
         do {
             let (_, resp) = try await session.data(for: req)
             guard let http = resp as? HTTPURLResponse else { return "非 HTTP 响应" }
@@ -620,25 +643,34 @@ struct PhotoTabView: View {
         req.timeoutInterval = 60
 
         /*
-         * ⚠️ **必须禁止蜂窝网络，否则请求根本发不出去。**
+         * 走与 probe 相同的会话配置（`Connection: close`）。
          *
-         * 实测证据（设备串口日志）：
-         *     [上传] 热点客户端数：1     ← 手机确实连着 CarDash
-         *     收到请求数：0              ← 但一个请求都没到
-         *
-         * 原因：CarDash 是**没有外网**的热点，iOS 会把它标记为"无互联网"，
-         * 于是把 App 的流量**默认路由到蜂窝** —— 请求发向 192.168.4.1 当然走不通。
-         *
-         * `allowsCellularAccess = false` 强制只走 Wi-Fi，请求才会真正发到设备上。
+         * 之前试过 `allowsCellularAccess = false` 想强制走 Wi-Fi，
+         * 但那会配合"无互联网的 Wi-Fi"让 iOS 一直等不到"可用网络"，
+         * 反而更容易报 -1005。**不使用**该限制，改用"短连接 + 重试"。
          */
-        let cfg = URLSessionConfiguration.default
-        cfg.allowsCellularAccess = false
-        cfg.waitsForConnectivity = true
-        cfg.timeoutIntervalForRequest = 60
-        cfg.timeoutIntervalForResource = 120
-        let session = URLSession(configuration: cfg)
+        req.setValue("close", forHTTPHeaderField: "Connection")
+        let session = Self.makeSession(timeout: 120)
 
-        let (resp, _) = try await session.upload(for: req, from: data)
+        // -1005 常见于设备处理完后主动断开，重试一次往往就成功
+        var lastError: Error?
+        var resp: URLResponse?
+        for attempt in 0..<3 {
+            do {
+                let (_, r) = try await session.upload(for: req, from: data)
+                resp = r
+                lastError = nil
+                break
+            } catch {
+                lastError = error
+                if attempt < 2 {
+                    await MainActor.run { uploadStatus = "上传中断，正在重试（\(attempt + 2)/3）…" }
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+                }
+            }
+        }
+        if let e = lastError { throw e }
+        guard let resp else { throw PgiEncoderError.encodeFailed("没有响应") }
         guard let http = resp as? HTTPURLResponse else {
             throw PgiEncoderError.encodeFailed("没有 HTTP 响应")
         }
