@@ -810,27 +810,39 @@ static void wifi_stop_http(void)
   }
 }
 
-/** 连入局域网（凭据存 NVS）。成功返回 true。 */
-static bool wifi_join(const char *ssid, const char *pass, uint32_t timeout_ms)
-{
-  if (ssid == NULL || ssid[0] == '\0') return false;
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false); /* 关省电：上传时延更稳，代价是功耗略高 */
-  WiFi.begin(ssid, pass);
+/*
+ * 开热点（AP 模式）。
+ *
+ * ## 为什么用 AP 而不是连家里 Wi-Fi
+ *
+ * 用户的原话："能不能像蓝牙那样，扫到设备 Wi-Fi，连上就能传" —— 那正是 AP 模式：
+ *   - **不需要家里有 Wi-Fi**（车上、外面都能传）；
+ *   - **IP 固定 192.168.4.1** —— App 不用手填、也不用 BLE 传 IP；
+ *   - 手机 Wi-Fi 列表里能**直接看到** `CarDash`。
+ *
+ * 代价：手机连热点时会**暂时断开原网络**（App 的网关连接会断一下），
+ * 所以**只在需要上传时才开**，传完关掉。
+ */
+#define WIFI_AP_SSID  "CarDash"
+#define WIFI_AP_PASS  "cardash1"      /* WPA2 最少 8 位 */
+#define WIFI_AP_IP    "192.168.4.1"   /* ESP32 softAP 的默认网关地址 */
 
-  uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < timeout_ms) {
-    delay(100);
-  }
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.printf("[上传] 连不上 Wi-Fi（%s），状态=%d\n", ssid, (int)WiFi.status());
+static bool wifi_start_ap(void)
+{
+  if (s_wifi_up) return true;
+
+  WiFi.mode(WIFI_AP);
+  /* 只允许一个客户端：够用，也少一个被占满的可能 */
+  bool ok = WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASS, 6 /*channel*/, 0 /*hidden*/, 1 /*maxConn*/);
+  if (!ok) {
+    Serial.println("[上传] 开热点失败");
     WiFi.mode(WIFI_OFF);
     return false;
   }
   s_wifi_up = true;
-  s_wifi_ip = WiFi.localIP().toString();
-  Serial.printf("[上传] 已连入 %s，IP = %s（RSSI %d dBm）\n", ssid, s_wifi_ip.c_str(),
-                (int)WiFi.RSSI());
+  s_wifi_ip = WiFi.softAPIP().toString();
+  Serial.printf("[上传] 热点已开启：SSID=%s 密码=%s IP=%s\n", WIFI_AP_SSID, WIFI_AP_PASS,
+                s_wifi_ip.c_str());
   wifi_start_http();
   return true;
 }
@@ -2182,7 +2194,7 @@ static void print_help(void)
   Serial.println("       sd [list]                TF 卡状态（`sd list` 连根目录一起列）");
   Serial.println("       sdbench [KB]      SD 读写测速（S1：决定要不要 RLE）");
   Serial.println("       pgibench [帧] [边长] 生成 .pgi 并测解码耗时（S3：定 fps 目标）");
-  Serial.println("       wifi <ssid> <密码>   连入局域网并启动照片上传（wifi off / wifi auto）");
+  Serial.println("       wifi on|off        开/关上传热点（CarDash，IP 192.168.4.1）");
   Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
   Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
@@ -2397,37 +2409,22 @@ static void process_command(char *cmd)
     const char *arg = cmd + 4;
     while (*arg == ' ') arg++;
     if (*arg == '\0') {
-      Serial.printf("[上传] %s，IP=%s\n", s_wifi_up ? "已连接" : "未连接",
-                    s_wifi_up ? s_wifi_ip.c_str() : "-");
+      if (s_wifi_up) {
+        Serial.printf("[上传] 热点 %s 已开启，IP=%s，密码=%s\n", WIFI_AP_SSID,
+                      s_wifi_ip.c_str(), WIFI_AP_PASS);
+      } else {
+        Serial.println("[上传] 未开启（敲 wifi on 开热点）");
+      }
     }
     else if (strncmp(arg, "off", 3) == 0) {
       wifi_stop_http();
       Serial.println("[上传] 已断开");
     }
-    else if (strncmp(arg, "auto", 4) == 0) {
-      Preferences pr;
-      String ssid, pass;
-      if (pr.begin(PHOTO_PREF_NS, true)) {
-        ssid = pr.getString("wssid", "");
-        pass = pr.getString("wpass", "");
-        pr.end();
-      }
-      if (ssid.length() == 0) Serial.println("[上传] NVS 里没有 Wi-Fi 凭据");
-      else wifi_join(ssid.c_str(), pass.c_str(), 15000);
+    else if (strncmp(arg, "on", 2) == 0 || strncmp(arg, "auto", 4) == 0) {
+      wifi_start_ap();
     }
     else {
-      char ssid[40] = {0}, pass[64] = {0};
-      if (sscanf(arg, "%39s %63s", ssid, pass) == 2) {
-        Preferences pr;
-        if (pr.begin(PHOTO_PREF_NS, false)) {
-          pr.putString("wssid", ssid);
-          pr.putString("wpass", pass);
-          pr.end();
-        }
-        wifi_join(ssid, pass, 15000);
-      } else {
-        Serial.println("[上传] 用法：wifi <ssid> <密码> | wifi off | wifi auto");
-      }
+      Serial.println("[上传] 用法：wifi on（开热点）| wifi off（关闭）| wifi（查状态）");
     }
   }
   else if (strncmp(cmd, "sdbench", 7) == 0) {

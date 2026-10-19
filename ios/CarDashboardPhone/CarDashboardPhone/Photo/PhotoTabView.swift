@@ -9,6 +9,7 @@
 //
 
 import AVFoundation
+import NetworkExtension
 import PhotosUI
 import SwiftUI
 
@@ -44,9 +45,15 @@ struct PhotoTabView: View {
     /// 视频自动降帧率的提示（跨 await 传递用 static，SwiftUI 里 @State 不方便从非主线程写）
     private static var pendingFPSNote: String?
 
-    /// 设备 IP（上传用）。先手动填 —— BLE 自动发现留待下一步。
-    @State private var deviceHost: String =
-        UserDefaults.standard.string(forKey: "photoDeviceHost") ?? ""
+    /*
+     * 设备的 AP 模式是**固定 IP**：ESP32 softAP 的网关恒为 192.168.4.1，
+     * 所以这里不需要用户填、也不需要 BLE 传 IP。
+     */
+    private static let deviceAPHost = "192.168.4.1"
+    private static let deviceAPSSID = "CarDash"
+    private static let deviceAPPass = "cardash1"
+
+    @State private var deviceHost: String = PhotoTabView.deviceAPHost
     @State private var uploadStatus = ""
     @State private var uploading = false
     @State private var pgiBytes = 0
@@ -206,9 +213,9 @@ struct PhotoTabView: View {
                     Button {
                         Task { await upload() }
                     } label: {
-                        Label(uploading ? "正在上传…" : "上传到仪表", systemImage: "paperplane")
+                        Label(uploading ? "正在上传…" : "连接仪表并上传", systemImage: "paperplane")
                     }
-                    .disabled(uploading || rawFrames.isEmpty || deviceHost.isEmpty)
+                    .disabled(uploading || rawFrames.isEmpty)
 
                     if !uploadStatus.isEmpty {
                         Text(uploadStatus)
@@ -218,7 +225,7 @@ struct PhotoTabView: View {
                 } header: {
                     Text("上传到仪表")
                 } footer: {
-                    Text("先在串口敲 `wifi <SSID> <密码>` 让仪表连上同一网络，\n屏幕/串口会显示它的 IP。\n上传的是设备的 .pgi 格式（不是 GIF）。")
+                    Text("仪表会开一个名为 \(Self.deviceAPSSID) 的热点（IP 固定 \(Self.deviceAPHost)）。\n点上面的按钮会自动连上它并上传，传完自动断开。\n\n手机需先在串口敲 `wifi on` 打开热点。")
                 }
             }
             .navigationTitle("照片")
@@ -413,6 +420,8 @@ struct PhotoTabView: View {
                 pgiBytes = pgi.count
                 uploadStatus = "已编码 \(pgi.count / 1024) KB，正在上传…"
             }
+            // 先确保连上仪表热点（已连则直接返回）
+            try await joinDeviceHotspot()
             try await post(pgi)
             await MainActor.run {
                 uploadStatus = "上传成功（\(pgi.count / 1024) KB）"
@@ -446,6 +455,39 @@ struct PhotoTabView: View {
         }
         guard !out.isEmpty else { throw PgiEncoderError.noFrames }
         return out
+    }
+
+    /// 加入仪表的 Wi-Fi 热点（设备开的是 AP，IP 固定 192.168.4.1）
+    ///
+    /// 用 `NEHotspotConfiguration` 是为了**免去用户去「设置」里手动选网络** ——
+    /// 这正是用户要的"像蓝牙那样，扫到就连上"。
+    /// 若系统拒绝（没授权/已连别的网被拒），回退提示用户手动连接。
+    private func joinDeviceHotspot() async throws {
+        let manager = NEHotspotConfigurationManager.shared
+        let cfg = NEHotspotConfiguration(
+            ssid: Self.deviceAPSSID,
+            passphrase: Self.deviceAPPass,
+            isWEP: false
+        )
+        cfg.joinOnce = true   // 传完就断，不长期占用
+
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            manager.apply(cfg) { error in
+                if let e = error as NSError? {
+                    // 已经连着这个网络时也会报这个错 —— 当作成功
+                    if e.domain == NEHotspotConfigurationErrorDomain,
+                       e.code == NEHotspotConfigurationError.alreadyAssociated.rawValue {
+                        cont.resume()
+                        return
+                    }
+                    cont.resume(throwing: e)
+                    return
+                }
+                cont.resume()
+            }
+        }
+        // 拿到 DHCP 需要一点时间
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
     }
 
     private func post(_ data: Data) async throws {

@@ -20,6 +20,8 @@ targets:
     platform: iOS
     sources:
       - CarDashboardPhone
+    entitlements:
+      path: CarDashboardPhone/CarDashboardPhone.entitlements
     info:
       path: CarDashboardPhone/Info.plist
       properties:
