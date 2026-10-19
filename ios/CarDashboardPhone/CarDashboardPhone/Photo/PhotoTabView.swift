@@ -176,21 +176,6 @@ struct PhotoTabView: View {
                     }
                 }
 
-                Section {
-                    Toggle("照片表盘轮播", isOn: Binding(
-                        get: { slideshowOn },
-                        set: { v in
-                            slideshowOn = v
-                            // 设备端命令：{"cmd":"photo_slide","value":0|1}
-                            _ = session.ble.sendCommand("{\"cmd\":\"photo_slide\",\"value\":\(v ? 1 : 0)}")
-                        }
-                    ))
-                } header: {
-                    Text("仪表设置")
-                } footer: {
-                    Text("关闭后仪表会停在当前那张照片（此时自动开启像素位移防烧屏）。\n需要先连上仪表。")
-                }
-
                 Section("参数") {
                     Picker("旋转角度", selection: Binding(
                         get: { Int(committedRotation) % 360 },
@@ -267,7 +252,6 @@ struct PhotoTabView: View {
                 } footer: {
                     Text("仪表**开机就会开**一个名为 \(Self.deviceAPSSID) 的免密热点（IP 固定 \(Self.deviceAPHost)）。\n点上面的按钮会自动连上它并上传，传完自动断开。\n\n如果自动连失败，手动在「设置 → 无线局域网」里选 \(Self.deviceAPSSID) 也能传。")
                 }
-            }
 
                 // ── 设备上的照片 ──
                 Section {
@@ -334,6 +318,7 @@ struct PhotoTabView: View {
                 } footer: {
                     Text("关闭轮播后仪表停在当前那张，并自动开启像素位移防烧屏。")
                 }
+            }
             .navigationTitle("照片")
             .task { await refreshList() }
             .onChange(of: pickedItem) { _, item in
