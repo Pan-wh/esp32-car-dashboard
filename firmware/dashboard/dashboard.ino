@@ -48,6 +48,7 @@ extern "C" {
 #include "ui_nav_map.h" /* 导航地图层（阶段 4）*/
 #include "ui_baked_images.h" /* 烘焙图声明（非 const，启动时可充气）*/
 #include "ui_img_inflate.h"  /* 索引图 → PSRAM RGB565 直通图 */
+#include "pgi.h"            /* .pgi 容器：照片表盘的图片格式（见 docs/photo-gif-design.md）*/
 #include "nav.h"         /* 导航状态/动作枚举与文案（纯 C，共用） */
 #include "ui_clock.h"    /* 数字时钟页（时间同步状态标签） */
 #include "ui_timesrc.h"
@@ -240,8 +241,21 @@ static bool sd_mount(void)
 {
   if (s_sd_ok) return true;
   SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN);
-  /* begin(mountpoint, mode1bit, format_if_mount_failed, max_files) */
-  if (!SD_MMC.begin("/sdcard", true, false, 5)) {
+  /*
+   * ⚠️ **参数位置踩过的坑（2026-10-19 实测）**
+   *
+   * 签名是：
+   *   begin(mountpoint, mode1bit, format_if_mount_failed,
+   *         sdmmc_frequency, maxOpenFiles)
+   *
+   * 原来写的是 `begin("/sdcard", true, false, 5)`，注释以为是 max_files ——
+   * 但第 4 个参数是 **sdmmc_frequency**，于是卡一直被跑在 **5 kHz**：
+   * 实测 **读 0.05 MB/s（50 KB/s）**，读 1 MB 要 21 秒。
+   * 换成默认频率后必须重新实测（见 sdbench 命令）。
+   *
+   * 现在显式传 frequency，并把 maxOpenFiles 放到第 5 位。
+   */
+  if (!SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_HIGHSPEED, 5)) {
     s_sd_ok = false;
     return false;
   }
@@ -286,6 +300,256 @@ static void sd_report(bool verbose)
   }
   if (n == 0) Serial.println("       （空）");
   if (n >= 20) Serial.println("       …（仅列前 20 项）");
+}
+
+
+/* ── S1 / S3 spike：SD 读速与 .pgi 解码耗时 ────────────────────────
+ *
+ * 为什么要在固件里做：这两个数字**决定动图的 fps 目标**，只能实测。
+ * 「466×466 索引图解码 +45ms」那个数来自 LVGL 的**逐行**解码路径
+ * （见 ui_img_inflate.h），而我们走的是「一次性解到 PSRAM」的另一条路，
+ * 耗时**不能直接套用**。所以必须自己量。
+ *
+ * 两条命令都**自带造数据**能力，不需要用户准备素材：
+ *   sdbench  [kb]        —— 写/读一个测试文件，报 MB/s
+ *   pgibench [frames] [边长] —— 在 SD 上生成一个真实 .pgi，读回、解析、逐帧解码
+ */
+
+/** [S1] SD 卡顺序读写测速（4 KB 一块，与实际按帧读取的模式接近）*/
+static void bench_sd(int kb)
+{
+  if (!sd_mount()) {
+    Serial.println("[S1] 未检测到 TF 卡");
+    return;
+  }
+  if (kb < 64) kb = 64;
+  if (kb > 8192) kb = 8192;
+
+  const size_t chunk = 4096;
+  uint8_t *buf = (uint8_t *)ps_malloc(chunk);
+  if (buf == NULL) {
+    Serial.println("[S1] PSRAM 分配失败");
+    return;
+  }
+  for (size_t i = 0; i < chunk; i++) buf[i] = (uint8_t)(i * 31u);
+
+  const char *path = "/_sdbench.bin"; /* 相对挂载点：SD_MMC.begin("/sdcard") 只影响 VFS 前缀 */
+  const size_t total = (size_t)kb * 1024u;
+
+  /* ── 写 ── */
+  File f = SD_MMC.open(path, FILE_WRITE);
+  if (!f) {
+    Serial.println("[S1] 打不开测试文件（写）");
+    free(buf);
+    return;
+  }
+  uint32_t t0 = millis();
+  size_t written = 0;
+  while (written < total) {
+    size_t n = f.write(buf, chunk);
+    if (n == 0) break;
+    written += n;
+  }
+  uint32_t w_ms = millis() - t0;
+  f.close();
+
+  /* ── 读 ── */
+  f = SD_MMC.open(path, FILE_READ);
+  if (!f) {
+    Serial.println("[S1] 打不开测试文件（读）");
+    free(buf);
+    return;
+  }
+  t0 = millis();
+  size_t read_bytes = 0;
+  while (read_bytes < total) {
+    int n = f.read(buf, chunk);
+    if (n <= 0) break;
+    read_bytes += (size_t)n;
+  }
+  uint32_t r_ms = millis() - t0;
+  f.close();
+  SD_MMC.remove(path);
+
+  if (w_ms == 0) w_ms = 1;
+  if (r_ms == 0) r_ms = 1;
+  Serial.printf("[S1] 写入 %u KB / %u ms = %.2f MB/s\n", (unsigned)(written / 1024), (unsigned)w_ms,
+                (double)written / 1048576.0 * 1000.0 / (double)w_ms);
+  Serial.printf("[S1] 读取 %u KB / %u ms = %.2f MB/s  ← 这个数决定要不要上 RLE\n",
+                (unsigned)(read_bytes / 1024), (unsigned)r_ms,
+                (double)read_bytes / 1048576.0 * 1000.0 / (double)r_ms);
+
+  free(buf);
+}
+
+/** 生成一个合成的 .pgi（每帧一条移动的亮带，保证是真实数据量而非全 0）
+ *
+ * 布局与 `simulator/ui/pgi.h` 完全一致：头 32B + 帧表 n*8B + 每帧[1024 调色板 + w*h 索引]。
+ */
+static bool bench_pgi_make(const char *path, int frames, int size)
+{
+  if (frames < 1) frames = 1;
+  if (frames > 30) frames = 30;
+  if (size < 64) size = 64;
+  if (size > 466) size = 466;
+
+  const uint32_t px = (uint32_t)size * (uint32_t)size;
+  const uint32_t frame_bytes = 1024u + px;
+  const uint32_t table_off = 32u;
+  const uint32_t data_off = table_off + (uint32_t)frames * 8u;
+
+  File f = SD_MMC.open(path, FILE_WRITE);
+  if (!f) return false;
+
+  /* ── 头 ── */
+  uint8_t hdr[32];
+  memset(hdr, 0, sizeof(hdr));
+  memcpy(hdr, "PGI1", 4);
+  hdr[4] = size & 0xFF;         hdr[5] = (size >> 8) & 0xFF;
+  hdr[6] = size & 0xFF;         hdr[7] = (size >> 8) & 0xFF;
+  hdr[8] = frames & 0xFF;       hdr[9] = (frames >> 8) & 0xFF;
+  hdr[10] = 12;                 /* fps */
+  hdr[11] = 0;                  /* flags：无 RLE */
+  hdr[16] = table_off & 0xFF;   hdr[17] = (table_off >> 8) & 0xFF;
+  hdr[18] = (table_off >> 16) & 0xFF; hdr[19] = (table_off >> 24) & 0xFF;
+  hdr[20] = data_off & 0xFF;    hdr[21] = (data_off >> 8) & 0xFF;
+  hdr[22] = (data_off >> 16) & 0xFF;  hdr[23] = (data_off >> 24) & 0xFF;
+  f.write(hdr, sizeof(hdr));
+
+  /* ── 帧索引表 ── */
+  uint8_t ent[8];
+  for (int i = 0; i < frames; i++) {
+    uint32_t off = data_off + (uint32_t)i * frame_bytes;
+    for (int k = 0; k < 4; k++) {
+      ent[k]     = (off >> (8 * k)) & 0xFF;
+      ent[4 + k] = (frame_bytes >> (8 * k)) & 0xFF;
+    }
+    f.write(ent, sizeof(ent));
+  }
+
+  /* ── 帧数据：调色板（灰度渐变）+ 索引（移动亮带）── */
+  uint8_t pal[1024];
+  for (int i = 0; i < 256; i++) {
+    pal[i * 4 + 0] = (uint8_t)i;      /* B */
+    pal[i * 4 + 1] = (uint8_t)i;      /* G */
+    pal[i * 4 + 2] = (uint8_t)i;      /* R */
+    pal[i * 4 + 3] = 0xFF;
+  }
+  uint8_t *idx = (uint8_t *)ps_malloc(px);
+  if (idx == NULL) {
+    f.close();
+    SD_MMC.remove(path);
+    return false;
+  }
+  for (int fr = 0; fr < frames; fr++) {
+    int band = (int)((uint32_t)fr * (uint32_t)size / (uint32_t)frames);
+    for (uint32_t y = 0; y < (uint32_t)size; y++) {
+      for (uint32_t x = 0; x < (uint32_t)size; x++) {
+        int d = (int)x - band;
+        if (d < 0) d = -d;
+        idx[y * (uint32_t)size + x] = (d < 20) ? 255 : (uint8_t)((x + y) & 0x3F);
+      }
+    }
+    f.write(pal, sizeof(pal));
+    f.write(idx, px);
+  }
+  free(idx);
+  f.close();
+  return true;
+}
+
+/** [S3] 合成 .pgi → 读回 → 解析 → 逐帧解码，报每帧耗时与 fps 上限 */
+static void bench_pgi(int frames, int size)
+{
+  if (!sd_mount()) {
+    Serial.println("[S3] 未检测到 TF 卡");
+    return;
+  }
+  const char *path = "/_pgibench.pgi"; /* 同上：相对挂载点 */
+
+  uint32_t t0 = millis();
+  if (!bench_pgi_make(path, frames, size)) {
+    Serial.println("[S3] 生成测试文件失败");
+    return;
+  }
+  uint32_t gen_ms = millis() - t0;
+
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) {
+    Serial.println("[S3] 打不开测试文件");
+    return;
+  }
+  size_t fsz = f.size();
+  uint8_t *blob = (uint8_t *)ps_malloc(fsz);
+  if (blob == NULL) {
+    Serial.printf("[S3] PSRAM 分配失败（需要 %u KB）\n", (unsigned)(fsz / 1024));
+    f.close();
+    return;
+  }
+  t0 = millis();
+  size_t got = f.read(blob, fsz);
+  uint32_t read_ms = millis() - t0;
+  f.close();
+
+  pgi_header_t h;
+  t0 = millis();
+  bool ok = pgi_parse_header(blob, fsz, &h);
+  uint32_t parse_ms = millis() - t0;
+  if (!ok) {
+    Serial.println("[S3] 解析失败（格式与 pgi.h 不一致）");
+    free(blob);
+    return;
+  }
+
+  const size_t px = (size_t)h.width * h.height;
+  uint16_t *dst = (uint16_t *)ps_malloc(px * sizeof(uint16_t));
+  if (dst == NULL) {
+    Serial.println("[S3] RGB565 缓冲分配失败");
+    free(blob);
+    return;
+  }
+
+  /* 逐帧解码并计时（取最慢一帧作为保守值）*/
+  uint32_t worst = 0, total = 0;
+  uint32_t sum = 0;
+  for (int i = 0; i < (int)h.frame_count; i++) {
+    t0 = millis();
+    bool d = pgi_decode_frame(blob, fsz, &h, i, dst, px);
+    uint32_t dt = millis() - t0;
+    if (!d) {
+      Serial.printf("[S3] 第 %d 帧解码失败\n", i);
+      break;
+    }
+    if (dt > worst) worst = dt;
+    sum += dt;
+    total++;
+    /* 抽样校验：确认真的解出了非零像素，而不是"空转很快" */
+    if (i == 0 && dst[0] == 0 && dst[px / 2] == 0) {
+      Serial.println("[S3] ⚠️ 解出的像素全为 0，数据可能没写对");
+    }
+  }
+  free(dst);
+
+  uint32_t avg = (total > 0) ? (sum / total) : 0;
+  Serial.printf("[S3] 文件 %u KB（%d 帧，%d×%d）\n", (unsigned)(fsz / 1024),
+                (int)h.frame_count, (int)h.width, (int)h.height);
+  Serial.printf("[S3] 生成 %u ms | 写盘后读回 %u ms (%.2f MB/s, %u B)\n", (unsigned)gen_ms,
+                (unsigned)read_ms,
+                (double)got / 1048576.0 * 1000.0 / (double)(read_ms ? read_ms : 1),
+                (unsigned)got);
+  Serial.printf("[S3] 解析头 %u ms | 解码 平均 %u ms / 最慢 %u ms\n", (unsigned)parse_ms,
+                (unsigned)avg, (unsigned)worst);
+
+  /* fps 上限 = 1 / (解码 + flush)。flush 取实测的 43ms（见 PROGRESS §六）*/
+  const uint32_t flush_ms = 43;
+  uint32_t frame_ms = worst + flush_ms;
+  if (frame_ms == 0) frame_ms = 1;
+  Serial.printf("[S3] 加 flush %ums → 每帧 %ums → 理论上限 %.1f fps\n", (unsigned)flush_ms,
+                (unsigned)frame_ms, 1000.0 / (double)frame_ms);
+  Serial.println("[S3] 取整后建议 fps：见上方理论值下调 20% 留余量");
+
+  free(blob);
+  SD_MMC.remove(path);
 }
 
 #define PANEL_NATIVE_GAP_X 6
@@ -1338,6 +1602,8 @@ static void print_help(void)
   Serial.println("       pages                    列出页面");
   Serial.println("       map                      地图窗口诊断（收到多少/能否画/自车偏移）");
   Serial.println("       sd [list]                TF 卡状态（`sd list` 连根目录一起列）");
+  Serial.println("       sdbench [KB]      SD 读写测速（S1：决定要不要 RLE）");
+  Serial.println("       pgibench [帧] [边长] 生成 .pgi 并测解码耗时（S3：定 fps 目标）");
   Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
   Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
@@ -1536,6 +1802,23 @@ static void process_command(char *cmd)
     else {
       Serial.println("[地图] 自车偏移：未设置（导航消息未带 ox/oy）");
     }
+  }
+  /*
+   * ⚠️ 这两条必须放在 `sd` **之前**：`strncmp(cmd, "sd", 2)` 会把 "sdbench"
+   * 也匹配进去（当时确实踩了 —— 敲 sdbench 却走了 sd_report，什么测速都没有）。
+   * 前缀匹配的命令，长名字必须排在短名字前面。
+   */
+  else if (strncmp(cmd, "sdbench", 7) == 0) {
+    /* [S1] SD 顺序读写测速：sdbench [KB] */
+    int kb = 1024;
+    sscanf(cmd + 7, "%d", &kb);
+    bench_sd(kb);
+  }
+  else if (strncmp(cmd, "pgibench", 8) == 0) {
+    /* [S3] .pgi 读取 + 解码耗时：pgibench [帧数] [边长] */
+    int fr = 10, sz = 466;
+    sscanf(cmd + 8, "%d %d", &fr, &sz);
+    bench_pgi(fr, sz);
   }
   else if (strncmp(cmd, "sd", 2) == 0) {
     /* TF 卡检测：`sd` 看状态，`sd list` 连目录一起列 */
