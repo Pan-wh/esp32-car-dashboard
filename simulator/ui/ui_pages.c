@@ -13,6 +13,7 @@
 #include "ui_clock.h"
 #include "ui_color_clock.h"
 #include "ui_nav.h"
+#include "ui_photo.h"
 #include "ui_speed.h"
 
 #define UI_BG_COLOR 0x000000
@@ -134,6 +135,8 @@ void ui_pages_init(void)
     ui_face_register(&(ui_face_desc_t){ "speed",   "Speed",   (ui_face_build_cb)ui_speed_create,      UI_FACE_GROUP_SPEED });
     ui_face_register(&(ui_face_desc_t){ "color",   "Color",   (ui_face_build_cb)ui_color_clock_create, UI_FACE_GROUP_CLOCK });
     ui_face_register(&(ui_face_desc_t){ "nav",     "Nav",     (ui_face_build_cb)ui_nav_create,        UI_FACE_GROUP_NAV   });
+    /* 照片表盘：静态图片与动图**混排轮播**（格式见 docs/photo-gif-design.md）*/
+    ui_face_register(&(ui_face_desc_t){ "photo",   "Photo",   (ui_face_build_cb)ui_photo_create,      UI_FACE_GROUP_PHOTO });
 
     for (int i = 0; i < UI_PAGE_COUNT && i < ui_face_count(); i++) {
         const ui_face_desc_t *f = ui_face_get(i);

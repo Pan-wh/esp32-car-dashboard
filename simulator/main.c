@@ -23,6 +23,8 @@
 #include "ui_nav.h"
 #include "ui_nav_map.h"
 #include "nav_map.h"
+#include "pgi.h"
+#include "ui_photo.h"
 #include "ui_pages.h"
 #include "ui_speed.h"
 #include "ui_timesrc.h"
@@ -213,6 +215,65 @@ static void inject_map_demo(void)
 }
 
 
+
+/*
+ * --photo-demo <file.pgi> [--photo-frame N]
+ *
+ * 从磁盘读一个真实的 `.pgi`（用 tools/pgi.py 生成），解出指定帧交给照片表盘。
+ * 这样"解码器 + 渲染层"能在**模拟器里截图验证**，不需要真机与 SD 卡。
+ */
+static uint16_t *g_photo_px = NULL;
+
+static void inject_photo_demo(const char *path, int frame)
+{
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) {
+        fprintf(stderr, "[photo-demo] 打不开 %s\n", path);
+        return;
+    }
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n <= 0) {
+        fclose(f);
+        return;
+    }
+    uint8_t *blob = (uint8_t *)malloc((size_t)n);
+    if (blob == NULL || fread(blob, 1, (size_t)n, f) != (size_t)n) {
+        free(blob);
+        fclose(f);
+        return;
+    }
+    fclose(f);
+
+    pgi_header_t h;
+    if (!pgi_parse_header(blob, (size_t)n, &h)) {
+        fprintf(stderr, "[photo-demo] %s 不是合法 .pgi\n", path);
+        free(blob);
+        return;
+    }
+    if (frame < 0 || frame >= (int)h.frame_count) frame = 0;
+
+    size_t px = (size_t)h.width * h.height;
+    g_photo_px = (uint16_t *)malloc(px * sizeof(uint16_t));
+    if (g_photo_px == NULL) {
+        free(blob);
+        return;
+    }
+    if (!pgi_decode_frame(blob, (size_t)n, &h, frame, g_photo_px, px)) {
+        fprintf(stderr, "[photo-demo] 第 %d 帧解码失败\n", frame);
+        free(g_photo_px);
+        g_photo_px = NULL;
+        free(blob);
+        return;
+    }
+    free(blob);
+
+    ui_photo_show_frame(g_photo_px, (int)h.width, (int)h.height);
+    fprintf(stderr, "[photo-demo] 已显示 %s 第 %d/%d 帧（%d×%d）\n", path, frame,
+            (int)h.frame_count, (int)h.width, (int)h.height);
+}
+
 int main(int argc, char **argv)
 {
     int scale = 2;
@@ -233,6 +294,8 @@ int main(int argc, char **argv)
     int sweep_test = 0;
     int ble_sim = 0;
     int map_demo = 0;          /* --map-demo：注入合成地图窗口 */
+    const char *photo_demo_path = NULL; /* --photo-demo：从 .pgi 注入一帧 */
+    int photo_frame = 0;
     float demo_speed = -1.0f;  /* --demo-speed：演示速度（-1 = 不用）*/
     float map_heading = 0.0f;  /* --map-heading：初始航向 */
     /* 复刻固件 ble_update 每帧调用 setter 的行为（性能回归复现） */
@@ -258,6 +321,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--sweep")) sweep_test = 1;
         else if (!strcmp(argv[i], "--ble-sim")) ble_sim = 1;
         else if (!strcmp(argv[i], "--map-demo")) map_demo = 1;
+        else if (!strcmp(argv[i], "--photo-demo") && i + 1 < argc) photo_demo_path = argv[++i];
+        else if (!strcmp(argv[i], "--photo-frame") && i + 1 < argc) photo_frame = atoi(argv[++i]);
         /*
          * --demo-speed <kmh>：进入演示模式，并**持续模拟固件的周期状态刷新**
          *   （每帧调一次 ui_speed_set_status(LIVE/STALE/...)）。
@@ -393,6 +458,10 @@ int main(int argc, char **argv)
     }
 
     ui_pages_show((ui_page_t)start_page);
+
+    if (photo_demo_path != NULL) {
+        inject_photo_demo(photo_demo_path, photo_frame);
+    }
 
     if (gesture_test) {
         /* 诊断：确认手势事件是否真的送到页面容器 */

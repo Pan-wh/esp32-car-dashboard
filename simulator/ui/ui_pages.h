@@ -22,6 +22,7 @@ typedef enum {
     UI_PAGE_SPEED,      /* 速度表盘（数据源：iPhone BLE 遥测）*/
     UI_PAGE_COLOR_CLOCK,/* 多彩四位数字时钟 */
     UI_PAGE_NAV,        /* 导航指引卡片（阶段 1：UI 原型）*/
+    UI_PAGE_PHOTO,      /* 照片表盘（静态图片 + 动图，混排轮播）*/
     UI_PAGE_COUNT
 } ui_page_t;
 
