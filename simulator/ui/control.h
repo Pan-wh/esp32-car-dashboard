@@ -38,6 +38,27 @@ typedef enum {
     CONTROL_FACE_ENABLED, /* value = 表盘 id；value2 = 1 启用 / 0 隐藏 */
     CONTROL_ROTATE,     /* value = 屏幕方向角度：0 / 90 / 180 / 270 */
     CONTROL_DEMO_SPEED, /* value = 演示车速 km/h；< 0 表示退出演示 */
+
+    /*
+     * 照片表盘的设置（App 的「照片」页用）。
+     *
+     * **每个开关独立一条命令**，而不是一条 `photo` 带多个字段 ——
+     * 因为现有解析器只记 `cmd` + `value` 两个键（见 control.c 顶部的说明），
+     * 拆成独立命令就不必扩展解析器，风格也与 `demo_speed` 一致。
+     *
+     *   {"cmd":"photo_slide","value":0}       轮播关
+     *   {"cmd":"photo_shift","value":1}       像素位移开
+     *   {"cmd":"photo_screenoff","value":0}   自动息屏关
+     *   {"cmd":"photo_interval","value":30}   轮播间隔 30 秒
+     *   {"cmd":"photo_get"}                   查询全部设置
+     *   {"cmd":"photo_next"}                  手动切下一张（调试用）
+     */
+    CONTROL_PHOTO_SLIDE,     /* value = 0/1 轮播开关 */
+    CONTROL_PHOTO_SHIFT,     /* value = 0/1 像素位移开关 */
+    CONTROL_PHOTO_SCREENOFF, /* value = 0/1 自动息屏开关 */
+    CONTROL_PHOTO_INTERVAL,  /* value = 轮播间隔**秒**（10..300）*/
+    CONTROL_PHOTO_GET,       /* 查询全部设置（不需要 value）*/
+    CONTROL_PHOTO_NEXT,      /* 手动切下一张 */
 } control_kind_t;
 
 typedef struct {

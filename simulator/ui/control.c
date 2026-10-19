@@ -206,6 +206,48 @@ bool control_parse(const char *json, size_t len, control_cmd_t *out)
         return true;
     }
 
+    /*
+     * 照片表盘的设置：每个开关独立一条命令（见 control.h 的说明）。
+     * 这里只做**语法**校验（0/1、间隔范围），业务意义上的收敛交给 photo_slide。
+     */
+    if (strcmp(cmd, "photo_slide") == 0) {
+        if (!have_num) return false;
+        out->kind = CONTROL_PHOTO_SLIDE;
+        out->value = (num != 0) ? 1 : 0;
+        return true;
+    }
+    if (strcmp(cmd, "photo_shift") == 0) {
+        if (!have_num) return false;
+        out->kind = CONTROL_PHOTO_SHIFT;
+        out->value = (num != 0) ? 1 : 0;
+        return true;
+    }
+    if (strcmp(cmd, "photo_screenoff") == 0) {
+        if (!have_num) return false;
+        out->kind = CONTROL_PHOTO_SCREENOFF;
+        out->value = (num != 0) ? 1 : 0;
+        return true;
+    }
+    if (strcmp(cmd, "photo_interval") == 0) {
+        /* App 传**秒**；这里只做粗校验，真正的夹取在 photo_settings_sanitize() */
+        if (!have_num) return false;
+        if (num < 0) num = 0;
+        if (num > 86400) num = 86400;
+        out->kind = CONTROL_PHOTO_INTERVAL;
+        out->value = num;
+        return true;
+    }
+    if (strcmp(cmd, "photo_get") == 0) {
+        out->kind = CONTROL_PHOTO_GET;
+        out->value = 0;
+        return true;
+    }
+    if (strcmp(cmd, "photo_next") == 0) {
+        out->kind = CONTROL_PHOTO_NEXT;
+        out->value = 0;
+        return true;
+    }
+
     if (strcmp(cmd, "demo_speed") == 0) {
         /*
          * 演示速度（App 的"模拟速度测试"滑块）：

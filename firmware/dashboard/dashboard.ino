@@ -49,6 +49,17 @@ extern "C" {
 #include "ui_baked_images.h" /* 烘焙图声明（非 const，启动时可充气）*/
 #include "ui_img_inflate.h"  /* 索引图 → PSRAM RGB565 直通图 */
 #include "pgi.h"            /* .pgi 容器：照片表盘的图片格式（见 docs/photo-gif-design.md）*/
+/*
+ * ⚠️ 这两个 include **必须在文件顶部**，不能放在使用处附近。
+ *
+ * Arduino 会把自动生成的函数**原型**插在「最后一个顶层 #include 之后」——
+ * 若把 photo_slide.h 放在文件中间，原型会被插到它**前面**，
+ * 于是 `photo_file_meta_t` 还没声明就被原型引用了（实测报
+ * "'photo_file_meta_t' was not declared in this scope"）。
+ */
+#include "photo_slide.h"   /* 轮播状态机（纯逻辑，PC 可测）*/
+#include "ui_photo.h"      /* 照片表盘的渲染层 */
+#include "img_indexed.h"  /* 8bpp 索引图解码（pgi 每帧的布局就是它的输入）*/
 #include "nav.h"         /* 导航状态/动作枚举与文案（纯 C，共用） */
 #include "ui_clock.h"    /* 数字时钟页（时间同步状态标签） */
 #include "ui_timesrc.h"
@@ -303,6 +314,359 @@ static void sd_report(bool verbose)
 }
 
 
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 照片表盘：SD 扫描 + 分片预读 + 渲染驱动
+ *
+ * 依据 docs/photo-gif-design.md §十点五 的实测：
+ *   - SD 读 217 KB ≈ 93 ms（**瓶颈**），解码 21 ms，flush 43 ms；
+ *   - 若整帧一次读，每帧 159 ms → 只有 6.3 fps；
+ *   - 所以把"读"切成 32 KB 一片、分摊到多个主循环，与当前帧的显示时间重叠
+ *     → 每帧 ≈ max(93, 66) ≈ 93 ms → **约 10 fps**。
+ *
+ * 内存：2 个显示缓冲（各 424 KB）+ 1 个暂存区（一帧原始字节 ≈ 218 KB）
+ *       ≈ 1.07 MB PSRAM。实测 PSRAM 空闲约 6.4 MB，够用。
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+#define PHOTO_DIR          "/photos"
+#define PHOTO_MAX_FILE     (8u * 1024u * 1024u)
+#define PHOTO_READ_CHUNK   (32u * 1024u)
+#define PHOTO_MAX_FRAME_PX (466u * 466u)
+
+static photo_slide_t s_photo;
+static bool          s_photo_ready = false;    /* 缓冲已分配 */
+static uint16_t     *s_photo_buf[2];           /* 双缓冲：显示 / 后台 */
+static int           s_photo_show_idx = 0;     /* 当前正在显示的那块 */
+static uint8_t      *s_photo_stage;            /* 暂存：当前帧的原始字节 */
+static size_t        s_photo_stage_cap;
+static pgi_header_t  s_photo_hdr;              /* 当前文件的头 */
+static File          s_photo_file;
+static bool          s_photo_file_open = false;
+static char          s_photo_cur_name[64];
+static int           s_photo_loading = -1;     /* 正在读的帧号；-1 = 空闲 */
+static size_t        s_photo_got;              /* 已读字节 */
+static size_t        s_photo_need;             /* 该帧总字节 */
+static uint32_t      s_photo_frame_off;        /* 该帧在文件里的偏移 */
+static uint32_t      s_photo_next_load_ms;     /* 下次允许开始读的时间 */
+static uint32_t      s_photo_shift_ms;         /* 位移相位推进时间 */
+static int           s_photo_shift_phase = 0;  /* 位移相位 0..3 */
+static bool          s_photo_entered = false;  /* 是否已进过照片表盘（用于一次性设亮度封顶）*/
+static uint32_t      s_photo_frames = 0;       /* 实测帧率用 */
+static uint32_t      s_photo_fps_t0 = 0;
+static char          s_photo_names[PHOTO_SLIDE_MAX_FILES][64];
+static int           s_photo_name_count = 0;
+
+/*
+ * 前向声明：`apply_screen()` / `apply_brightness()` 定义在文件后面，
+ * 而照片表盘要用它们做"自动息屏"和"亮度封顶"。
+ * 本项目已有同样的先例（见 s_brightness 附近的注释），照做。
+ */
+static void apply_screen(bool off);
+static void apply_brightness(uint8_t v);
+
+/* 亮度封顶：照片表盘下最高 180（比正常暗一档，显著延缓 AMOLED 老化）*/
+#define PHOTO_BRIGHTNESS_CAP 180
+
+/* ── 设置持久化（NVS；与表盘/方向同一套机制）── */
+#define PHOTO_PREF_NS "photo"
+#define PK_SLIDE   "slide"
+#define PK_SHIFT   "shift"
+#define PK_SOFF    "soff"
+#define PK_SOFFMS  "soffms"
+#define PK_INTV    "intv"
+
+static void photo_settings_load(void)
+{
+  photo_settings_t d = photo_settings_default();
+  Preferences prefs;
+  if (prefs.begin(PHOTO_PREF_NS, true)) {
+    if (prefs.isKey(PK_SLIDE))  d.slideshow     = prefs.getBool(PK_SLIDE, true);
+    if (prefs.isKey(PK_SHIFT))  d.shift         = prefs.getBool(PK_SHIFT, true);
+    if (prefs.isKey(PK_SOFF))   d.screen_off    = prefs.getBool(PK_SOFF, true);
+    if (prefs.isKey(PK_SOFFMS)) d.screen_off_ms = prefs.getUInt(PK_SOFFMS, d.screen_off_ms);
+    if (prefs.isKey(PK_INTV))   d.interval_ms   = prefs.getUInt(PK_INTV, d.interval_ms);
+    prefs.end();
+  }
+  photo_settings_sanitize(&d);
+  photo_slide_set_settings(&s_photo, d);
+}
+
+static void photo_settings_save(void)
+{
+  Preferences prefs;
+  if (!prefs.begin(PHOTO_PREF_NS, false)) return;
+  prefs.putBool(PK_SLIDE, s_photo.settings.slideshow);
+  prefs.putBool(PK_SHIFT, s_photo.settings.shift);
+  prefs.putBool(PK_SOFF,  s_photo.settings.screen_off);
+  prefs.putUInt(PK_SOFFMS, s_photo.settings.screen_off_ms);
+  prefs.putUInt(PK_INTV,   s_photo.settings.interval_ms);
+  prefs.end();
+}
+
+/* ── 扫描 /photos/ ───────────────────────────────────────────── */
+static int photo_scan_dir(photo_file_meta_t *metas, char names[][64], int cap, int *total)
+{
+  *total = 0;
+  int n = 0;
+  if (!sd_mount()) return 0;
+
+  File dir = SD_MMC.open(PHOTO_DIR);
+  if (!dir || !dir.isDirectory()) return 0;
+
+  for (File f = dir.openNextFile(); f && n < cap; f = dir.openNextFile()) {
+    if (f.isDirectory()) continue;
+    const char *nm = f.name();
+    size_t len = strlen(nm);
+    if (len < 5) continue;
+    if (strcasecmp(nm + len - 4, ".pgi") != 0) continue;
+
+    (*total)++;
+    /*
+     * 只读「文件头 + 帧索引表」就够拿元信息（帧数 + fps），不必整文件读入。
+     *
+     * ⚠️ 不能只给 32 字节头：`pgi_parse_header()` 会校验**帧索引表也在范围内**
+     * （那是防越界的关键检查），所以必须把表一起读进来。
+     * 表的最大长度 = PGI_MAX_FRAMES(512) × 8 = 4096，加头 32 → 4128 字节。
+     */
+    uint8_t hdr[PGI_HEADER_BYTES + PGI_MAX_FRAMES * PGI_FRAME_ENTRY_BYTES];
+    size_t want = sizeof(hdr);
+    size_t got = 0;
+    f.seek(0);
+    while (got < want) {
+      int r = f.read(hdr + got, want - got);
+      if (r <= 0) break;
+      got += (size_t)r;
+    }
+    if (got < PGI_HEADER_BYTES) continue;
+    pgi_header_t h;
+    if (!pgi_parse_header(hdr, got, &h)) continue;
+
+    metas[n].frame_count = h.frame_count;
+    metas[n].fps = h.fps;
+    /* f.name() 可能只给 basename，取最后一段 */
+    const char *base = strrchr(nm, '/');
+    snprintf(names[n], 64, "%s", base ? base + 1 : nm);
+    n++;
+  }
+  return n;
+}
+
+
+/* ── 打开当前文件 / 取帧信息 ─────────────────────────────────── */
+static bool photo_open_file(const char *name)
+{
+  if (s_photo_file_open) {
+    s_photo_file.close();
+    s_photo_file_open = false;
+  }
+  char path[96];
+  snprintf(path, sizeof(path), PHOTO_DIR "/%s", name);
+  s_photo_file = SD_MMC.open(path, FILE_READ);
+  if (!s_photo_file) return false;
+
+  /* 头 + 帧表一起读（同 photo_scan_dir 的理由）*/
+  uint8_t hdr[PGI_HEADER_BYTES + PGI_MAX_FRAMES * PGI_FRAME_ENTRY_BYTES];
+  size_t got = 0;
+  size_t want = sizeof(hdr);
+  while (got < want) {
+    int r = s_photo_file.read(hdr + got, want - got);
+    if (r <= 0) break;
+    got += (size_t)r;
+  }
+  if (!pgi_parse_header(hdr, got, &s_photo_hdr)) {
+    s_photo_file.close();
+    return false;
+  }
+  s_photo_file_open = true;
+  snprintf(s_photo_cur_name, sizeof(s_photo_cur_name), "%s", name);
+  return true;
+}
+
+/** 分配双缓冲与暂存区（只做一次；失败则不启用照片表盘）*/
+static bool photo_ensure_buffers(void)
+{
+  if (s_photo_ready) return true;
+  const size_t px = PHOTO_MAX_FRAME_PX;
+  s_photo_buf[0] = (uint16_t *)ps_malloc(px * sizeof(uint16_t));
+  s_photo_buf[1] = (uint16_t *)ps_malloc(px * sizeof(uint16_t));
+  /* 一帧原始字节上限：调色板 + 像素（索引 8bpp）*/
+  s_photo_stage_cap = PGI_PALETTE_BYTES + px;
+  s_photo_stage = (uint8_t *)ps_malloc(s_photo_stage_cap);
+  if (s_photo_buf[0] == NULL || s_photo_buf[1] == NULL || s_photo_stage == NULL) {
+    Serial.printf("[照片] PSRAM 分配失败（需要约 %u KB）\n",
+                  (unsigned)((px * 2 * 2 + s_photo_stage_cap) / 1024));
+    free(s_photo_buf[0]); s_photo_buf[0] = NULL;
+    free(s_photo_buf[1]); s_photo_buf[1] = NULL;
+    free(s_photo_stage);  s_photo_stage = NULL;
+    return false;
+  }
+  s_photo_ready = true;
+  return true;
+}
+
+/**
+ * 主循环调用：推进轮播、分片读帧、解码并显示。
+ *
+ * **时间预算**：每次调用最多读 PHOTO_READ_CHUNK(32 KB) 并**至多解码一次**，
+ * 保证不会长时间占住主循环（解码 21 ms、单个 32 KB 读约 14 ms）。
+ */
+static void photo_poll(void)
+{
+  /* 只有照片表盘可见时才工作（切走即停，省电省 CPU）*/
+  if (ui_pages_current() != UI_PAGE_PHOTO || !sd_mount()) return;
+  if (!photo_ensure_buffers()) return;
+
+  /* 首次进入：扫描目录 → 喂给状态机 */
+  if (s_photo.file_count == 0 && s_photo_cur_name[0] == '\0') {
+    static photo_file_meta_t metas[PHOTO_SLIDE_MAX_FILES];
+    static char names[PHOTO_SLIDE_MAX_FILES][64];
+    int total = 0;
+    int n = photo_scan_dir(metas, names, PHOTO_SLIDE_MAX_FILES, &total);
+    if (n == 0) {
+      ui_photo_set_placeholder(total == 0 ? UI_PHOTO_PLACEHOLDER_EMPTY
+                                          : UI_PHOTO_PLACEHOLDER_ERROR);
+      return;
+    }
+    photo_slide_set_files(&s_photo, n, metas);
+    photo_slide_restart(&s_photo, millis());
+    /* 把文件名记进族里（状态机只管下标，名字由这里维护）*/
+    for (int i = 0; i < n; i++) {
+      snprintf(s_photo_names[i], sizeof(s_photo_names[0]), "%s", names[i]);
+    }
+    s_photo_name_count = n;
+  }
+
+  uint32_t now = millis();
+
+  /*
+   * 亮度封顶（烧屏防护第 3 道）：照片表盘下把亮度压到 PHOTO_BRIGHTNESS_CAP。
+   *
+   * 只在**进入**照片表盘时设一次（`s_photo_entered` 标记），不在每次 poll 里比对
+   * `s_brightness` —— 那个变量定义在文件后半段，且频繁写背光本身就不该做。
+   */
+  if (!s_photo_entered) {
+    s_photo_entered = true;
+    apply_brightness(PHOTO_BRIGHTNESS_CAP);
+  }
+
+  /* 自动息屏（第 4 道）：独立于轮播，触摸会重置计时（见 control_poll 里的 note_touch）*/
+  if (photo_slide_should_screen_off(&s_photo, now)) {
+    apply_screen(true);
+    return;
+  }
+
+  /* 推进轮播（到达切换时刻才返回 true）*/
+  photo_slide_tick(&s_photo, now);
+
+  photo_frame_t f;
+  photo_slide_state(&s_photo, now, &f);
+  if (f.file_index < 0) {
+    ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_EMPTY);
+    return;
+  }
+
+  /* 位移相位：每 2 分钟换一档，四档循环 */
+  if (now - s_photo_shift_ms > 120000u) {
+    s_photo_shift_ms = now;
+    s_photo_shift_phase = (s_photo_shift_phase + 1) & 3;
+  }
+  ui_photo_set_shift(f.shift, s_photo_shift_phase);
+
+  /* 换文件 → 重新打开 */
+  const char *want_name = (f.file_index < s_photo_name_count)
+                              ? s_photo_names[f.file_index] : NULL;
+  if (want_name == NULL) return;
+  if (strcmp(want_name, s_photo_cur_name) != 0) {
+    if (!photo_open_file(want_name)) {
+      ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
+      return;
+    }
+    s_photo_loading = -1;
+  }
+
+  /* ── 分片读 + 解码 ── */
+  if (s_photo_loading < 0) {
+    /* 还没开始读这一帧：取帧偏移与长度 */
+    /*
+     * 取该帧在文件里的偏移与长度。
+     *
+     * 注意 `pgi_frame_info()` 需要**整个文件的字节**才能校验范围，而我们手上只有
+     * 头与帧表 —— 所以这里直接读帧表项做一次"轻量"解引用：
+     * 偏移/长度都是 32 位小端，格式由 pgi.h 定义。
+     */
+    uint32_t off = 0, size = 0;
+    {
+      uint8_t ent[PGI_FRAME_ENTRY_BYTES];
+      long cur = s_photo_file.position();
+      s_photo_file.seek(s_photo_hdr.frame_table_off + (uint32_t)f.frame_index * PGI_FRAME_ENTRY_BYTES);
+      if (s_photo_file.read(ent, sizeof(ent)) != (int)sizeof(ent)) {
+        ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
+        return;
+      }
+      s_photo_file.seek(cur);
+      off  = (uint32_t)ent[0] | ((uint32_t)ent[1] << 8) | ((uint32_t)ent[2] << 16) | ((uint32_t)ent[3] << 24);
+      size = (uint32_t)ent[4] | ((uint32_t)ent[5] << 8) | ((uint32_t)ent[6] << 16) | ((uint32_t)ent[7] << 24);
+      const uint32_t expect = (uint32_t)PGI_PALETTE_BYTES +
+                              (uint32_t)s_photo_hdr.width * s_photo_hdr.height;
+      if (size != expect) {
+        Serial.printf("[照片] 帧长度不符：%u != %u\n", (unsigned)size, (unsigned)expect);
+        ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
+        return;
+      }
+      if (size > s_photo_stage_cap) {
+        ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
+        return;
+      }
+    }
+    s_photo_frame_off = off;
+    s_photo_need = size;
+    s_photo_got = 0;
+    s_photo_loading = f.frame_index;
+    s_photo_file.seek(off);
+  }
+
+  if (s_photo_got < s_photo_need) {
+    size_t remain = s_photo_need - s_photo_got;
+    size_t chunk = remain > PHOTO_READ_CHUNK ? PHOTO_READ_CHUNK : remain;
+    int r = s_photo_file.read(s_photo_stage + s_photo_got, chunk);
+    if (r <= 0) {
+      ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
+      s_photo_loading = -1;
+      return;
+    }
+    s_photo_got += (size_t)r;
+    if (s_photo_got < s_photo_need) return; /* 还没读完，下次继续 */
+  }
+
+  /* 读满 → 解码到**后台**缓冲，然后交换 */
+  const int back = 1 - s_photo_show_idx;
+  size_t px = (size_t)s_photo_hdr.width * s_photo_hdr.height;
+  /* 暂存区里是 [调色板][索引]，正好是 img_indexed 的布局 */
+  /*
+   * 暂存区里的布局就是 `[调色板 1024B][索引 w*h]` —— 与 `img_indexed_decode8`
+   * 期望的完全一致（这也是 pgi 格式当初那样设计的原因：零转换逻辑）。
+   */
+  if (img_indexed_decode8(s_photo_stage, (int)s_photo_hdr.width,
+                          (int)s_photo_hdr.height, s_photo_buf[back], px)) {
+    /* 实测帧率：每秒打一次，用来核对 §十点五 里"约 10 fps"的推算 */
+    s_photo_frames++;
+    uint32_t now2 = millis();
+    if (now2 - s_photo_fps_t0 >= 1000u) {
+      Serial.printf("[照片] 实测 %u 帧/秒（%s 第 %d 帧）\n",
+                    (unsigned)(s_photo_frames * 1000u / (now2 - s_photo_fps_t0)),
+                    s_photo_cur_name, s_photo_loading);
+      s_photo_frames = 0;
+      s_photo_fps_t0 = now2;
+    }
+    s_photo_show_idx = back;
+    ui_photo_show_frame(s_photo_buf[s_photo_show_idx], (int)s_photo_hdr.width,
+                        (int)s_photo_hdr.height);
+  } else {
+    ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
+  }
+  s_photo_loading = -1;
+}
+
 /* ── S1 / S3 spike：SD 读速与 .pgi 解码耗时 ────────────────────────
  *
  * 为什么要在固件里做：这两个数字**决定动图的 fps 目标**，只能实测。
@@ -398,6 +762,7 @@ static bool bench_pgi_make(const char *path, int frames, int size)
   const uint32_t table_off = 32u;
   const uint32_t data_off = table_off + (uint32_t)frames * 8u;
 
+  SD_MMC.mkdir(PHOTO_DIR); /* 已存在则返回 false，无妨 */
   File f = SD_MMC.open(path, FILE_WRITE);
   if (!f) return false;
 
@@ -465,7 +830,7 @@ static void bench_pgi(int frames, int size)
     Serial.println("[S3] 未检测到 TF 卡");
     return;
   }
-  const char *path = "/_pgibench.pgi"; /* 同上：相对挂载点 */
+  const char *path = PHOTO_DIR "/_bench.pgi"; /* 留在 /photos/，可直接被照片表盘显示 */
 
   uint32_t t0 = millis();
   if (!bench_pgi_make(path, frames, size)) {
@@ -549,7 +914,7 @@ static void bench_pgi(int frames, int size)
   Serial.println("[S3] 取整后建议 fps：见上方理论值下调 20% 留余量");
 
   free(blob);
-  SD_MMC.remove(path);
+  Serial.printf("[S3] 已保留 %s（每帧一条移动亮带），可直接切到照片表盘看效果\n", path);
 }
 
 #define PANEL_NATIVE_GAP_X 6
@@ -1349,6 +1714,45 @@ static void control_poll(void)
 
       save_face_prefs(ui_pages_current_face(), ui_face_mask());
       s_faces_dirty = true;
+      break;
+    }
+    case CONTROL_PHOTO_SLIDE:
+      s_photo.settings.slideshow = (cmd.value != 0);
+      photo_settings_save();
+      Serial.printf("[照片] 轮播 → %s\n", cmd.value ? "开" : "关（强制像素位移）");
+      break;
+    case CONTROL_PHOTO_SHIFT:
+      s_photo.settings.shift = (cmd.value != 0);
+      photo_settings_save();
+      Serial.printf("[照片] 像素位移 → %s\n", cmd.value ? "开" : "关");
+      break;
+    case CONTROL_PHOTO_SCREENOFF:
+      s_photo.settings.screen_off = (cmd.value != 0);
+      photo_settings_save();
+      Serial.printf("[照片] 自动息屏 → %s\n", cmd.value ? "开" : "关");
+      break;
+    case CONTROL_PHOTO_INTERVAL: {
+      photo_settings_t t = s_photo.settings;
+      t.interval_ms = (uint32_t)cmd.value * 1000u;
+      photo_slide_set_settings(&s_photo, t);
+      photo_settings_save();
+      Serial.printf("[照片] 轮播间隔 → %u 秒\n", (unsigned)(s_photo.settings.interval_ms / 1000u));
+      break;
+    }
+    case CONTROL_PHOTO_GET:
+      Serial.printf("[照片] 轮播=%d 间隔=%us 息屏=%d(%umin) 位移=%d 有效位移=%d\n",
+                    (int)s_photo.settings.slideshow,
+                    (unsigned)(s_photo.settings.interval_ms / 1000u),
+                    (int)s_photo.settings.screen_off,
+                    (unsigned)(s_photo.settings.screen_off_ms / 60000u),
+                    (int)s_photo.settings.shift,
+                    (int)photo_slide_eff_shift(&s_photo));
+      break;
+    case CONTROL_PHOTO_NEXT: {
+      /* 手动切下一张：把"段"的起始时间挪到很久以前，下一次 tick 就会推进 */
+      photo_slide_tick(&s_photo, millis() + s_photo.settings.interval_ms + 1000u);
+      ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_LOADING);
+      Serial.println("[照片] 手动切下一张");
       break;
     }
     case CONTROL_DEMO_SPEED: {
@@ -2262,6 +2666,19 @@ void setup()
 
   /* 业务 UI：全部页面（模拟时钟 / 数字时钟 / 速度表盘） */
   ui_pages_init();
+  /*
+   * 照片表盘：初始化状态机并读回 NVS 里的设置。
+   * 缓冲（约 1.07 MB PSRAM）**延迟到第一次真的显示照片时**才分配 ——
+   * 不然不用照片的人也要占 1 MB PSRAM（见 photo_ensure_buffers）。
+   */
+  photo_slide_init(&s_photo, photo_settings_default());
+  photo_settings_load();
+  Serial.printf("[照片] 轮播=%d 间隔=%us 息屏=%d(%umin) 位移=%d\n",
+                (int)s_photo.settings.slideshow,
+                (unsigned)(s_photo.settings.interval_ms / 1000u),
+                (int)s_photo.settings.screen_off,
+                (unsigned)(s_photo.settings.screen_off_ms / 60000u),
+                (int)s_photo.settings.shift);
 
   /* 恢复上次保存的屏幕方向（NVS）；无记录则用编译期默认 DISPLAY_ROT */
   restore_display_rotation();
@@ -2809,6 +3226,7 @@ void loop()
   ph_end(PH_SERIAL);
   ph_begin();
   control_poll();             /* BLE 下行控制：亮度 / 息屏 / 表盘 */
+  photo_poll();              /* 照片表盘：仅在它可见时工作（轮播/读帧/解码）*/
   rotation_poll();            /* 合并后的方向切换（见 s_pending_rot 说明）*/
 
   /*
