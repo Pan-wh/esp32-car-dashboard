@@ -435,6 +435,21 @@ struct PhotoTabView: View {
              * 正确顺序：手机多半已经连着 CarDash（用户手动连的，或上次 joinOnce 留下的），
              * **直接 POST 一次**；只有它失败才说明真没连上，这时再去 apply 并重试。
              */
+            /*
+             * 先做一次 GET /ping 探针。
+             *
+             * 为什么：用户实测 Safari 打开 http://192.168.4.1/ping 是通的
+             * （返回 {"ok":true}），说明**设备和网络都没问题**，问题在 App 的网络层。
+             * 先 ping 一下能把范围再收窄一层：
+             *   - ping 也失败 → App 的网络配置/权限问题（会显示具体 URLError 码）；
+             *   - ping 成功、POST 失败 → 就是 POST 这条请求本身（体积/超时/服务端 upload 流）。
+             */
+            await MainActor.run { uploadStatus = "正在探测设备…" }
+            let pingResult = await probe()
+            guard pingResult == nil else {
+                throw PgiEncoderError.encodeFailed("探测 /ping 失败：\(pingResult!)")
+            }
+
             do {
                 try await post(pgi)
             } catch {
@@ -453,7 +468,7 @@ struct PhotoTabView: View {
             }
         } catch {
             await MainActor.run {
-                var msg = "失败：\(error.localizedDescription)"
+                var msg = "失败：\(Self.describeNetError(error))"
                 if let join = Self.lastJoinError {
                     msg += "\n（自动连热点：\(join)）"
                 }
@@ -491,6 +506,46 @@ struct PhotoTabView: View {
     /// 用 `NEHotspotConfiguration` 是为了**免去用户去「设置」里手动选网络** ——
     /// 这正是用户要的"像蓝牙那样，扫到就连上"。
     /// 若系统拒绝（没授权/已连别的网被拒），回退提示用户手动连接。
+    /// 最小连通性探针：GET /ping。成功返回 nil，失败返回"错误码 + 说明"。
+    private func probe() async -> String? {
+        guard let url = URL(string: "http://\(Self.deviceAPHost)/ping") else {
+            return "URL 非法"
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        let cfg = URLSessionConfiguration.default
+        cfg.allowsCellularAccess = false
+        let session = URLSession(configuration: cfg)
+        do {
+            let (_, resp) = try await session.data(for: req)
+            guard let http = resp as? HTTPURLResponse else { return "非 HTTP 响应" }
+            return http.statusCode == 200 ? nil : "HTTP \(http.statusCode)"
+        } catch {
+            return Self.describeNetError(error)
+        }
+    }
+
+    /// 把 URLError 翻成"码 + 说明"，否则永远只看到一句没用的英文
+    private static func describeNetError(_ error: Error) -> String {
+        let ns = error as NSError
+        guard ns.domain == NSURLErrorDomain else {
+            return "\(ns.domain)#\(ns.code) \(ns.localizedDescription)"
+        }
+        let names: [Int: String] = [
+            NSURLErrorCannotFindHost: "找不到主机",
+            NSURLErrorCannotConnectToHost: "连不上主机",
+            NSURLErrorNetworkConnectionLost: "连接被断开",
+            NSURLErrorNotConnectedToInternet: "未联网",
+            NSURLErrorTimedOut: "超时",
+            NSURLErrorAppTransportSecurityRequiresSecureConnection: "ATS 要求 HTTPS",
+            NSURLErrorDataNotAllowed: "数据被策略禁止（蜂窝被禁时常见）",
+            NSURLErrorSecureConnectionFailed: "安全连接失败",
+            NSURLErrorCannotLoadFromNetwork: "无法从网络加载",
+        ]
+        let name = names[ns.code] ?? "未知"
+        return "URLError \(ns.code)（\(name)）"
+    }
+
     /// 尝试连上仪表热点；返回是否"现在应该连着"（失败也会返回 true 让调用方重试一次）
     private func ensureHotspot() async -> Bool {
         let manager = NEHotspotConfigurationManager.shared
