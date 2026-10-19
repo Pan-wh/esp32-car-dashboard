@@ -5,7 +5,7 @@ PYTHON  ?= python3
 CFLAGS  := -O1 -std=gnu99 -Wall -Wextra -I../simulator/ui
 SRC     := ../simulator/ui/telemetry.c
 
-TESTS   := test_telemetry test_control test_ui_face test_nav test_nav_parse test_nav_map test_img_indexed test_face_report test_auto_bright test_bright_parse test_pgi
+TESTS   := test_telemetry test_control test_ui_face test_nav test_nav_parse test_nav_map test_img_indexed test_face_report test_auto_bright test_bright_parse test_pgi test_photo_slide
 
 # iOS 侧导航核心：直接编译 App 的真实源文件（不复制逻辑，避免与实现漂移）
 NAV_SRC      := ../ios/CarDashboardPhone/CarDashboardPhone/Nav/NavCore.swift \
@@ -86,7 +86,11 @@ test_img_indexed: test_img_indexed.c ../simulator/ui/img_indexed.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 # 照片表盘的 .pgi 容器（解析/帧索引/解码一致性 + 跨语言夹具）
+test_pgi: test_pgi.c ../simulator/ui/pgi.c ../simulator/ui/img_indexed.c# 照片表盘的 .pgi 容器（解析/帧索引/解码一致性 + 跨语言夹具）
 test_pgi: test_pgi.c ../simulator/ui/pgi.c ../simulator/ui/img_indexed.c
+
+# 照片表盘的轮播状态机（静态/动图混排、三个开关、息屏计时）
+test_photo_slide: test_photo_slide.c ../simulator/ui/photo_slide.c
 
 # ⚠️ 必须遍历 $(TESTS)，不要在这里逐个硬编码测试名。
 #    曾经硬编码过：新测试加进 $(TESTS) 却**永远不会被执行**，
