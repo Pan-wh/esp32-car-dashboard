@@ -37,6 +37,17 @@ targets:
         NSPhotoLibraryAddUsageDescription: 把裁切生成的 GIF 保存到相册
         # PhotosPicker 本身不需要读权限，但导出后用户可能想再选回来
         NSPhotoLibraryUsageDescription: 选择图片或视频作为照片表盘的素材
+
+        # ── 上传到仪表（192.168.4.1）必需的两个声明 ──
+        #
+        # ① iOS 14+ 的「本地网络权限」：App 访问私有 IP（192.168.x.x）需要它。
+        #    如果 Info.plist 里**没有**这条，请求会**直接失败**且**不弹权限框**，
+        #    报出来的是一个含糊的网络错误（实测为 "The network connection was lost"）。
+        # ② ATS 默认禁止明文 HTTP；`NSAllowsLocalNetworking` 只放行本地网络，
+        #    比 `NSAllowsArbitraryLoads` 安全（后者会把整个 App 的 HTTPS 强制都放开）。
+        NSLocalNetworkUsageDescription: 上传照片到仪表（局域网内 192.168.4.1）
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         UIBackgroundModes:
           - location
           - bluetooth-central
