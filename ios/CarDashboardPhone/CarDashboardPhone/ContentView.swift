@@ -872,6 +872,17 @@ struct ContentView: View {
             }
 
             Button(session.isDriving ? "结束驾驶" : "开始驾驶") {
+
+            /*
+             * 照片上传入口（快捷方式）：
+             * 「照片」页本身有完整流程，这里只放一个入口 —— 用户平时停在「仪表」页，
+             * 传图的路径要短。点击后切到「照片」Tab。
+             */
+            NavigationLink {
+                PhotoTabView()
+            } label: {
+                Label("上传照片到仪表", systemImage: "photo.badge.plus")
+            }
                 if session.isDriving {
                     session.stopDriving()
                 } else {

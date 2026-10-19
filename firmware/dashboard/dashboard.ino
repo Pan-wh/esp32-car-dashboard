@@ -806,7 +806,23 @@ static void wifi_start_http(void)
                  s_upload_bytes += up.currentSize;
                } else if (up.status == UPLOAD_FILE_END) {
                  upload_finish(true);
-                 Serial.printf("[上传] 完成 %s（%u 字节）\n", s_upload_name, (unsigned)s_upload_bytes);
+                 /*
+                  * ⚠️ **必须让照片表盘重新扫描目录。**
+                  *
+                  * 原来 `photo_poll()` 只在"文件清单为空"时扫一次 `/photos/`
+                  * （结果缓存住）。于是**上传完新文件，表盘根本不知道** ——
+                  * 现象就是"上传成功，但一直显示的还是旧图"（用户实测）。
+                  *
+                  * 这里清空清单与当前文件名，下一次 `photo_poll()` 会重新扫描并
+                  * 从新文件开始播。
+                  */
+                 s_photo.file_count = 0;
+                 s_photo.cur_file = -1;
+                 s_photo_name_count = 0;
+                 s_photo_cur_name[0] = '\0';
+                 s_photo_loading = -1;
+                 Serial.printf("[上传] 完成 %s（%u 字节）→ 已通知照片表盘重新扫描\n",
+                               s_upload_name, (unsigned)s_upload_bytes);
                } else if (up.status == UPLOAD_FILE_ABORTED) {
                  Serial.println("[上传] 中断");
                  upload_finish(false);
