@@ -748,8 +748,18 @@ static void wifi_start_http(void)
   if (s_http != NULL) return;
   s_http = new WebServer(80);
 
+  /*
+   * /ping —— 最小的连通性探针（不落文件、不碰 SD）。
+   * App 上传前可以先 GET 一下，能把"网络不通"和"上传逻辑有问题"分开。
+   */
+  s_http->on("/ping", HTTP_GET, []() {
+    Serial.println("[上传] 收到 GET /ping ← 网络是通的");
+    s_http->send(200, "application/json", "{\"ok\":true,\"dev\":\"cardash\"}");
+  });
+
   /* 浏览器/调试用：一个极简说明页 */
   s_http->on("/", HTTP_GET, []() {
+    Serial.printf("[上传] 收到 GET /（来自 %s）\n", s_http->client().remoteIP().toString().c_str());
     s_http->send(200, "text/plain; charset=utf-8",
                  "car-dashboard photo upload\n"
                  "POST /upload?name=xxx.pgi  (raw body, <= 8MB)\n");
@@ -758,6 +768,9 @@ static void wifi_start_http(void)
   /* 上传：用 upload 流，避免把 8MB 全缓冲进内存 */
   s_http->on("/upload", HTTP_POST,
              []() { /* 收尾（upload 回调里已处理，这里只回 200）*/
+               Serial.printf("[上传] 收到 POST /upload（来自 %s，%u 字节）\n",
+                             s_http->client().remoteIP().toString().c_str(),
+                             (unsigned)s_upload_bytes);
                s_http->send(200, "application/json",
                             String("{\"ok\":true,\"bytes\":") + String((unsigned)s_upload_bytes) + "}");
              },
@@ -866,10 +879,23 @@ static bool wifi_start_ap(void)
   return true;
 }
 
-/** 主循环：处理 HTTP 请求 */
+/** 主循环：处理 HTTP 请求 + 报告客户端数变化 */
 static void wifi_poll(void)
 {
   if (s_http != NULL) s_http->handleClient();
+
+  /*
+   * 客户端数变化时打一行 —— 这是排查"手机到底连上热点没有"最直接的证据。
+   * 用户报上传失败时，先看这行：0 = 手机没连上，1 = 连上了但请求没发出来。
+   */
+  if (s_wifi_up) {
+    static int last_sta = -1;
+    int sta = (int)WiFi.softAPgetStationNum();
+    if (sta != last_sta) {
+      Serial.printf("[上传] 热点客户端数：%d\n", sta);
+      last_sta = sta;
+    }
+  }
 }
 
 /* ── S1 / S3 spike：SD 读速与 .pgi 解码耗时 ────────────────────────
@@ -2429,8 +2455,9 @@ static void process_command(char *cmd)
     while (*arg == ' ') arg++;
     if (*arg == '\0') {
       if (s_wifi_up) {
-        Serial.printf("[上传] 热点 %s 已开启，IP=%s，%s\n", WIFI_AP_SSID, s_wifi_ip.c_str(),
-                      WIFI_AP_OPEN ? "免密" : "密码 cardash1");
+        Serial.printf("[上传] 热点 %s 已开启，IP=%s，%s，**已连客户端 %d 个**\n", WIFI_AP_SSID,
+                      s_wifi_ip.c_str(), WIFI_AP_OPEN ? "免密" : "密码 cardash1",
+                      (int)WiFi.softAPgetStationNum());
       } else {
         Serial.println("[上传] 未开启（敲 wifi on 开热点）");
       }
