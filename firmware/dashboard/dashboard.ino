@@ -365,6 +365,10 @@ static int           s_photo_shift_phase = 0;  /* 位移相位 0..3 */
 static bool          s_photo_entered = false;  /* 是否已进过照片表盘（用于一次性设亮度封顶）*/
 static uint32_t      s_photo_frames = 0;       /* 实测帧率用 */
 static uint32_t      s_photo_fps_t0 = 0;
+static int           s_photo_shown_file = -1;  /* 当前已显示的文件下标（-1=还没显示过）*/
+static int           s_photo_shown_frame = -1; /* 当前已显示的帧下标 */
+static uint32_t      s_photo_t_read = 0;   /* 本统计窗口内累计的读耗时 */
+static uint32_t      s_photo_t_dec  = 0;   /* 本统计窗口内累计的解码耗时 */
 static char          s_photo_names[PHOTO_SLIDE_MAX_FILES][64];
 static int           s_photo_name_count = 0;
 
@@ -714,6 +718,18 @@ static void photo_poll(void)
   }
   ui_photo_set_shift(f.shift, s_photo_shift_phase);
 
+  /*
+   * ⚠️ **帧没变就不要重读重解**。
+   *
+   * 实测：静态图（1 帧）也在"每秒播 3 帧"，每帧白白花 读 104ms + 解码 22ms ——
+   * 因为每次 poll 都把 `s_photo_loading` 复位成 -1，于是又把同一帧读了一遍。
+   * 这既浪费 CPU/电，也让一次真正的换帧变得更慢（主循环被无意义地占着）。
+   */
+  if (s_photo_shown_file == f.file_index && s_photo_shown_frame == f.frame_index &&
+      ui_photo_has_frame()) {
+    return;   /* 已经在显示这一帧了，什么都不用做 */
+  }
+
   /* 换文件 → 重新打开 */
   const char *want_name = (f.file_index < s_photo_name_count)
                               ? s_photo_names[f.file_index] : NULL;
@@ -770,7 +786,9 @@ static void photo_poll(void)
   if (s_photo_got < s_photo_need) {
     size_t remain = s_photo_need - s_photo_got;
     size_t chunk = remain > PHOTO_READ_CHUNK ? PHOTO_READ_CHUNK : remain;
+    uint32_t tr = millis();
     int r = s_photo_file.read(s_photo_stage + s_photo_got, chunk);
+    s_photo_t_read += millis() - tr;
     if (r <= 0) {
       ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
       s_photo_loading = -1;
@@ -788,21 +806,35 @@ static void photo_poll(void)
    * 暂存区里的布局就是 `[调色板 1024B][索引 w*h]` —— 与 `img_indexed_decode8`
    * 期望的完全一致（这也是 pgi 格式当初那样设计的原因：零转换逻辑）。
    */
-  if (img_indexed_decode8(s_photo_stage, (int)s_photo_hdr.width,
-                          (int)s_photo_hdr.height, s_photo_buf[back], px)) {
+  uint32_t td = millis();
+  bool decoded = img_indexed_decode8(s_photo_stage, (int)s_photo_hdr.width,
+                                     (int)s_photo_hdr.height, s_photo_buf[back], px);
+  s_photo_t_dec += millis() - td;
+  if (decoded) {
     /* 实测帧率：每秒打一次，用来核对 §十点五 里"约 10 fps"的推算 */
     s_photo_frames++;
     uint32_t now2 = millis();
     if (now2 - s_photo_fps_t0 >= 1000u) {
-      Serial.printf("[照片] 实测 %u 帧/秒（%s 第 %d 帧）\n",
+      /*
+       * 每秒打印时把**三段耗时**一起打出来 —— 这是优化动图帧率的唯一依据。
+       * 之前的推算（读 93ms + 解 21ms + flush 43ms ≈ 10fps）与实测 3~4fps 不符，
+       * 说明还有没算到的时间，必须先量再改。
+       */
+      uint32_t n = s_photo_frames > 0 ? s_photo_frames : 1;
+      Serial.printf("[照片] 实测 %u 帧/秒 | 平均每帧：读 %u ms / 解码 %u ms（%s 第 %d 帧）\n",
                     (unsigned)(s_photo_frames * 1000u / (now2 - s_photo_fps_t0)),
+                    (unsigned)(s_photo_t_read / n), (unsigned)(s_photo_t_dec / n),
                     s_photo_cur_name, s_photo_loading);
       s_photo_frames = 0;
+      s_photo_t_read = 0;
+      s_photo_t_dec = 0;
       s_photo_fps_t0 = now2;
     }
     s_photo_show_idx = back;
     ui_photo_show_frame(s_photo_buf[s_photo_show_idx], (int)s_photo_hdr.width,
                         (int)s_photo_hdr.height);
+    s_photo_shown_file = f.file_index;
+    s_photo_shown_frame = f.frame_index;
   } else {
     ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
   }
