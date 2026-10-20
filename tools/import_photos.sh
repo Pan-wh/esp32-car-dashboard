@@ -12,7 +12,16 @@
 #   - HEIC  用 macOS 自带 `sips` 转 JPG（Pillow 打不开 HEIC）
 #   - 视频  用 tools/extract_frames.swift（AVFoundation 抽帧）→ GIF → .pgi
 #
-# 自动控制体积：设备端单文件上限 8 MB，脚本会按需**减少帧数**直到放得下。
+# ## 关于体积上限
+#
+# 原来写死 8 MB，那是**为已废弃的 Wi-Fi 上传**设的（板子内部堆不够，传大文件必崩）。
+# 现在走 SD 卡，**没有任何 8 MB 限制**：
+#   - SD 卡可用 5.74 GB；
+#   - 设备每次只读**一帧**（≈218 KB），**文件总大小与内存无关**。
+#
+# 所以默认上限放宽到 **40 MB**（只是防手滑，不是硬约束）。
+# 注意：**加大体积只会让动画更长，不会更流畅** ——
+# 帧率取决于"每帧读多少像素"，与总帧数无关。想更顺请看 `--fast`。
 #
 # ## 关于动图卡顿（实测数据）
 #
@@ -36,7 +45,7 @@ set -euo pipefail
 SRC="${1:-/Volumes/NO NAME/original}"
 DST="${2:-/Volumes/NO NAME/photos}"
 SIZE=466
-MAX_MB=8
+MAX_MB=40
 FPS=8
 MAX_FRAMES=35
 
@@ -81,7 +90,7 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 echo "源目录  : $SRC"
 echo "目标目录: $DST"
-echo "边长 $SIZE · 上限 ${MAX_MB}MB · 动图 ${FPS}fps / 最多 ${MAX_FRAMES} 帧"
+echo "边长 $SIZE · 上限 ${MAX_MB}MB（仅防手滑，非硬件限制）· 动图 ${FPS}fps / 最多 ${MAX_FRAMES} 帧"
 echo
 
 n=0; ok=0; fail=0
