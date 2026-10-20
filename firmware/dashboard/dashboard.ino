@@ -1018,11 +1018,20 @@ static void http_upload(WiFiClient &c, const char *url, size_t contentLen)
     http_reply(c, 413, "Payload Too Large", "{\"ok\":false,\"error\":\"bad_size\"}");
     return;
   }
-  if (ESP.getFreeHeap() < 12000u) {
-    Serial.printf("[上传] 拒绝：堆不足（%u B）\n", (unsigned)ESP.getFreeHeap());
+  /*
+   * 堆门槛。实测：手机**连上热点后** heap 会再掉几 KB（AP 的 station 连接
+   * 本身要占内存），所以"空闲 20 KB"的读数不代表请求到达时也有 20 KB。
+   * 原来门槛 12 KB 会把正常请求误拒（返回 507）。降到 6 KB，
+   * 并把**真实读数**打出来，便于判断到底还够不够。
+   */
+  const uint32_t heapNow = ESP.getFreeHeap();
+  if (heapNow < 6000u) {
+    Serial.printf("[上传] 拒绝：堆不足（%u B < 6000 B）\n", (unsigned)heapNow);
     http_reply(c, 507, "Insufficient Storage", "{\"ok\":false,\"error\":\"low_heap\"}");
     return;
   }
+  Serial.printf("[上传] 开始写盘，此时内部堆 %u B，最大块 %u B\n", (unsigned)heapNow,
+                (unsigned)ESP.getMaxAllocHeap());
 
   SD_MMC.mkdir(PHOTO_DIR);
   char path[96];
