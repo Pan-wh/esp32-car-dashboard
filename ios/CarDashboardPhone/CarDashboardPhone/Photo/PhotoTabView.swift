@@ -86,175 +86,7 @@ struct PhotoTabView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    PhotosPicker(selection: $pickedItem,
-                                 matching: .any(of: [.images, .videos]),
-                                 photoLibrary: .shared()) {
-                        Label("选择图片或视频", systemImage: "photo.on.rectangle.angled")
-                    }
-                    .disabled(busy)
-                } footer: {
-                    Text("支持：单张图片、GIF/动图、视频（转 GIF）。\n裁切后为正方形，设备圆屏会再裁掉四角。")
-                }
-
-                // ── 预览（圆屏遮罩，所见即所得）──
-                Section("预览") {
-                    GeometryReader { geo in
-                        let side = min(geo.size.width, geo.size.height)
-                        ZStack {
-                            Color.black
-                            if let preview {
-                                /*
-                                 * 预览 = 裁好的正方形 + **与导出一致的变换**。
-                                 * 顺序很重要：先 scale 再 offset（与 squareCropped 里的
-                                 * "先绕中心放大、再按比例平移"是同一套语义）。
-                                 */
-                                Image(uiImage: preview)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: side, height: side)
-                                    /*
-                                     * 注意：旋转**只影响预览的示意** ——
-                                     * 真正参与导出的是 squareCropped 里的旋转，
-                                     * 两者角度必须来自同一个 committedRotation。
-                                     */
-                                    .rotationEffect(.degrees(committedRotation))
-                                    .scaleEffect(zoom)
-                                    .offset(x: pan.width + committedPan.width,
-                                            y: pan.height + committedPan.height)
-                            } else {
-                                Text("还没有素材")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .frame(width: side, height: side)
-                        // 圆形遮罩：与设备圆屏一致，也是"最终会显示的区域"
-                        .clipShape(Circle())
-                        .overlay(
-                            Circle()
-                                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
-                        )
-                        .contentShape(Circle())
-                        .gesture(
-                            SimultaneousGesture(
-                                SimultaneousGesture(magnifyGesture(side: side),
-                                                    dragGesture(side: side)),
-                                rotateGesture()
-                            )
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                    .frame(height: 300)
-                    .padding(.vertical, 6)
-
-                    if preview != nil {
-                        HStack {
-                            Text("缩放 \(String(format: "%.1f", zoom))×")
-                                .font(.caption).monospacedDigit()
-                            if committedRotation != 0 {
-                                Text("\(Int(committedRotation))°")
-                                    .font(.caption).monospacedDigit()
-                            }
-                            Spacer()
-                            Spacer()
-                            Button("复位") { resetTransform() }
-                                .font(.caption)
-                                .buttonStyle(.borderless)
-                        }
-                        .foregroundStyle(.secondary)
-                    }
-
-                    if let note = Self.pendingFPSNote {
-                        Text(note)
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                    }
-                    if !status.isEmpty {
-                        Text(status)
-                            .font(.footnote)
-                            .foregroundStyle(busy ? .orange : .secondary)
-                    }
-                }
-
-                Section("参数") {
-                    Picker("旋转角度", selection: Binding(
-                        get: { Int(committedRotation) % 360 },
-                        set: { newValue in
-                            committedRotation = CGFloat(newValue)
-                            normalizeRotation()
-                            reapplyTransform()
-                        }
-                    )) {
-                        Text("0°").tag(0)
-                        Text("90°").tag(90)
-                        Text("180°").tag(180)
-                        Text("270°").tag(270)
-                    }
-                    .pickerStyle(.segmented)
-                    .disabled(rawFrames.isEmpty)
-
-                    Stepper("边长：\(size) px", value: $size, in: 240...466, step: 2)
-                    HStack {
-                        Text("视频帧率")
-                        Spacer()
-                        Text("\(Int(fps)) fps")
-                            .foregroundStyle(.secondary)
-                        Slider(value: $fps, in: 4...20, step: 1)
-                            .frame(width: 150)
-                    }
-                }
-
-                Section {
-                    Button {
-                        Task { await exportGIF() }
-                    } label: {
-                        Label("导出 GIF 到相册", systemImage: "square.and.arrow.down")
-                    }
-                    .disabled(gifData == nil || busy)
-
-                    if let gifData {
-                        Label("已生成 \(frameCount) 帧 · \(gifData.count / 1024) KB",
-                              systemImage: "checkmark.circle")
-                            .font(.footnote)
-                            .foregroundStyle(.green)
-                    }
-                } footer: {
-                    Text("导出的 GIF 会存进系统相册，可直接查看播放效果。")
-                }
-
-                // ── 如何导入照片（走 SD 卡） ──
-                /*
-                 * ⚠️ **Wi-Fi 上传已放弃**（2026-10-20 决定）。
-                 *
-                 * 实测：手机连上热点后，内部堆只剩 **2~4 KB**
-                 * （AP 的 station 连接本身吃掉 ~17 KB），
-                 * 上传请求会被"堆不足"拒绝，且第一次上传后堆不再回收。
-                 * 这块板子的内部 RAM 撑不住"Wi-Fi + HTTP + SD 写入"。
-                 *
-                 * 改用 **SD 卡直接拷文件** —— 零风险、不占内存、还能批量。
-                 */
-                Section {
-                    Text("① 把 SD 卡插到电脑")
-                    Text("② 用 tools/pgi.py 把图片/动图转成 .pgi")
-                        .font(.footnote)
-                    Text("③ 放进卡里的 /photos/ 目录")
-                        .font(.footnote)
-                    Text("④ 插回仪表 → 划到照片表盘")
-                        .font(.footnote)
-                } header: {
-                    Text("如何导入照片")
-                } footer: {
-                    Text("命令示例：\npython3 tools/pgi.py 我的图.jpg -o /Volumes/SD/photos/01.pgi --size 466")
-                        .font(.system(.caption2, design: .monospaced))
-                }
-                // ── 选择播放哪张（纯 BLE，不需要 Wi-Fi） ──
-                /*
-                 * 用户要求：**只用蓝牙**，别搞 WiFi + 蓝牙两套。
-                 *
-                 * 设备端新增了 `{"cmd":"photo_play","value":N}` ——
-                 * 直接把照片表盘切到第 N 张（0 起）。
-                 * 这样不需要"列出文件"就能选图：上一张 / 下一张循环即可。
-                 */
+                // ═══ ① 当前播放（最常用，放最上面）═══
                 Section {
                     HStack {
                         Spacer()
@@ -273,14 +105,14 @@ struct PhotoTabView: View {
                         .buttonStyle(.bordered)
                         Spacer()
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 2)
                 } header: {
                     Text("当前播放")
                 } footer: {
-                    Text("用蓝牙直接切换仪表上的照片（不需要 Wi-Fi）。\n切换后关闭轮播即可钉住这一张。")
+                    Text("用蓝牙直接切到相邻的照片。想在某一帧停住：先切到它，再关闭下面的「自动轮播」。")
                 }
 
-                // ── 播放设置（BLE 下发到仪表） ──
+                // ═══ ② 播放设置 ═══
                 Section {
                     Toggle("自动轮播", isOn: Binding(
                         get: { slideshowOn },
@@ -302,14 +134,97 @@ struct PhotoTabView: View {
                         Text("5 分钟").tag(300)
                     }
                     .disabled(!slideshowOn)
+
+                    // 旋转是裁切时最常调的，留在一级
+                    Picker("旋转", selection: Binding(
+                        get: { Int(committedRotation) % 360 },
+                        set: { v in
+                            committedRotation = CGFloat(v)
+                            normalizeRotation()
+                            reapplyTransform()
+                        }
+                    )) {
+                        Text("0°").tag(0)
+                        Text("90°").tag(90)
+                        Text("180°").tag(180)
+                        Text("270°").tag(270)
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(rawFrames.isEmpty)
                 } header: {
                     Text("播放设置")
                 } footer: {
                     Text("关闭轮播后仪表停在当前那张，并自动开启像素位移防烧屏。")
                 }
+
+                // ═══ ③ 素材（小预览 + 选图）═══
+                Section {
+                    PhotosPicker(selection: $pickedItem,
+                                 matching: .any(of: [.images, .videos]),
+                                 photoLibrary: .shared()) {
+                        Label("选择图片或视频", systemImage: "photo.on.rectangle.angled")
+                    }
+                    .disabled(busy)
+
+                    if let preview {
+                        HStack {
+                            Spacer()
+                            /* 小预览：够看裁切是否合适，不占半屏 */
+                            ZStack {
+                                Color.black
+                                Image(uiImage: preview)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 120, height: 120)
+                                    .clipShape(Circle())
+                            }
+                            .frame(width: 120, height: 120)
+                            Spacer()
+                        }
+                        .padding(.vertical, 4)
+                        Text(status.isEmpty ? " " : status)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(status.isEmpty ? "还没有素材" : status)
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("素材")
+                } footer: {
+                    Text("裁切为正方形并居中；设备圆屏会再裁掉四角。")
+                }
+
+                // ═══ ④ 高级（折叠，少用）═══
+                Section {
+                    DisclosureGroup("导出与导入") {
+                        Button {
+                            Task { await exportGIF() }
+                        } label: {
+                            Label("导出 GIF 到相册", systemImage: "square.and.arrow.down")
+                        }
+                        .disabled(gifData == nil || busy)
+
+                        if let gifData {
+                            Text("已生成 \(frameCount) 帧 · \(gifData.count / 1024) KB")
+                                .font(.caption2).foregroundStyle(.green)
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("导入新照片（走 SD 卡）").font(.caption).bold()
+                            Text("① 卡插电脑  ② 用 tools/import_photos.sh 批量转换")
+                                .font(.caption2)
+                            Text("③ 放进 /photos/  ④ 插回仪表")
+                                .font(.caption2)
+                            Text("python3 tools/import_photos.sh")
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
             }
             .navigationTitle("照片")
-            .task { await refreshList(quiet: true) }
             .onChange(of: pickedItem) { _, item in
                 guard let item else { return }
                 Task { await load(item) }
