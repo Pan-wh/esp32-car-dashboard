@@ -222,37 +222,31 @@ struct PhotoTabView: View {
                     Text("导出的 GIF 会存进系统相册，可直接查看播放效果。")
                 }
 
-                // ── 上传到仪表 ──
+                // ── 如何导入照片（走 SD 卡） ──
+                /*
+                 * ⚠️ **Wi-Fi 上传已放弃**（2026-10-20 决定）。
+                 *
+                 * 实测：手机连上热点后，内部堆只剩 **2~4 KB**
+                 * （AP 的 station 连接本身吃掉 ~17 KB），
+                 * 上传请求会被"堆不足"拒绝，且第一次上传后堆不再回收。
+                 * 这块板子的内部 RAM 撑不住"Wi-Fi + HTTP + SD 写入"。
+                 *
+                 * 改用 **SD 卡直接拷文件** —— 零风险、不占内存、还能批量。
+                 */
                 Section {
-                    HStack {
-                        Text("仪表 IP")
-                        TextField("192.168.1.23", text: $deviceHost)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .onChange(of: deviceHost) { _, v in
-                                UserDefaults.standard.set(v, forKey: "photoDeviceHost")
-                            }
-                    }
-                    Button {
-                        Task { await upload() }
-                    } label: {
-                        Label(uploading ? "正在上传…" : "连接仪表并上传", systemImage: "paperplane")
-                    }
-                    .disabled(uploading || rawFrames.isEmpty)
-
-                    if !uploadStatus.isEmpty {
-                        Text(uploadStatus)
-                            .font(.footnote)
-                            .foregroundStyle(uploading ? .orange : .secondary)
-                    }
+                    Text("① 把 SD 卡插到电脑")
+                    Text("② 用 tools/pgi.py 把图片/动图转成 .pgi")
+                        .font(.footnote)
+                    Text("③ 放进卡里的 /photos/ 目录")
+                        .font(.footnote)
+                    Text("④ 插回仪表 → 划到照片表盘")
+                        .font(.footnote)
                 } header: {
-                    Text("上传到仪表")
+                    Text("如何导入照片")
                 } footer: {
-                    Text("仪表**开机就会开**一个名为 \(Self.deviceAPSSID) 的免密热点（IP 固定 \(Self.deviceAPHost)）。\n点上面的按钮会自动连上它并上传，传完自动断开。\n\n如果自动连失败，手动在「设置 → 无线局域网」里选 \(Self.deviceAPSSID) 也能传。")
+                    Text("命令示例：\npython3 tools/pgi.py 我的图.jpg -o /Volumes/SD/photos/01.pgi --size 466")
+                        .font(.system(.caption2, design: .monospaced))
                 }
-
                 // ── 设备上的照片 ──
                 Section {
                     if loadingList {

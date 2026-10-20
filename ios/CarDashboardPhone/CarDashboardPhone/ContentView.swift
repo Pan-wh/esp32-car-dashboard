@@ -17,7 +17,15 @@ struct ContentView: View {
     private var deviceFaces: [DeviceFace] { session.ble.faces.faces }
 
     /// 设备实际存在的分组（通常 3 个：时钟 / 速度表 / 导航）
-    private var groups: [String] { session.ble.faces.grouped.map { $0.group } }
+    /// 分组列表：**最前面固定加一个"全部"**。
+    ///
+    /// 用户反馈"仪表里看不到照片表盘" —— 分组选择器默认只显示**当前表盘所在组**，
+    /// 若当前表盘在 clock 组，照片组就被藏在别的分段里，很容易以为"没有这个表盘"。
+    /// 加一个"全部"并默认选中，**6 个表盘一定看得见**。
+    private static let allGroupKey = "__all__"
+    private var groups: [String] {
+        [Self.allGroupKey] + session.ble.faces.grouped.map { $0.group }
+    }
 
     /// 当前正在显示的表盘 id（**以设备上报的 `cur` 为准**）。
     ///
@@ -33,6 +41,10 @@ struct ContentView: View {
     /// 单一数据源，不存在"两份状态对不上"的可能。
     private var effectiveGroup: String {
         if !selectedGroup.isEmpty && groups.contains(selectedGroup) { return selectedGroup }
+        /* 默认"全部" —— 保证任何表盘（含照片）都能被看到 */
+        return Self.allGroupKey
+        // 下面两行是历史逻辑（默认跟随当前表盘的分组），保留作为参考：
+        // if let cur = ... { return cur.group }
         // 首次打开时优先显示**当前表盘所在的分组** —— 否则默认停在第一个分组，
         // 而当前表盘在别的分组里，用户会看不到 ✓ 标记、以为"没有当前表盘"。
         if let cur = deviceFaces.first(where: { $0.id == currentFaceId }) {
@@ -46,6 +58,7 @@ struct ContentView: View {
     private var facesInSelectedGroup: [DeviceFace] {
         let g = effectiveGroup
         guard !g.isEmpty else { return [] }
+        if g == Self.allGroupKey { return deviceFaces }
         return deviceFaces.filter { $0.group == g }
     }
     /// 屏幕方向选项（度）—— 只列 90 的整数倍，与固件 control.c 的严格校验一致。
@@ -773,7 +786,7 @@ struct ContentView: View {
                     set: { selectedGroup = $0 }
                 )) {
                     ForEach(groups, id: \.self) { g in
-                        Text(FaceDisplay.groupTitle(g)).tag(g)
+                        Text(g == Self.allGroupKey ? "全部" : FaceDisplay.groupTitle(g)).tag(g)
                     }
                 }
                 .pickerStyle(.segmented)

@@ -222,8 +222,18 @@ enum PgiEncoder {
         let keep = max(1, min(256, used))
 
         var pal = [UInt8](repeating: 0, count: paletteBytes)
-        // 桶 → 调色板下标（未选中的桶先用 0）
-        var lut = [UInt8](repeating: 0, count: 32768)
+        /*
+         * 桶 → 调色板下标。
+         *
+         * ⚠️ **没入选的桶必须回退到"最近的已选颜色"，不能用 0。**
+         * 原来 `lut` 初值全 0，于是所有没入选的桶都被映射到调色板第 0 项
+         * （出现最多的那个颜色）—— 大片像素被压成单调色，**看起来就像黑白/偏色**。
+         *
+         * 这里改成：先记下"已选桶 → 调色板下标"，再对每个未选桶线性搜一个最近的已选桶
+         * （32768 个桶 × 最多 256 个已选，只在编码时算一次，代价可接受）。
+         */
+        var chosen: [(bin: Int, pal: Int)] = []
+        chosen.reserveCapacity(keep)
         for i in 0..<keep {
             let bin = order[i]
             let r5 = (bin >> 10) & 0x1F
@@ -238,7 +248,21 @@ enum PgiEncoder {
             pal[i * 4 + 1] = g
             pal[i * 4 + 2] = r
             pal[i * 4 + 3] = 0xFF
-            lut[bin] = UInt8(i)
+            chosen.append((bin, i))
+        }
+
+        /* 未入选的桶 → 找最近的已选桶（按 5-5-5 三通道差值平方和）*/
+        var lut = [UInt8](repeating: 0, count: 32768)
+        for bin in 0..<32768 {
+            let r5 = (bin >> 10) & 0x1F, g5 = (bin >> 5) & 0x1F, b5 = bin & 0x1F
+            var best = 0, bestD = Int.max
+            for c in chosen {
+                let cr = (c.bin >> 10) & 0x1F, cg = (c.bin >> 5) & 0x1F, cb = c.bin & 0x1F
+                let d = (r5 - cr) * (r5 - cr) + (g5 - cg) * (g5 - cg) + (b5 - cb) * (b5 - cb)
+                if d < bestD { bestD = d; best = c.pal }
+                if bestD == 0 { break }
+            }
+            lut[bin] = UInt8(best)
         }
 
         // ── 映射像素 + **Floyd–Steinberg 抖动** ──
