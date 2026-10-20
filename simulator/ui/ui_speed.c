@@ -35,8 +35,8 @@ LV_FONT_DECLARE(label_26);      /* Inter Medium 26px，单位/标签/状态 */
 
 /* V5 参数 */
 #define MARKER_INNER_R    168  /* 指针内端半径（插画内容最大半径 ≤ 24+115=139，不冲突） */
-#define DRIVER_SPIRITED_V 90.0f  /* 激烈驾驶阈值 km/h（用户确认：0-90 平静） */
-#define DRIVER_SPEEDING_V 120.0f /* 超速阈值 km/h（用户确认：>120 咬牙） */
+#define DRIVER_SPIRITED_V 60.0f  /* 激烈驾驶阈值 km/h（2026-10-20 用户改为：0-60 平静） */
+#define DRIVER_SPEEDING_V 100.0f /* 超速阈值 km/h（2026-10-20 用户改为：>100 咬牙） */
 
 
 /* ---- 状态 ---- */
@@ -285,7 +285,7 @@ static void apply_state(void)
     /* V5 定稿：指针 + 驾驶员表情 + 底部辅助信息（无中央大数字） */
     {
         if (s_meter && s_needle5) lv_meter_set_indicator_value(s_meter, s_needle5, v);
-        /* 插画：状态三态只在跨过 90/120 阈值时变化，用已显示状态防止重复 set_src */
+        /* 插画：状态三态只在跨过 60/100 阈值时变化，用已显示状态防止重复 set_src */
         show_driver_state(current_driver_state());
         /* 状态标签：同文案不重复 set_text（避免每次 apply_state 都 invalidate） */
         if (s_status5) {
