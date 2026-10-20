@@ -112,10 +112,16 @@ enum DeviceFaceParser {
         var faces: [DeviceFace] = []
         for item in rawFaces {
             guard let id = item["id"] as? Int else { continue }
-            let name = (item["name"] as? String) ?? ""
+            let name = (item["name"] as? String) ?? (item["n"] as? String) ?? ""
             // label 缺失时用 name 兜底，保证界面一定有可显示的文字
-            let label = (item["label"] as? String) ?? name
-            let group = (item["group"] as? String) ?? "other"
+            /*
+             * 兼容压缩前后的两种字段名：
+             *   - 旧：name / label / group / count / mask / cur / truncated
+             *   - 新：n / (无 label) / g / c / m / u / trunc
+             * 压缩是为了让 6 个表盘塞进 iOS 单次 BLE 读取（≈184 字节）。
+             */
+            let label = (item["label"] as? String) ?? (item["l"] as? String) ?? name
+            let group = (item["group"] as? String) ?? (item["g"] as? String) ?? "other"
             // on 可能是 1/0，也可能是 true/false（宽容处理）
             let enabled: Bool
             if let n = item["on"] as? Int { enabled = (n != 0) }

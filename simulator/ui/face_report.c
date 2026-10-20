@@ -208,7 +208,7 @@ int face_report_build(char *buf, size_t cap)
     sb_t full;
     sb_init(&full, probe, sizeof(probe));
     sb_printf(&full,
-              "{\"t\":\"faces\",\"v\":1,\"count\":%d,\"mask\":%u,\"cur\":%d",
+              "{\"t\":\"faces\",\"c\":%d,\"m\":%u,\"u\":%d",
               n, (unsigned)mask, current);
     sb_put_display(&full);
     sb_puts(&full, ",\"faces\":[");
@@ -216,11 +216,19 @@ int face_report_build(char *buf, size_t cap)
         const ui_face_desc_t *d = ui_face_get(i);
         if (d == NULL) continue;
         if (full.len > 0 && full.buf[full.len - 1] == '}') sb_putc(&full, ',');
-        sb_printf(&full, "{\"id\":%d,\"name\":", i);
+        /*
+         * ⚠️ **必须压到 ~184 字节以内**（iOS 的 BLE 单次读取上限 ≈ MTU 185）。
+         *
+         * 原来每条带 `label`（"Analog" 之类），6 个表盘一共 476 字节 ——
+         * 超出一次读取能拿到的量，App 拿到残段 → 判定"列表不完整" →
+         * **排在最后的照片表盘直接消失**。用户反复反馈"看不到照片表盘"就是这个。
+         *
+         * 现在：**去掉 label**（App 本来就有 `?? name` 兜底 + 本地化表），
+         * 字段名也缩短。6 个表盘约 150 字节，稳在 184 以内。
+         */
+        sb_printf(&full, "{\"id\":%d,\"n\":", i);
         sb_puts_json(&full, d->name);
-        sb_puts(&full, ",\"label\":");
-        sb_puts_json(&full, d->label);
-        sb_puts(&full, ",\"group\":");
+        sb_puts(&full, ",\"g\":");
         sb_puts_json(&full, group_key((int)d->group));
         sb_printf(&full, ",\"on\":%d}", ui_face_is_enabled(i) ? 1 : 0);
     }
@@ -239,7 +247,7 @@ int face_report_build(char *buf, size_t cap)
     sb_t sb;
     sb_init(&sb, buf, cap);
     sb_printf(&sb,
-              "{\"t\":\"faces\",\"v\":1,\"count\":%d,\"mask\":%u,\"cur\":%d,\"truncated\":1",
+              "{\"t\":\"faces\",\"c\":%d,\"m\":%u,\"u\":%d,\"trunc\":1",
               n, (unsigned)mask, current);
     /*
      * ⚠️ 显示状态放在表头之后、faces 之前，且**截断时也必须带出** ——
