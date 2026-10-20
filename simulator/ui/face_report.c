@@ -208,10 +208,20 @@ int face_report_build(char *buf, size_t cap)
     sb_t full;
     sb_init(&full, probe, sizeof(probe));
     sb_printf(&full,
-              "{\"t\":\"faces\",\"c\":%d,\"m\":%u,\"u\":%d",
+              "{\"t\":\"f\",\"c\":%d,\"m\":%u,\"u\":%d",
               n, (unsigned)mask, current);
     sb_put_display(&full);
-    sb_puts(&full, ",\"faces\":[");
+    /*
+     * ⚠️ **紧凑数组**：只出名字（顺序即 id）。
+     *
+     * 原因见文件头注释 —— iOS 单次 BLE 读取只有 ~184 字节，
+     * 带 label/group 的对象格式 6 个表盘就要 371 字节，必然被截断，
+     * 结果是**排在最后的照片表盘消失**（用户"看不到照片表盘"的真因）。
+     *
+     * 现在：`"f":["analog","digital","speed","color","nav","photo"]`
+     * → `id` = 下标、`group` 由名字映射、`on` 走 `mask` —— App 自己推导。
+     */
+    sb_puts(&full, ",\"f\":[");
     for (int i = 0; i < n; i++) {
         const ui_face_desc_t *d = ui_face_get(i);
         if (d == NULL) continue;
@@ -226,11 +236,8 @@ int face_report_build(char *buf, size_t cap)
          * 现在：**去掉 label**（App 本来就有 `?? name` 兜底 + 本地化表），
          * 字段名也缩短。6 个表盘约 150 字节，稳在 184 以内。
          */
-        sb_printf(&full, "{\"id\":%d,\"n\":", i);
+        if (i > 0) sb_putc(&full, ',');
         sb_puts_json(&full, d->name);
-        sb_puts(&full, ",\"g\":");
-        sb_puts_json(&full, group_key((int)d->group));
-        sb_printf(&full, ",\"on\":%d}", ui_face_is_enabled(i) ? 1 : 0);
     }
     sb_puts(&full, "]}");
     const size_t full_len = full.len;
@@ -247,7 +254,7 @@ int face_report_build(char *buf, size_t cap)
     sb_t sb;
     sb_init(&sb, buf, cap);
     sb_printf(&sb,
-              "{\"t\":\"faces\",\"c\":%d,\"m\":%u,\"u\":%d,\"trunc\":1",
+              "{\"t\":\"f\",\"c\":%d,\"m\":%u,\"u\":%d,\"trunc\":1",
               n, (unsigned)mask, current);
     /*
      * ⚠️ 显示状态放在表头之后、faces 之前，且**截断时也必须带出** ——

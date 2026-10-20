@@ -107,6 +107,46 @@ enum DeviceFaceParser {
         // 判别字段：只认 t == "faces"（与遥测包共用通道时的分流依据）
         guard (root["t"] as? String) == "faces" else { return nil }
 
+        /*
+         * ⚠️ **两种格式都要支持**。
+         *
+         * 旧：`"faces":[{"id":0,"name":"analog","group":"clock","on":1}, ...]` —— 6 个表盘 371 字节
+         * 新：`"f":["analog","digital","speed","color","nav","photo"]` —— 约 90 字节
+         *
+         * 为什么要压：iOS 单次 BLE 读取只有 **~184 字节**，旧格式必然被截断，
+         * 结果**排在最后的照片表盘消失**（用户"看不到照片表盘"的真因）。
+         * 新格式里 `id` = 下标、`group` 由名字映射、`on` 由 mask 推导。
+         */
+        if let names = root["f"] as? [String] {
+            let mask: UInt32 = {
+                if let m = root["m"] as? UInt32 { return m }
+                if let m = root["mask"] as? UInt32 { return m }
+                if let m = root["m"] as? Int { return UInt32(truncatingIfNeeded: m) }
+                if let m = root["mask"] as? Int { return UInt32(truncatingIfNeeded: m) }
+                return 0xFFFF_FFFF   // 没给 mask → 全部视为启用
+            }()
+            var list: [DeviceFace] = []
+            for (i, name) in names.enumerated() {
+                list.append(DeviceFace(id: i,
+                                       name: name,
+                                       label: name,
+                                       group: (name == "speed" ? "speed"
+                                               : name == "nav" ? "nav"
+                                               : name == "photo" ? "photo"
+                                               : "clock"),
+                                       enabled: (mask >> UInt32(i)) & 1 != 0))
+            }
+            guard !list.isEmpty else { return nil }
+            var rep = DeviceFaceReport()
+            rep.faces = list
+            rep.truncated = ((root["trunc"] as? Int) ?? (root["truncated"] as? Int) ?? 0) == 1
+            rep.currentId = (root["u"] as? Int) ?? (root["cur"] as? Int) ?? -1
+            rep.brightness = root["bright"] as? Int
+            rep.rotation = root["rot"] as? Int
+            if let sc = root["screen"] as? Int { rep.screenOn = (sc != 0) }
+            return rep
+        }
+
         guard let rawFaces = root["faces"] as? [[String: Any]] else { return nil }
 
         var faces: [DeviceFace] = []
@@ -207,4 +247,6 @@ enum FaceDisplay {
         default: return fallbackLabel.isEmpty ? name : fallbackLabel
         }
     }
+
+
 }
