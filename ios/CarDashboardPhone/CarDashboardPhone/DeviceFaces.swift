@@ -104,8 +104,15 @@ enum DeviceFaceParser {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        // 判别字段：只认 t == "faces"（与遥测包共用通道时的分流依据）
-        guard (root["t"] as? String) == "faces" else { return nil }
+        /*
+         * 判别字段（与遥测包共用通道时的分流依据）。
+         *
+         * ⚠️ **必须同时接受 "faces" 和 "f"**：紧凑格式为了省字节把 t 缩成了 "f"，
+         *    若这里只认 "faces"，紧凑格式的上报会被整包丢弃 →
+         *    **一个表盘都显示不出来**（实测踩过）。
+         */
+        let tag = root["t"] as? String
+        guard tag == "faces" || tag == "f" else { return nil }
 
         /*
          * ⚠️ **两种格式都要支持**。
