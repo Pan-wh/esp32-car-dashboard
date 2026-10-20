@@ -533,8 +533,19 @@ final class BLEClient: NSObject, ObservableObject {
     ///   - 每次 BLE 连接只发一次（didSendTimeOnConnect 标志，didConnect 时重置）；
     ///   - 不依赖定位/权限（纯时间包无定位字段，locationValid=false）；
     ///   - telemetryChar 未就绪时不发（等 didDiscoverCharacteristicsFor 里补发）。
+    /**
+     连接校时。
+     
+     ⚠️ **必须重试**：包用 `.withoutResponse` 发，连接刚建立时丢一包很正常
+     （实测用户反馈"连上后时钟还是不对，点了开始驾驶才校准"）。
+     原来的逻辑是 `!didSendTimeOnConnect` —— **发一次就再也不发**，
+     一旦那一次丢了，就只能等"开始驾驶"后的完整遥测带 `ts_utc_ms` 才校回来。
+     
+     校时包是**幂等**的（设备每次收到都重校），所以连接后连发几次是安全的。
+     */
     func sendTimeOnConnect() {
-        guard isConnected, telemetryChar != nil, !didSendTimeOnConnect else { return }
+        guard isConnected, telemetryChar != nil else { return }
+        guard !didSendTimeOnConnect else { return }
         let nowUtcMs = Int64(Date().timeIntervalSince1970 * 1000)
         guard let data = try? TelemetryPacket.timeOnly(nowUtcMs: nowUtcMs).encode() else { return }
         /*
@@ -546,7 +557,15 @@ final class BLEClient: NSObject, ObservableObject {
          * 校时包本身是幂等的（设备每次收到都重校），丢一次也无妨 ——
          * 后续遥测包都带 ts_utc_ms，会把时间再校回来。
          */
-        peripheral?.writeValue(data, for: telemetryChar!, type: .withoutResponse)
+        /* 立即发一次，再在 +1s / +3s 各补一次（幂等，丢包也能兜住）*/
+        for delay in [0.0, 1.0, 3.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.isConnected, let ch = self.telemetryChar else { return }
+                let ms = Int64(Date().timeIntervalSince1970 * 1000)
+                guard let d = try? TelemetryPacket.timeOnly(nowUtcMs: ms).encode() else { return }
+                self.peripheral?.writeValue(d, for: ch, type: .withoutResponse)
+            }
+        }
         didSendTimeOnConnect = true
         NSLog("[BLE] 已下发纯时间包（连接校时）")
     }
