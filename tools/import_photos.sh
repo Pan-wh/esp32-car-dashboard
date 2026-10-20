@@ -6,12 +6,29 @@
 #   tools/import_photos.sh                       # 默认：/Volumes/NO NAME/{original→photos}
 #   tools/import_photos.sh <源目录> <目标目录>
 #   tools/import_photos.sh --size 400 --max-mb 8
+#   tools/import_photos.sh --fast          # 动图优先：300px + 12fps（帧率约翻倍，代价是画面变小）
 #
 # 支持：JPG / PNG / GIF / HEIC / MOV / MP4
 #   - HEIC  用 macOS 自带 `sips` 转 JPG（Pillow 打不开 HEIC）
 #   - 视频  用 tools/extract_frames.swift（AVFoundation 抽帧）→ GIF → .pgi
 #
 # 自动控制体积：设备端单文件上限 8 MB，脚本会按需**减少帧数**直到放得下。
+#
+# ## 关于动图卡顿（实测数据）
+#
+# 设备端每帧耗时的实测拆分：
+#     SD 读 217 KB ≈ 93 ms（**瓶颈，占 58%**）
+#     解码         ≈ 21 ms
+#     全屏 flush   ≈ 43 ms
+#     ─────────────────────
+#     合计         ≈ 159 ms → **6.3 fps**（真机实测 3~4 fps）
+#
+# 读的量 = 宽×高，所以**缩小画面是提升帧率最直接的办法**：
+#     466×466 → 300×300：读 93→38 ms，整帧 159→104 ms（约 9.6 fps）
+#     466×466 → 240×240：读 93→25 ms，整帧 159→ 89 ms（约 11 fps）
+#
+# `--fast` 就是按这个思路预设的（300px + 12fps）。
+# 代价：画面在圆屏中央变小、四周留黑 —— 但动图"动得起来"比"铺满"更重要。
 #
 set -euo pipefail
 
@@ -32,6 +49,10 @@ while [[ ${#ARGS[@]} -gt 0 ]]; do
     --max-mb)     MAX_MB="${ARGS[1]}";     ARGS=("${ARGS[@]:2}") ;;
     --fps)        FPS="${ARGS[1]}";        ARGS=("${ARGS[@]:2}") ;;
     --max-frames) MAX_FRAMES="${ARGS[1]}"; ARGS=("${ARGS[@]:2}") ;;
+    --fast)
+      # 动图专用：缩小画面 + 提高帧率（见下面的说明）
+      SIZE=300; FPS=12; MAX_FRAMES=40
+      ARGS=("${ARGS[@]:1}") ;;
     *)            ARGS=("${ARGS[@]:1}") ;;
   esac
 done
