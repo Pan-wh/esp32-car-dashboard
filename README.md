@@ -22,7 +22,7 @@
 > 按任务类型给 AI 划定边界（省 token + 防越界），
 > 6 种模式：只改 UI / 新增表盘 / 改 App / 改协议 / 改共享逻辑 / 改固件。
 
-改造任务书见 [`AI_TASK_IPHONE_BLE_DASHBOARD.md`](AI_TASK_IPHONE_BLE_DASHBOARD.md)，
+改造任务书见 [`AI_TASK_IPHONE_BLE_DASHBOARD.md`](docs/archive/AI_TASK_IPHONE_BLE_DASHBOARD.md)，
 协议见 [`docs/ble.md`](docs/ble.md)，测试记录见 [`docs/test-results.md`](docs/test-results.md)。
 
 - [x] 目录结构与文档体系（进度见 [`PROGRESS.md`](PROGRESS.md)，测试台账见 [`docs/test-results.md`](docs/test-results.md)）
