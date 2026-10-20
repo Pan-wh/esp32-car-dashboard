@@ -1883,6 +1883,7 @@ static void apply_screen(bool off)
  */
 #define FACE_PREF_KEY  "face"  /* 当前表盘 id */
 #define FMASK_PREF_KEY "fmask" /* 启用位掩码（bit i = face id i）*/
+#define FCOUNT_PREF_KEY "fcount" /* 存掩码时的**表盘总数** —— 升级后据此判断"哪些是新增的" */
 
 static int s_display_rot = -1; /* 当前方向（度）；-1 = 尚未设置 */
 
@@ -1941,6 +1942,7 @@ static void save_face_prefs(int face_id, uint32_t mask)
   if (prefs.begin(ROT_PREF_NS, false)) {
     prefs.putInt(FACE_PREF_KEY, face_id);
     prefs.putUInt(FMASK_PREF_KEY, mask);
+    prefs.putInt(FCOUNT_PREF_KEY, ui_face_count());
     prefs.end();
   }
 }
@@ -1973,9 +1975,33 @@ static void restore_face_state(void)
   bool mask_ok = false;
 
   if (have_mask && n > 0) {
-    /* 只接受落在已注册表盘范围内、且至少启用一个的掩码 */
+    /*
+     * 只接受落在已注册表盘范围内、且至少启用一个的掩码。
+     *
+     * ⚠️ **固件升级后新增的表盘，必须默认"启用"。**
+     *
+     * 踩过的坑：NVS 里的掩码是**只有 5 个表盘时**存的（bit0..4），
+     * 后来加了第 6 个「照片表盘」，但旧掩码里 bit5 = 0 ——
+     * 于是照片表盘被当成"用户主动隐藏了"，**App 列表里永远看不到它**，
+     * 用户反复反馈"仪表里没有照片表盘"。
+     *
+     * 修法：把存掩码时的**表盘总数**一起存下来（`fcount`）。
+     * 恢复时，凡是 `index >= saved_count` 的表盘都视为**新增**，强制启用。
+     * 没有 `fcount` 的老设备按 5 处理（正是当时的总数）。
+     */
+    int saved_count = 5; /* 老固件没有这个键：那时一共 5 个表盘 */
+    if (prefs.begin(ROT_PREF_NS, true)) {
+      saved_count = prefs.getInt(FCOUNT_PREF_KEY, 5);
+      prefs.end();
+    }
+    if (saved_count < 0) saved_count = 0;
+    if (saved_count > n) saved_count = n;
+
     uint32_t valid = (n >= 32) ? 0xFFFFFFFFu : ((1u << n) - 1u);
     uint32_t use = saved_mask & valid;
+    /* 新增的表盘一律启用 */
+    for (int i = saved_count; i < n; i++) use |= (1u << i);
+
     if (use != 0) {
       for (int i = 0; i < n; i++) {
         ui_face_set_enabled(i, (use & (1u << i)) != 0);
