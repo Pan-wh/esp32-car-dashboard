@@ -32,7 +32,7 @@ import argparse
 import struct
 import sys
 
-from PIL import Image, ImageSequence
+from PIL import Image, ImageOps, ImageSequence
 
 HEADER_BYTES = 32
 PALETTE_BYTES = 1024          # 256 * 4
@@ -87,7 +87,16 @@ def collect_frames(path: str, size: int, max_frames: int, force_fps: int | None)
     for i, frame in enumerate(ImageSequence.Iterator(im)):
         if i >= max_frames:
             break
-        rgba = frame.convert("RGBA")
+        # 必须处理 EXIF 方向。
+        #
+        # 手机竖拍时，像素其实是"横的"，方向只存在 EXIF 的 Orientation 标记里。
+        # Image.open() 不会自动摆正 —— 不处理的话竖图会被当成横图，
+        # 表现就是"照片方向不对 / 有的横有的竖"。
+        #
+        # ImageOps.exif_transpose() 按 EXIF 摆正并清除标记，
+        # 之后裁切缩放的角度就都是对的。GIF 等无 EXIF 的帧调用它是空操作。
+        rotated = ImageOps.exif_transpose(frame)
+        rgba = rotated.convert("RGBA")
         frames.append(fit_square(rgba, size))
         d = frame.info.get("duration", 0)
         if d and d > 0:
