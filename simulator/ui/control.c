@@ -242,6 +242,18 @@ bool control_parse(const char *json, size_t len, control_cmd_t *out)
         out->value = 0;
         return true;
     }
+    if (strcmp(cmd, "photo_prev") == 0) {
+        out->kind = CONTROL_PHOTO_PREV;
+        out->value = 0;
+        return true;
+    }
+    if (strcmp(cmd, "photo_play") == 0) {
+        /* 切到第 N 张：{"cmd":"photo_play","value":3} */
+        if (!have_num) return false;
+        out->kind = CONTROL_PHOTO_PLAY;
+        out->value = (num < 0) ? 0 : num;
+        return true;
+    }
     if (strcmp(cmd, "photo_next") == 0) {
         out->kind = CONTROL_PHOTO_NEXT;
         out->value = 0;

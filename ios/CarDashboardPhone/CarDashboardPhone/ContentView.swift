@@ -796,6 +796,19 @@ struct ContentView: View {
                 //         右=「切到这个表盘」按钮 + 「是否在滑动序列中」开关
                 ForEach(facesInSelectedGroup) { f in
                     faceRow(f)
+                    /*
+                     * 照片表盘的「管理素材」入口 —— 直接挂在它自己那一行下面，
+                     * 比在别处放一个孤立条目更符合直觉（用户要求"方案 B"）。
+                     * 用 BLE 切图，不依赖 Wi-Fi。
+                     */
+                    if f.name == "photo" {
+                        NavigationLink {
+                            PhotoTabView(session: session)
+                        } label: {
+                            Label("管理素材 / 选择播放哪张", systemImage: "photo.stack")
+                                .font(.footnote)
+                        }
+                    }
                 }
 
                 if let notice = session.ble.lastNotice {

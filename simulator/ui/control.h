@@ -59,6 +59,8 @@ typedef enum {
     CONTROL_PHOTO_INTERVAL,  /* value = 轮播间隔**秒**（10..300）*/
     CONTROL_PHOTO_GET,       /* 查询全部设置（不需要 value）*/
     CONTROL_PHOTO_NEXT,      /* 手动切下一张 */
+    CONTROL_PHOTO_PLAY,      /* value = 第几张（0 起）；-1 忽略 */
+    CONTROL_PHOTO_PREV,      /* 上一张 */
 } control_kind_t;
 
 typedef struct {

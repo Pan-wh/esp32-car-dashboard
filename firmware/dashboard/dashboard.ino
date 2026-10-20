@@ -2278,6 +2278,42 @@ static void control_poll(void)
                     (int)s_photo.settings.shift,
                     (int)photo_slide_eff_shift(&s_photo));
       break;
+    case CONTROL_PHOTO_PREV: {
+      if (s_photo.file_count > 0) {
+        int n = s_photo.cur_file - 1;
+        if (n < 0) n = s_photo.file_count - 1;
+        s_photo.cur_file = n;
+        s_photo.cur_frame = 0;
+        s_photo.loops_done = 0;
+        s_photo.pinned_file = n;
+        s_photo.seg_start_ms = millis() - s_photo.settings.interval_ms - 1000u;
+        s_photo_loading = -1;
+        Serial.printf("[照片] 上一张 → 第 %d 张\n", n + 1);
+      }
+      break;
+    }
+    case CONTROL_PHOTO_PLAY: {
+      /*
+       * 切到第 N 张（0 起）。做法：先确保文件清单已扫过，
+       * 再把 `cur_file` 设为 N 并把"段起始时间"推到过去，
+       * 下一次 photo_poll 就会立刻加载这一张。
+       */
+      if (s_photo.file_count == 0) {
+        Serial.println("[照片] 清单还没扫过，先切到照片表盘触发扫描");
+        break;
+      }
+      int n = (int)cmd.value;
+      if (n < 0) n = 0;
+      if (n >= s_photo.file_count) n = s_photo.file_count - 1;
+      s_photo.cur_file = n;
+      s_photo.cur_frame = 0;
+      s_photo.loops_done = 0;
+      s_photo.pinned_file = n;
+      s_photo.seg_start_ms = millis() - s_photo.settings.interval_ms - 1000u;
+      s_photo_loading = -1;
+      Serial.printf("[照片] 切到第 %d 张（共 %d 张）\n", n + 1, s_photo.file_count);
+      break;
+    }
     case CONTROL_PHOTO_NEXT: {
       /* 手动切下一张：把"段"的起始时间挪到很久以前，下一次 tick 就会推进 */
       photo_slide_tick(&s_photo, millis() + s_photo.settings.interval_ms + 1000u);

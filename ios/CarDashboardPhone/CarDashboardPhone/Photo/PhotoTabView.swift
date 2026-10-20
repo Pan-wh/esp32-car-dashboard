@@ -247,42 +247,37 @@ struct PhotoTabView: View {
                     Text("命令示例：\npython3 tools/pgi.py 我的图.jpg -o /Volumes/SD/photos/01.pgi --size 466")
                         .font(.system(.caption2, design: .monospaced))
                 }
-                // ── 设备上的照片 ──
+                // ── 选择播放哪张（纯 BLE，不需要 Wi-Fi） ──
+                /*
+                 * 用户要求：**只用蓝牙**，别搞 WiFi + 蓝牙两套。
+                 *
+                 * 设备端新增了 `{"cmd":"photo_play","value":N}` ——
+                 * 直接把照片表盘切到第 N 张（0 起）。
+                 * 这样不需要"列出文件"就能选图：上一张 / 下一张循环即可。
+                 */
                 Section {
-                    if loadingList {
-                        HStack { ProgressView(); Text("正在读取设备…").font(.footnote) }
-                    } else if devicePhotos.isEmpty {
-                        Text("设备上还没有照片").foregroundStyle(.secondary)
-                    } else {
-                        ForEach(devicePhotos) { p in
-                            HStack {
-                                Image(systemName: p.isAnimated ? "photo.stack" : "photo")
-                                    .foregroundStyle(p.ok ? Color.primary : Color.red)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(p.name).font(.subheadline)
-                                    Text(p.isAnimated ? "\(p.frames) 帧 · \(p.fps) fps · \(p.sizeText)"
-                                                      : "静态图片 · \(p.sizeText)")
-                                        .font(.caption2).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if !p.ok { Text("损坏").font(.caption2).foregroundStyle(.red) }
-                            }
+                    HStack {
+                        Spacer()
+                        Button {
+                            _ = session.ble.sendCommand("{\"cmd\":\"photo_prev\",\"value\":0}")
+                        } label: {
+                            Label("上一张", systemImage: "chevron.left")
                         }
-                        .onDelete { idx in
-                            let victims = idx.map { devicePhotos[$0] }
-                            for v in victims { Task { await deletePhoto(v) } }
+                        .buttonStyle(.bordered)
+                        Spacer()
+                        Button {
+                            _ = session.ble.sendCommand("{\"cmd\":\"photo_next\",\"value\":0}")
+                        } label: {
+                            Label("下一张", systemImage: "chevron.right")
                         }
+                        .buttonStyle(.bordered)
+                        Spacer()
                     }
-                    Button {
-                        Task { await refreshList(quiet: false) }
-                    } label: {
-                        Label("刷新列表", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(loadingList)
+                    .padding(.vertical, 4)
                 } header: {
-                    Text("设备上的照片")
+                    Text("当前播放")
                 } footer: {
-                    Text("左滑删除。列表通过仪表的 HTTP 接口读取，需要手机连着 CarDash。")
+                    Text("用蓝牙直接切换仪表上的照片（不需要 Wi-Fi）。\n切换后关闭轮播即可钉住这一张。")
                 }
 
                 // ── 播放设置（BLE 下发到仪表） ──
