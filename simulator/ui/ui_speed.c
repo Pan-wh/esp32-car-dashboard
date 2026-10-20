@@ -35,7 +35,17 @@ LV_FONT_DECLARE(label_26);      /* Inter Medium 26px，单位/标签/状态 */
 
 /* V5 参数 */
 #define MARKER_INNER_R    168  /* 指针内端半径（插画内容最大半径 ≤ 24+115=139，不冲突） */
-#define DRIVER_SPIRITED_V 60.0f  /* 激烈驾驶阈值 km/h（2026-10-20 用户改为：0-60 平静） */
+/*
+ * 三态阈值：**对齐现实限速**，让三个表情都有明确含义。
+ *
+ *   80  = 快速路限速   → 超过 80 才是"开得比常规快"（皱眉）
+ *   110 = 高速限速区间内偏快 → 超过 110 表示"确实超速了"（咬牙）
+ *
+ * 历史：最初 90/120，曾按用户要求试过 60/100，但 60 是**城市道路限速上限**，
+ * 正常开到 60 很常见 → 表情会长期卡在"皱眉"、失去信息量。
+ */
+#define DRIVER_SPIRITED_V 80.0f  /* 激烈驾驶阈值 km/h */
+#define DRIVER_SPEEDING_V 110.0f /* 超速阈值 km/h */
 #define DRIVER_SPEEDING_V 100.0f /* 超速阈值 km/h（2026-10-20 用户改为：>100 咬牙） */
 
 
@@ -285,7 +295,7 @@ static void apply_state(void)
     /* V5 定稿：指针 + 驾驶员表情 + 底部辅助信息（无中央大数字） */
     {
         if (s_meter && s_needle5) lv_meter_set_indicator_value(s_meter, s_needle5, v);
-        /* 插画：状态三态只在跨过 60/100 阈值时变化，用已显示状态防止重复 set_src */
+        /* 插画：状态三态只在跨过 80/110 阈值时变化，用已显示状态防止重复 set_src */
         show_driver_state(current_driver_state());
         /* 状态标签：同文案不重复 set_text（避免每次 apply_state 都 invalidate） */
         if (s_status5) {
