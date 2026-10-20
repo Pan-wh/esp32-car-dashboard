@@ -147,7 +147,10 @@ def encode(frames, fps: int) -> bytes:
         # 量化到 256 色；GIF 的透明像素量化后会变成某个不透明色，这里先垫白底
         bg = Image.new("RGBA", rgba.size, (0, 0, 0, 255))
         merged = Image.alpha_composite(bg, rgba).convert("RGB")
-        p = merged.quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+        # 抖动（Floyd-Steinberg）：256 色下能把渐变"搅"得看不出色带，
+        # 观感提升非常明显，代价只是编码稍慢。之前是 Dither.NONE，色带明显。
+        p = merged.quantize(colors=256, method=Image.Quantize.MEDIANCUT,
+                            dither=Image.Dither.FLOYDSTEINBERG)
 
         off = len(out)
         out += build_palette_bytes(p)
