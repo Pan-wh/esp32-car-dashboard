@@ -124,9 +124,7 @@
 | 内存 | 8 MB **octal PSRAM** + 16 MB Flash |
 | 其他 | PCF85063 RTC、QMI8658 六轴 IMU、microSD 卡槽、锂电池接口 |
 
-- 官方产品页 / 购买：<https://www.waveshare.com/esp32-s3-touch-amoled-1.75.htm>
 - 官方仓库（本项目用 commit `e4344e7`）：<https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75>
-- 国内可在淘宝「微雪电子」官方店搜型号购买
 
 > 📷 上图取自厂商开源仓库（Apache-2.0），版权归微雪电子所有。
 
