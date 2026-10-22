@@ -179,16 +179,10 @@ static void sb_put_display(sb_t *sb)
 }
 
 /** 分组枚举 → ASCII 名（App 据此本地化分组标题）*/
-static const char *group_key(int group)
-{
-    switch (group) {
-    case UI_FACE_GROUP_CLOCK: return "clock";
-    case UI_FACE_GROUP_SPEED: return "speed";
-    case UI_FACE_GROUP_NAV: return "nav";
-    case UI_FACE_GROUP_PHOTO: return "photo";
-    default: return "other";
-    }
-}
+/*
+ * 表盘的 `group` 字段已经**不再上报**（分组改由 App 按 name 映射），
+ * 原来的 `group_key()` 因此成了死代码 —— 这里删掉，避免 -Wall 报 unused。
+ */
 
 int face_report_build(char *buf, size_t cap)
 {
@@ -261,7 +255,18 @@ int face_report_build(char *buf, size_t cap)
      *    否则表盘一多，App 就拿不到亮度/方向，又退化回"默认值覆盖设备"的坑。
      */
     sb_put_display(&sb);
-    sb_puts(&sb, ",\"faces\":[");
+    /*
+     * ⚠️ 截断分支也必须是**紧凑名字数组**，与完整分支保持一致。
+     *
+     * 曾经这里漏改：完整报文用了 `"f":[名字...]`，截断时却仍输出旧的
+     * `"faces":[{id,name,label,group,on}...]`。后果是**一旦触发截断**：
+     *   - 报文体里没有 `f` 键 → App 走旧格式分支；
+     *   - 而 App 的旧分支只认 `truncated`/`cur`，不认新的 `trunc`/`u`
+     *     → **截断标志和当前表盘一起丢失**。
+     * 截断只在表盘极多时发生（32 个才会触发），所以一直没在真机上暴露 ——
+     * 但这是实打实的 bug，不能留着。
+     */
+    sb_puts(&sb, ",\"f\":[");
 
     bool first = true;
     for (int i = 0; i < n; i++) {
@@ -269,16 +274,10 @@ int face_report_build(char *buf, size_t cap)
         if (d == NULL) continue;
 
         /* 先拼到临时串，判断加进去会不会超上限 */
-        char item[192];
+        char item[96];
         sb_t it;
         sb_init(&it, item, sizeof(item));
-        sb_printf(&it, "{\"id\":%d,\"name\":", i);
         sb_puts_json(&it, d->name);
-        sb_puts(&it, ",\"label\":");
-        sb_puts_json(&it, d->label);
-        sb_puts(&it, ",\"group\":");
-        sb_puts_json(&it, group_key((int)d->group));
-        sb_printf(&it, ",\"on\":%d}", ui_face_is_enabled(i) ? 1 : 0);
         if (it.overflow) continue;
 
         const size_t extra = it.len + (first ? 0 : 1) + 2 /* ]} */;
