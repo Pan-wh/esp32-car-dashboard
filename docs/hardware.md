@@ -24,7 +24,7 @@
 > ```
 
 > 📌 **与参考项目 moto-gps 的差异**：该项目使用 **1.75C（32MB Flash）**，
-> 本板为 **16MB Flash**。应用分区 3MB，当前固件占用 **79%**。
+> 本板为 **16MB Flash**。应用分区 3MB，当前固件占用 **77%**（约 2.42 MB）。
 > 空间受限时优先考虑把字体/图片等静态资源放 **TF 卡**（见下方「存储」）。
 
 ## 核心器件
@@ -88,3 +88,10 @@
 - 原理图 PDF：`reference/ESP32-S3-Touch-AMOLED-1.75/Schematic/ESP32-S3-Touch-AMOLED-1.75-schematic.pdf`
 - 硬件参考全文：`reference/ESP32-S3-Touch-AMOLED-1.75/HARDWARE_REFERENCE_ZH.md`
 - 官方文档站：<https://docs.waveshare.net/ESP32-S3-Touch-AMOLED-1.75/>
+
+---
+
+> **合规基线（全项目适用）**：本项目仅用于**个人开发、学习与技术验证** ——
+> **不装车、不商业化、不分发**。项目使用高德开放平台 Web 服务，其
+> **服务协议 §3.4 禁止用于车载场景**；若将来需要装车、分发或商业化，
+> 必须先取得书面授权或更换数据源。详见 [`nav-backend.md`](nav-backend.md) §0。

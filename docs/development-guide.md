@@ -57,7 +57,10 @@
 | **底盘颜色**（背景）| `ui_pages.c` 的 `UI_BG_COLOR` | |
 | **表盘刻度/数字**（烘焙好的）| `tools/make_dial_faces.py` → 重新生成 | 见下方 B |
 | **字体** | `tools/make_fonts.sh` → 重新生成 | 见下方 B |
-| **驾驶员插画** | `tools/make_images.py` → 重新生成 | 3 态表情 |
+| **驾驶员插画** | `tools/make_images.py` → 重新生成 | 3 态表情，阈值在 `ui_speed.c`（80/110 km/h）|
+| **照片表盘显示** | `simulator/ui/ui_photo.c` | 只管"怎么显示一帧"，不碰 SD/轮播 |
+| 照片**轮播逻辑** | `simulator/ui/photo_slide.c` | 54 项单测；静态/动图混排、三开关 |
+| 照片**格式/解码** | `simulator/ui/pgi.c` + `tools/pgi.py` | `.pgi` 头/帧表；转换器负责缩放与抖动 |
 | **App 图标** | `tools/make_app_icon.py` | 见 §D |
 
 **改完 UI 必做**：
@@ -98,7 +101,7 @@ lv_obj_t *ui_myface_create(lv_obj_t *parent)
 
 > 注册表里的回调类型是 `void (*)(void *parent)`（刻意做成 LVGL-free，
 > 便于 `test_ui_face` 在 PC 上单测而不链接 LVGL）。注册时**转型**即可：
-> `(ui_face_build_cb)ui_myface_create`。现有五个表盘都这么写。
+> `(ui_face_build_cb)ui_myface_create`。现有六个表盘都这么写。
 
 **第 2 步**：在 `simulator/ui/ui_pages.c` 的 `ui_pages_init()` 里注册，并在
 `ui_pages.h` 的 `ui_page_t` 枚举加一项（**顺序必须与注册顺序一致**）：
@@ -122,10 +125,14 @@ cd tests && make run PYTHON=<python路径>          # test_ui_face 会检查注�
 - ✅ BLE 远程切表盘（`{"cmd":"face","value":N}`，-1 下一个 / -2 上一个）
 - ✅ App 端下拉选择（表盘列表由**设备上报**，App 自动列出，无需改 App 代码）
 
-> ✅ **App 端无需同步**：设备通过 `Faces` 特征（`7D2A0005`）上报表盘列表，
-> App 从 `session.ble.faces.faces` 读取后渲染（见 `ContentView.swift` /
-> `DeviceFaces.swift`）。新增表盘只改设备一处；App 未收录该 `name` 的本地化名时
-> 用设备给的 `label` 兜底显示，因此不会"选不到"。
+> ✅ **App 端无需同步**：设备通过 `Faces` 特征（`7D2A0005`）上报**紧凑格式**
+> 表盘列表（`{"t":"f","c":6,"m":63,"u":5,"f":["analog",...]}`），App 从
+> `DeviceFaces.swift` 解析后渲染。新增表盘只改设备一处；App 未收录该 `name`
+> 的本地化名时**直接显示 `name`**（紧凑格式已不发 `label`），因此不会"选不到"。
+>
+> ⚠️ **新增表盘还必须处理启用掩码**：NVS 里存的是旧表盘数的掩码，
+> 新表盘的位是 0 → 会被当成"用户隐藏"。固件已按 `fcount` 自动启用新增表盘
+> （见 `troubleshooting.md`）；自己改这套逻辑时别把它去掉。
 
 ---
 
@@ -216,6 +223,10 @@ xcrun devicectl device process launch --device <UDID> com.cardashboard.CarDashbo
 | **Command** | `…0004` | 手机 → 仪表（Write）|
 | **Faces** | `…0005` | 仪表 → 手机（Read/Notify，表盘列表上报）|
 
+照片相关命令（同 Command 特征）：`photo_prev` / `photo_next` / `photo_play`（切第 N 张）/
+`photo_slide` / `photo_shift` / `photo_screenoff` / `photo_interval` / `photo_get`。
+字段与设备侧规则见 [`ble.md`](ble.md#照片表盘命令2026-10-19同-command-特征)。
+
 > ⚠️ **BLE 回调里不能碰硬件**：Bluedroid 任务不能操作显示。
 > 回调只做「解析 + 存入变量」，硬件副作用放主循环（见 `ble_telemetry.cpp` 注释）。
 
@@ -304,7 +315,7 @@ tools/run_ios_tests.sh                     # 5 项 XCUITest
 
 | 能力 | 验证情况 |
 |------|---------|
-| 五表盘（模拟钟/数字钟/速度表/多彩时钟/导航卡片）| 真机 |
+| **六表盘**（模拟钟/数字钟/速度表/多彩时钟/导航卡片/照片表盘）| 真机 |
 | **导航卡片**（阶段1 UI 原型）| 模拟器像素级验证 + 真机；8 种转向动作、距离格式化 76 项单测 |
 | 表盘注册表（新增表盘三步走）| `test_ui_face` 67 项单测 |
 | BLE 远程切表盘 | 真机端到端 |
@@ -342,8 +353,8 @@ tools/run_ios_tests.sh                     # 5 项 XCUITest
 
 | 方向 | 前提条件（已确认可用）| 工作量 |
 |------|---------------------|-------|
-| **屏幕旋转**（竖屏/横屏）| ✅ **已实现**：App/BLE 切换 0/90/180/270°，NVS 持久化。默认 0°；90°/270° 使用 MADCTL，接受少量边缘黑缺口以保证流畅度 | 已完成 |
-| 图片背景 + 时钟（功能②）| 存储已验证：**有 TF/microSD 卡槽**（SDMMC 1-bit）+ **9.9MB 未用 ffat 分区**（0x610000）| 中 |
+| ~~屏幕旋转~~ | ✅ **已实现**：App/BLE 切换 0/90/180/270°，NVS 持久化 | 已完成 |
+| ~~图片背景 + 时钟（功能②）~~ | ✅ 由**照片表盘**（id 5）覆盖：静态 + 动图混排轮播，见 [`photo-gif-design.md`](photo-gif-design.md) | 已完成 |
 | 行程统计上屏 | 数据已有，仅需 UI（当前只在串口 `trip` 查询）| 小 |
 
 ---
@@ -406,3 +417,10 @@ python3 tools/make_images.py        # 驾驶员插画（300×300）
 
 **颜色数限制**：索引色最多 256 色。超限时生成脚本会自适应量化（不抖动）并打印
 色差统计；若某图量化后肉眼可见损失，应改回 RGB565 或改用别的画法。
+
+---
+
+> **合规基线（全项目适用）**：本项目仅用于**个人开发、学习与技术验证** ——
+> **不装车、不商业化、不分发**。项目使用高德开放平台 Web 服务，其
+> **服务协议 §3.4 禁止用于车载场景**；若将来需要装车、分发或商业化，
+> 必须先取得书面授权或更换数据源。详见 [`nav-backend.md`](nav-backend.md) §0。

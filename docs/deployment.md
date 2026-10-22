@@ -103,7 +103,7 @@ esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc
 
 | 分区 | 大小 | 用途 |
 |------|------|------|
-| app0 | 3 MB | 当前固件（占用 **75%**）|
+| app0 | 3 MB | 当前固件（占用 **77%**，约 2.42 MB）|
 | app1 | 3 MB | OTA 备用（当前未用）|
 | **ffat** | **9.875 MB** | **未使用**，可用于存放资源（起始 `0x610000`）|
 
@@ -130,7 +130,7 @@ tools/sync_firmware.sh
 
 **预期输出**：
 ```
-Sketch uses 2376287 bytes (75%) of program storage space. Maximum is 3145728 bytes.
+Sketch uses ~2420000 bytes (77%) of program storage space. Maximum is 3145728 bytes.
 Global variables use 126188 bytes (38%) of dynamic memory, ...
 Hash of data verified.        ← 出现 3 次（bootloader/分区表/应用）
 ```
@@ -484,3 +484,10 @@ tools/run_ios_tests.sh
 | [`troubleshooting.md`](troubleshooting.md) | 完整排障记录与根因分析 |
 | [`hardware.md`](hardware.md) | 硬件规格与引脚 |
 | [`ble.md`](ble.md) | BLE 协议细节 |
+
+---
+
+> **合规基线（全项目适用）**：本项目仅用于**个人开发、学习与技术验证** ——
+> **不装车、不商业化、不分发**。项目使用高德开放平台 Web 服务，其
+> **服务协议 §3.4 禁止用于车载场景**；若将来需要装车、分发或商业化，
+> 必须先取得书面授权或更换数据源。详见 [`nav-backend.md`](nav-backend.md) §0。
