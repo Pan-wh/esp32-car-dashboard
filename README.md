@@ -112,8 +112,29 @@
 
 ### 硬件
 
-- Waveshare **ESP32-S3-Touch-AMOLED-1.75**（CO5300 / QSPI、CST9217 触摸、PCF85063 RTC、QMI8658 IMU）
-- microSD 卡（照片表盘用，可选）
+<img src="docs/images/device-hardware.jpg" width="440" alt="Waveshare ESP32-S3-Touch-AMOLED-1.75">
+
+**微雪 Waveshare ESP32-S3-Touch-AMOLED-1.75**（1.75 英寸圆形 AMOLED 一体屏）
+
+| 项目 | 规格 |
+|------|------|
+| 屏幕 | **466×466** 圆形 AMOLED，CO5300 驱动，**QSPI** 接口 |
+| 触摸 | CST9217（电容）|
+| 主控 | ESP32-S3（双核 Xtensa LX7，Wi-Fi + BLE 5）|
+| 内存 | 8 MB **octal PSRAM** + 16 MB Flash |
+| 其他 | PCF85063 RTC、QMI8658 六轴 IMU、microSD 卡槽、锂电池接口 |
+
+- 官方产品页 / 购买：<https://www.waveshare.com/esp32-s3-touch-amoled-1.75.htm>
+- 官方仓库（本项目用 commit `e4344e7`）：<https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75>
+- 国内可在淘宝「微雪电子」官方店搜型号购买
+
+> 📷 上图取自厂商开源仓库（Apache-2.0），版权归微雪电子所有。
+
+此外还需要：
+
+- **microSD 卡**（照片表盘用，可选）
+- **USB-C 数据线**（烧录与供电）
+- **iPhone**（本项目的定位/导航数据源；仅验证固件则不需要）
 
 ### 编译与烧录
 
