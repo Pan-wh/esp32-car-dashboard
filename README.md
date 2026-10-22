@@ -10,7 +10,7 @@
 > 项目使用高德开放平台 Web 服务，其**服务协议 §3.4 明确禁止用于车载场景**。
 > 请勿将本项目用于任何实际驾驶环境。
 
-![6 个表盘总览](docs/images/all-faces.png)
+![6 个表盘总览](docs/images/all-faces-v2.png)
 
 ---
 
@@ -31,7 +31,7 @@
 |---|---|---|
 | **模拟指针钟** | **数字钟** | **速度表** |
 
-| ![color](docs/images/04-color.png) | ![nav](docs/images/05-nav-active.png) | ![photo](docs/images/06-photo.png) |
+| ![color](docs/images/04-color.png) | ![nav](docs/images/05-nav-map.png) | ![photo](docs/images/06-photo.png) |
 |---|---|---|
 | **彩色数字钟** | **导航** | **照片表盘** |
 
