@@ -3,11 +3,13 @@
 一块 **466×466 圆形 AMOLED** 上的车载仪表盘：6 个表盘、BLE 实时数据、导航投屏、照片/动图表盘。
 位置**不来自 GNSS** —— 全部由 iPhone 的 Core Location 通过 BLE 传入。
 
-> ## 🤖 想用 AI 帮你跑通？
+> ## 🤖 想用 AI 帮你跑通？或者只想先看看它能不能跑？
 >
-> 直接把 [`docs/ai-bootstrap.md`](docs/ai-bootstrap.md) 和仓库地址丢给 AI，
-> 说「按 docs/ai-bootstrap.md 执行」—— 它包含**从零到跑通**的每一步命令、
-> 预期输出、验收清单和常见失败对照表，**专为无上下文的 AI 编写**。
+> - **只想验证固件能跑（约 15 分钟）**：不需要 iPhone、不需要 Apple 账号、不需要网关 ——
+>   看 [`docs/ai-bootstrap.md` 的「最小验证路径」](docs/ai-bootstrap.md#-最小验证路径15-分钟看到表盘就算成功)。
+> - **想跑通全部功能**：把 [`docs/ai-bootstrap.md`](docs/ai-bootstrap.md) 和仓库地址丢给 AI，
+>   说「按 docs/ai-bootstrap.md 执行」—— 它包含**从零到跑通**的每一步命令、预期输出、
+>   验收清单和常见失败对照表，**专为无上下文的 AI 编写**。
 
 > ## ⚠️ 使用范围声明
 >

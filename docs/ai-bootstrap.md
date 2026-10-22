@@ -11,6 +11,66 @@
 
 ---
 
+## ★ 最小验证路径（15 分钟，看到表盘就算成功）
+
+**如果你只想确认"这块板子 + 这套代码能跑"，走这条路就够了。**
+不需要 iPhone、不需要 Apple 开发者账号、不需要网关、不需要高德 Key。
+
+### 你只需要：macOS + arduino-cli + ESP32 core + 一块板子 + 一根 USB 线
+
+```bash
+# 1) 拉厂商资料（不做这步编译必失败）
+tools/fetch_reference.sh
+
+# 2) 同步 UI 代码进固件目录（不做这步烧进去的是旧界面）
+tools/sync_firmware.sh
+
+# 3) 编译
+BUILD=/tmp/cardash-build
+arduino-cli compile \
+  --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
+  --build-property "compiler.cpp.extra_flags=-DESP32QSPI_MAX_PIXELS_AT_ONCE=4096" \
+  --libraries reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/libraries \
+  --build-path "$BUILD" \
+  firmware/dashboard
+
+# 4) 找端口并烧录
+ls /dev/cu.usbmodem*
+arduino-cli upload -p /dev/cu.usbmodem101 \
+  --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
+  --build-path "$BUILD" \
+  firmware/dashboard
+```
+
+### 成功的标志（三个都要有）
+
+| 检查 | 预期 |
+|------|------|
+| 编译输出 | `Sketch uses 2451xxx bytes (77%) of program storage space.` |
+| 烧录输出 | `Hard resetting via RTS pin...` |
+| **屏幕** | **出现表盘**，左右滑动能切换 **6 个**（analog / digital / speed / color / nav / photo）|
+
+**可选**：串口看一眼启动日志（`screen /dev/cu.usbmodem101 115200`，退出 `Ctrl-A` 然后 `K`）：
+
+```
+[表盘] 启动恢复：当前=0(analog)，6/6 启用（掩码来源：…）
+[上传] 热点已开：SSID=CarDash（免密）IP=192.168.4.1，HTTP 就绪
+```
+
+### 这一步验证了什么
+
+✅ 工具链对不对（arduino-cli + ESP32 core）
+✅ 厂商库拉全了
+✅ 分区/PSRAM/QSPI 三个关键参数配对了
+✅ 板子没坏、屏幕能显示
+
+**没验证**：iPhone 连接、导航、照片表盘（这些要往下走）。
+
+> **如果这一步就卡住了，先别往下做** —— 98% 的失败都在这四步里，
+> 直接查文末「常见失败」对照表。
+
+---
+
 ## 0. 先决条件（AI 请先逐项检查，缺什么先装什么）
 
 | 依赖 | 检查命令 | 要求 |
