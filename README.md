@@ -113,21 +113,24 @@
 # ① UI 代码在 simulator/ui 下开发，编译前必须同步进固件目录
 tools/sync_firmware.sh
 
-# ② 编译
+# ② 编译（--build-path 固定一个路径，下一步烧录要用同一个）
+BUILD=/tmp/cardash-build
 arduino-cli compile \
   --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
   --build-property "compiler.cpp.extra_flags=-DESP32QSPI_MAX_PIXELS_AT_ONCE=4096" \
   --libraries reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/libraries \
+  --build-path "$BUILD" \
   firmware/dashboard
 
-# ③ 烧录
+# ③ 烧录（端口按你的实际情况改）
 arduino-cli upload -p /dev/cu.usbmodem101 \
   --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
-  --build-path <上一步的 build-path> firmware/dashboard
+  --build-path "$BUILD" \
+  firmware/dashboard
 ```
 
-> `--build-path` 要两处一致；`compiler.cpp.extra_flags` 里的 `ESP32QSPI_MAX_PIXELS_AT_ONCE=4096`
-> 是针对这块屏的 QSPI 批量传输上限，**不能省**。
+> `--build-path` 两步必须一致；`compiler.cpp.extra_flags` 里的
+> `ESP32QSPI_MAX_PIXELS_AT_ONCE=4096` 是针对这块屏的 QSPI 批量传输上限，**不能省**。
 
 ### 在电脑上跑模拟器（不需要硬件）
 
@@ -149,7 +152,7 @@ cd simulator && make && ./dashboard_sim
 ```bash
 make -C tests run       # C 单测：遥测 / 控制 / 表盘上报 / 导航 / 图片解码 / .pgi …
                         # 注意：make 的默认目标只**编译**，跑测试要用 run
-cd gateway && npm test   # 网关单测
+cd gateway && npm install && npm test   # 网关单测（有 2 个运行时依赖）
 ```
 
 > Swift 侧的单测也在 `tests/` 下（由 `tests/Makefile` 驱动），没有单独的脚本入口。
