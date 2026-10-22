@@ -3,6 +3,12 @@
 一块 **466×466 圆形 AMOLED** 上的车载仪表盘：6 个表盘、BLE 实时数据、导航投屏、照片/动图表盘。
 位置**不来自 GNSS** —— 全部由 iPhone 的 Core Location 通过 BLE 传入。
 
+> ## 🤖 想用 AI 帮你跑通？
+>
+> 直接把 [`docs/ai-bootstrap.md`](docs/ai-bootstrap.md) 和仓库地址丢给 AI，
+> 说「按 docs/ai-bootstrap.md 执行」—— 它包含**从零到跑通**的每一步命令、
+> 预期输出、验收清单和常见失败对照表，**专为无上下文的 AI 编写**。
+
 > ## ⚠️ 使用范围声明
 >
 > **本项目仅用于个人开发、学习与技术验证：不装车、不商业化、不分发。**
@@ -110,10 +116,13 @@
 ### 编译与烧录
 
 ```bash
-# ① UI 代码在 simulator/ui 下开发，编译前必须同步进固件目录
+# ① 拉厂商资料（reference/ 不在仓库里，新克隆必须跑这步，否则编译找不到 lvgl）
+tools/fetch_reference.sh
+
+# ② UI 代码在 simulator/ui 下开发，编译前必须同步进固件目录
 tools/sync_firmware.sh
 
-# ② 编译（--build-path 固定一个路径，下一步烧录要用同一个）
+# ③ 编译（--build-path 固定一个路径，下一步烧录要用同一个）
 BUILD=/tmp/cardash-build
 arduino-cli compile \
   --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
@@ -122,7 +131,7 @@ arduino-cli compile \
   --build-path "$BUILD" \
   firmware/dashboard
 
-# ③ 烧录（端口按你的实际情况改）
+# ④ 烧录（端口按你的实际情况改）
 arduino-cli upload -p /dev/cu.usbmodem101 \
   --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
   --build-path "$BUILD" \
@@ -198,6 +207,7 @@ reference/              厂商资料（原理图、示例、库；gitignore）
 | [docs/test-results.md](docs/test-results.md) | 测试台账 |
 | [docs/ui-guidelines.md](docs/ui-guidelines.md) | UI 规范 |
 | [docs/rotation-hardware-vs-software.md](docs/rotation-hardware-vs-software.md) | 屏幕旋转方案对比 |
+| [docs/ai-bootstrap.md](docs/ai-bootstrap.md) | **交给 AI 从零跑通**：烧录固件 + 装 App + 起网关 |
 | [docs/ai-task-boundaries.md](docs/ai-task-boundaries.md) | 用 AI 协作开发时的任务边界 |
 | [docs/wifi-upload-postmortem.md](docs/wifi-upload-postmortem.md) | **Wi-Fi 上传为什么放弃**（完整证据链）|
 | [gateway/DEPLOY.md](gateway/DEPLOY.md) | 网关自包含部署说明（可直接交给 AI 执行）|
