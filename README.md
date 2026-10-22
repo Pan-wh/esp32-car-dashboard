@@ -3,14 +3,14 @@
 一块 **466×466 圆形 AMOLED** 上的车载仪表盘：6 个表盘、BLE 实时数据、导航投屏、照片/动图表盘。
 位置**不来自 GNSS** —— 全部由 iPhone 的 Core Location 通过 BLE 传入。
 
-![6 个表盘总览](docs/images/all-faces.png)
-
 > ## ⚠️ 使用范围声明
 >
 > **本项目仅用于个人开发、学习与技术验证：不装车、不商业化、不分发。**
 >
 > 项目使用高德开放平台 Web 服务，其**服务协议 §3.4 明确禁止用于车载场景**。
 > 请勿将本项目用于任何实际驾驶环境。
+
+![6 个表盘总览](docs/images/all-faces.png)
 
 ---
 
@@ -147,10 +147,15 @@ cd simulator && make && ./dashboard_sim
 ### 跑测试
 
 ```bash
-make -C tests           # C 单测：遥测 / 控制 / 表盘上报 / 导航 / 图片解码 / .pgi …
-./tests/run_swift_tests.sh   # Swift 单测：导航核心 / 协议 / 编解码 …
-cd gateway && npm test       # 网关单测
+make -C tests run       # C 单测：遥测 / 控制 / 表盘上报 / 导航 / 图片解码 / .pgi …
+                        # 注意：make 的默认目标只**编译**，跑测试要用 run
+cd gateway && npm test   # 网关单测
 ```
+
+> Swift 侧的单测也在 `tests/` 下（由 `tests/Makefile` 驱动），没有单独的脚本入口。
+>
+> **当前状态不是全绿**：`test_face_report` 有 33 项失败 —— 表盘上报改成紧凑格式后单测没跟上，
+> 正在修。其余 C 单测均为绿色。
 
 ---
 
@@ -160,9 +165,10 @@ cd gateway && npm test       # 网关单测
 firmware/dashboard/     固件主程序（Arduino sketch，由 simulator/ui 同步而来）
 simulator/              桌面模拟器 + 全部 UI 代码（开发主战场，可在电脑上跑单测）
   ui/                   表盘、控件、控制协议、图片解码、.pgi 格式
-  platform/             模拟器对硬件（显示 / BLE / SD）的替身实现
+                        （对硬件——显示 / BLE / SD——的替身也在 ui/ 里）
 ios/CarDashboardPhone/  iOS App（SwiftUI + CoreBluetooth）
 gateway/                自建网关（Node.js，转发高德并做缓存 / 限流）
+                        运行时依赖 2 个：@mapbox/vector-tile、pbf（/mapwindow 用）
 tools/                  .pgi 转换、素材批量导入、固件同步、串口日志等脚本
 tests/                  C / Swift / Node 单测与测试数据
 docs/                   设计文档、协议、部署、排障（见下）
@@ -221,7 +227,7 @@ reference/              厂商资料（原理图、示例、库；gitignore）
 | Arduino-ESP32 Core | 3.x |
 | LVGL | 8.4.0（`LV_COLOR_DEPTH 16`）|
 | Xcode | 16.x（iOS 17+）|
-| Node.js | 20+（网关零运行时依赖）|
+| Node.js | **>= 18**（网关运行时依赖 2 个：`@mapbox/vector-tile`、`pbf`）|
 
 详细搭建步骤见 [docs/setup-macos.md](docs/setup-macos.md)，开发约定见
 [docs/development-guide.md](docs/development-guide.md)，进度见 [PROGRESS.md](PROGRESS.md)。
