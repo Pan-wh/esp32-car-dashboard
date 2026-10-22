@@ -1,101 +1,240 @@
-# ESP32-S3 车载仪表项目
+# ESP32-S3 车载仪表
 
-基于 **微雪 Waveshare ESP32-S3-Touch-AMOLED-1.75**（**无 GNSS 版本**）开发板的车载辅助显示设备。
-数据源为 iPhone Core Location 经 BLE 下发，**仪表侧不做定位**。
-项目定位：独立的车载仪表/信息显示器（非完整 CarPlay），强调稳定、清晰、低延迟、适合驾驶时快速读取。
+一块 **466×466 圆形 AMOLED** 上的车载仪表盘：6 个表盘、BLE 实时数据、导航投屏、照片/动图表盘。
+位置**不来自 GNSS** —— 全部由 iPhone 的 Core Location 通过 BLE 传入。
 
-## 项目状态
+![6 个表盘总览](docs/images/all-faces.png)
 
-**当前：数据源为 iPhone Core Location + BLE（本机无 LC76G GNSS）。**
-
-> 📌 **先看 [`PROGRESS.md`](PROGRESS.md)** —— 项目进度总览（单一事实来源）：
-> 做到哪一步、还差什么、已知问题、构建命令、串口命令速查。
+> ## ⚠️ 使用范围声明
 >
-> 🚀 **要烧板/装 App？看 [`docs/deployment.md`](docs/deployment.md)** ——
-> 固件编译烧录（含两个不可省的参数）、App 签名安装、双端联调流程、故障排除。
+> **本项目仅用于个人开发、学习与技术验证：不装车、不商业化、不分发。**
 >
-> 🛠 **要改代码？看 [`docs/development-guide.md`](docs/development-guide.md)** ——
-> 「只改 UI / 新增表盘 / 改 App / 改协议」分别该动哪些文件，
-> 以及**已验证可行的能力清单**（可放心复用）。
->
-> 🤖 **用 AI 改代码？看 [`docs/ai-task-boundaries.md`](docs/ai-task-boundaries.md)** ——
-> 按任务类型给 AI 划定边界（省 token + 防越界），
-> 6 种模式：只改 UI / 新增表盘 / 改 App / 改协议 / 改共享逻辑 / 改固件。
+> 项目使用高德开放平台 Web 服务，其**服务协议 §3.4 明确禁止用于车载场景**。
+> 请勿将本项目用于任何实际驾驶环境。
 
-改造任务书见 [`AI_TASK_IPHONE_BLE_DASHBOARD.md`](docs/archive/AI_TASK_IPHONE_BLE_DASHBOARD.md)，
-协议见 [`docs/ble.md`](docs/ble.md)，测试记录见 [`docs/test-results.md`](docs/test-results.md)。
+---
 
-- [x] 目录结构与文档体系（进度见 [`PROGRESS.md`](PROGRESS.md)，测试台账见 [`docs/test-results.md`](docs/test-results.md)）
-- [x] macOS 开发环境配置（Arduino IDE 2.3.10 + Arduino-ESP32 Core 3.3.10，见 `docs/setup-macos.md`）
-- [x] 官方仓库克隆与版本记录（commit `e4344e7`，见 `reference/` 与 `docs/decisions.md`）
-- [x] UI 模拟器（SDL2 + LVGL 8.4.0，`simulator/`，见其 README）
-- [x] 数字时钟 v2：iPhone 充电息屏风格（模拟器已验证，`design/wireframes/clock.md`）
-- [x] 模拟指针时钟 v1：极简风格，刻度环 + 三针 + 橙色秒针（逐点验证，`design/wireframes/analog-clock.md`）
-- [x] 页面切换：左右**滑动**分页（滚动容器 + 吸附，真机通过）
-- [x] 官方示例 01_HelloWorld / 03_LVGL_PCF85063_simpleTime 烧录验证（**真机通过**）
-- [x] 速度表盘 V5（驾驶员三态 + 白底 + 速度渐变，像素级验证）
-- [x] 滑页性能优化：单帧 243ms → **90-113ms**（烘焙表盘 + QSPI 调优 + 字体去抗锯齿）
-- [x] 静态表盘烘焙成图片（刻度/数字离线渲染，运行时只留指针）
-- [x] **阶段1 BLE 最小验证**（真机+macOS 联调）：广播 `CarDashboard`、接收并**跨 MTU 重组**解析 JSON、
-      线程安全、数据过期置无效
-- [x] **阶段2 时间同步**：BLE `ts_utc_ms` → 系统时钟 + PCF85063 RTC（UTC+8），屏幕 `TIME SYNC→SYNCED`
-- [x] **阶段3 iPhone 前台 App**：`ios/CarDashboardPhone/`（SwiftUI + Core Location + Core Bluetooth）；
-      已生成 `.xcodeproj`；**已在 iPhone 12（iOS 27）真机安装运行**，BLE 连接与遥测链路验证通过
-- [x] **阶段 4 后台驾驶会话**：`requestBackground()`（始终授权 + 后台定位，`#if os(iOS)` 门控）；**已真机验证**（后台 / 锁屏均持续 2Hz）
-- [x] **阶段5（部分）**：速度页五态 `BT OFF / WAIT GPS / NO FIX / STALE / LIVE`（真机逐态实测）；
-      固件连续运行 21min+ 无崩溃、空闲堆平稳
-- [x] **真机运行 iPhone App**（iPhone 12 / iOS 27，签名与安装通过）
-- [x] 后台 / 锁屏 / 整链路验收（任务书 §9 测试矩阵 **12/12 通过**、DoD **8/8**，见 `docs/test-results.md`）
-- [x] 设备控制（亮度/息屏）+ 可更换表盘系统（BLE 端到端验证通过）
-- [x] 航向显示 + 行程统计（里程/最高速/均速）
+## 它能做什么
 
-## 目录结构
+### 6 个表盘（可自由启用/隐藏、滑动切换）
+
+| 表盘 | 说明 |
+|------|------|
+| **模拟指针钟** | 极简刻度环 + 三针 + 橙色秒针 |
+| **数字钟** | 大字号时间 + 日期 + `TIME SYNC` 校时状态 |
+| **速度表** | 指针 + 中央**驾驶员插画三态表情**（按车速切换）|
+| **彩色数字钟** | 渐变配色 |
+| **导航** | 转向箭头 + 剩余距离 + 限速 + `REROUTE` 状态 |
+| **照片表盘** | 静态图 / 动图轮播，带完整烧屏防护 |
+
+| ![analog](docs/images/01-animated.png) | ![digital](docs/images/02-minimal.png) | ![speed](docs/images/03-speed.png) |
+|---|---|---|
+| **模拟指针钟** | **数字钟** | **速度表** |
+
+| ![color](docs/images/04-color.png) | ![nav](docs/images/05-nav-active.png) | ![photo](docs/images/06-photo.png) |
+|---|---|---|
+| **彩色数字钟** | **导航** | **照片表盘** |
+
+#### 速度表的三态表情
+
+按车速切换中央驾驶员的表情，阈值对齐现实限速：
+
+| 车速 | 表情 | 对应现实 |
+|------|------|---------|
+| `0 ~ 80 km/h` | 平静 | 常规城市 / 快速路以内 |
+| `80 ~ 110 km/h` | 皱眉 | 超过快速路限速 |
+| `> 110 km/h` | 咬牙 | 明显超速 |
+
+![三态比较](docs/images/speed-3stages.png)
+
+#### 照片表盘
+
+支持**静态图**与**动图**混排轮播，并带完整烧屏防护（亮度封顶 / 像素位移 / 自动息屏，三者独立开关）。
+
+| iOS 侧（选图 → 裁切 → 转格式）| 设备侧 |
+|---|---|
+| ![照片页](docs/images/photo-tab-ios.png) | ![照片表盘](docs/images/photo-face-sim.png) |
+
+- **导入**：素材放 SD 卡，用 `tools/import_photos.sh` 批量转成 `.pgi`
+  —— 支持 JPG / PNG / GIF / **HEIC** / **MOV / MP4**，自动抽帧、自动按设备上限压缩、自动处理 **EXIF 方向**
+- **切图与轮播设置**：走 **BLE**（不需要 Wi-Fi）
+- **实测帧率**：满屏 466×466 动图 **3~4 fps** —— 瓶颈是 SD 卡读速（104 ms/帧，1-bit SDMMC 的物理上限），属硬件限制
+
+### iOS App
+
+5 个 Tab：**仪表 / 数据 / 导航 / 照片 / 设置**
+
+| Tab | 内容 |
+|-----|------|
+| **仪表** | 表盘切换（列表**由设备 BLE 上报**，新增表盘 App 无需改动）、演示速度滑块、亮度时段曲线 |
+| **数据** | 实时车速 / 海拔 / 航向 / 行程统计 |
+| **导航** | 目的地搜索 → 路线选择 → 下发到设备 |
+| **照片** | 选图/视频 → 圆屏预览裁切（捏合缩放 / 拖动 / 旋转）→ 转 GIF 存相册；上下张切设备上的照片 |
+| **设置** | 连接管理、屏幕方向、亮度、休眠 |
+
+---
+
+## 它是怎么工作的
 
 ```
-esp32-car-dashboard/
-├── README.md            # 本文件
-├── AI_CONTEXT.md        # 提供给 AI 的长期项目上下文（务必先读）
-├── docs/                # 硬件、环境、架构、UI 规范、决策与排障记录
-├── design/              # 线框图与设计资源（含许可说明）
-├── firmware/dashboard/  # 实际固件工程（Arduino）
-├── ios/                 # iPhone App（Swift/SwiftUI）
-├── gateway/             # 导航网关（Node ≥18，2 个依赖）：代理高德，Key 只在服务端
-├── reference/           # 微雪官方仓库（gitignore，按需克隆，独立参考依赖）
-├── tests/               # 可自动化测试（统一入口：make run）
-└── tools/               # 辅助脚本
+┌─────────────────┐   BLE (CoreBluetooth)   ┌──────────────────────────────┐
+│   iPhone App    │ ──────────────────────► │  ESP32-S3-Touch-AMOLED-1.75  │
+│  (SwiftUI)      │   遥测 / 表盘 / 导航    │                              │
+│                 │ ◄────────────────────── │  · 466×466 圆形 AMOLED       │
+│  Core Location  │   状态 / 表盘列表       │  · LVGL 8.4（16bpp）         │
+│  地图 / 导航    │                         │  · 8MB PSRAM / 16MB Flash    │
+└────────┬────────┘                         │  · SD 卡（照片素材）         │
+         │ HTTPS                            └──────────────────────────────┘
+         ▼
+┌─────────────────┐   HTTPS     ┌───────────────────┐
+│  自建网关        │ ──────────► │  高德开放平台     │
+│  (Node.js)      │             │  路线 / 路况       │
+└─────────────────┘             └───────────────────┘
 ```
+
+**为什么要有网关**：高德 Web 服务的 key 放在 App 里会被扒出来，所以留在服务端；
+网关同时做**路线缓存**与**配额保护**（`/routes` 用 3 种策略、`/mapwindow` 不消耗高德配额）。
+
+**为什么位置不来自 GNSS**：板子没有 GPS 模块。手机定位更准、更省电，而且手机本来就在跑导航 ——
+把结果通过 BLE 发过来即可。
+
+---
+
+## 快速开始
+
+### 硬件
+
+- Waveshare **ESP32-S3-Touch-AMOLED-1.75**（CO5300 / QSPI、CST9217 触摸、PCF85063 RTC、QMI8658 IMU）
+- microSD 卡（照片表盘用，可选）
+
+### 编译与烧录
+
+```bash
+# ① UI 代码在 simulator/ui 下开发，编译前必须同步进固件目录
+tools/sync_firmware.sh
+
+# ② 编译
+arduino-cli compile \
+  --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
+  --build-property "compiler.cpp.extra_flags=-DESP32QSPI_MAX_PIXELS_AT_ONCE=4096" \
+  --libraries reference/ESP32-S3-Touch-AMOLED-1.75/examples/arduino/libraries \
+  firmware/dashboard
+
+# ③ 烧录
+arduino-cli upload -p /dev/cu.usbmodem101 \
+  --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi" \
+  --build-path <上一步的 build-path> firmware/dashboard
+```
+
+> `--build-path` 要两处一致；`compiler.cpp.extra_flags` 里的 `ESP32QSPI_MAX_PIXELS_AT_ONCE=4096`
+> 是针对这块屏的 QSPI 批量传输上限，**不能省**。
+
+### 在电脑上跑模拟器（不需要硬件）
+
+```bash
+cd simulator && make && ./dashboard_sim
+```
+
+支持截图与脚本化验证：
+
+```bash
+./dashboard_sim --page 2 --speed 88 --status 4 --offscreen --ms 500 --shot out.bmp
+```
+
+常用参数：`--page N` 选表盘、`--speed` 车速、`--status` 链路状态、`--nav-*` 导航数据、
+`--demo-speed` 演示车速、`--photo-demo <file.pgi>` 照片、`--offscreen` 无窗口、`--shot` 截图。
+
+### 跑测试
+
+```bash
+make -C tests           # C 单测：遥测 / 控制 / 表盘上报 / 导航 / 图片解码 / .pgi …
+./tests/run_swift_tests.sh   # Swift 单测：导航核心 / 协议 / 编解码 …
+cd gateway && npm test       # 网关单测
+```
+
+---
+
+## 仓库结构
+
+```
+firmware/dashboard/     固件主程序（Arduino sketch，由 simulator/ui 同步而来）
+simulator/              桌面模拟器 + 全部 UI 代码（开发主战场，可在电脑上跑单测）
+  ui/                   表盘、控件、控制协议、图片解码、.pgi 格式
+  platform/             模拟器对硬件（显示 / BLE / SD）的替身实现
+ios/CarDashboardPhone/  iOS App（SwiftUI + CoreBluetooth）
+gateway/                自建网关（Node.js，转发高德并做缓存 / 限流）
+tools/                  .pgi 转换、素材批量导入、固件同步、串口日志等脚本
+tests/                  C / Swift / Node 单测与测试数据
+docs/                   设计文档、协议、部署、排障（见下）
+reference/              厂商资料（原理图、示例、库；gitignore）
+```
+
+---
+
+## 文档
+
+| 文档 | 内容 |
+|------|------|
+| [docs/architecture.md](docs/architecture.md) | 整体架构与模块划分 |
+| [docs/hardware.md](docs/hardware.md) | 硬件规格与引脚 |
+| [docs/ble.md](docs/ble.md) | **BLE 协议**：遥测包、控制命令、表盘上报（含紧凑格式）|
+| [docs/photo-gif-design.md](docs/photo-gif-design.md) | 照片/动图表盘设计与 `.pgi` 格式 |
+| [docs/nav-backend.md](docs/nav-backend.md) | 导航后端（网关）接口与部署 |
+| [docs/nav-app-ux.md](docs/nav-app-ux.md) | 导航交互设计 |
+| [docs/deployment.md](docs/deployment.md) | 烧录与部署流程 |
+| [docs/development-guide.md](docs/development-guide.md) | 开发约定（新增表盘 / 命令 / 单测）|
+| [docs/setup-macos.md](docs/setup-macos.md) | macOS 开发环境搭建 |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | **排障手册**（含踩过的坑）|
+| [docs/decisions.md](docs/decisions.md) | 技术决策记录（ADR）|
+| [docs/test-results.md](docs/test-results.md) | 测试台账 |
+| [docs/ui-guidelines.md](docs/ui-guidelines.md) | UI 规范 |
+| [docs/rotation-hardware-vs-software.md](docs/rotation-hardware-vs-software.md) | 屏幕旋转方案对比 |
+| [docs/ai-task-boundaries.md](docs/ai-task-boundaries.md) | 用 AI 协作开发时的任务边界 |
+| [docs/wifi-upload-postmortem.md](docs/wifi-upload-postmortem.md) | **Wi-Fi 上传为什么放弃**（完整证据链）|
+| [gateway/DEPLOY.md](gateway/DEPLOY.md) | 网关自包含部署说明（可直接交给 AI 执行）|
+| [PROGRESS.md](PROGRESS.md) | 开发进度与当前状态 |
+
+---
+
+## 已知限制
+
+**诚实列出，避免被误判为 bug**：
+
+| 限制 | 原因 |
+|------|------|
+| **没有 GNSS** | 板子无 GPS 模块；位置完全依赖手机 |
+| **动图只有 3~4 fps** | SD 卡读 218 KB 需 104 ms（1-bit SDMMC 物理上限）+ 解码 + 全屏重绘 |
+| **照片表盘是 256 色** | `.pgi` 用 8bpp 索引 + 调色板，为控制体积与解码耗时 |
+| **Wi-Fi 上传已放弃** | 开热点后内部堆只剩 2~4 KB，撑不住 HTTP + SD 写入（[复盘](docs/wifi-upload-postmortem.md)）|
+| **BLE 单次上报 ≤ ~184 字节** | iOS 的 ATT MTU 限制；表盘列表因此改成了紧凑数组格式 |
+| **路显需中文字体** | 中文路名要 CJK 字库，当前未做（字体放 SD 卡是可行的后续方向）|
+| **App 仅支持 iOS** | 位置与导航依赖 Core Location / MapKit |
+
+---
 
 ## 开发环境
 
-| 工具 | 版本 | 说明 |
-|------|------|------|
-| macOS | Apple Silicon / pwh 主机 | 开发主机 |
-| Arduino IDE | 2.3.10 | 主构建/烧录工具 |
-| Arduino-ESP32 Core | 3.3.10（espressif） | 官方仓库要求的版本 |
-| Git | 2.39.2 | 版本管理 |
-| VS Code | 已安装 | 代码编辑/浏览 |
+| 项 | 版本 |
+|----|------|
+| macOS | Apple Silicon |
+| Arduino IDE / arduino-cli | 2.3.x / 对应版本 |
+| Arduino-ESP32 Core | 3.x |
+| LVGL | 8.4.0（`LV_COLOR_DEPTH 16`）|
+| Xcode | 16.x（iOS 17+）|
+| Node.js | 20+（网关零运行时依赖）|
 
-详细安装与烧录步骤见 [`docs/setup-macos.md`](docs/setup-macos.md)。
+详细搭建步骤见 [docs/setup-macos.md](docs/setup-macos.md)，开发约定见
+[docs/development-guide.md](docs/development-guide.md)，进度见 [PROGRESS.md](PROGRESS.md)。
 
-## 关键约定
-
-- 开发规则、优先级、里程碑定义见 `AI_CONTEXT.md`。
-- 硬件引脚与总线信息以官方文档为准，见 `docs/hardware.md`。
-- 关键技术决策及原因记录在 `docs/decisions.md`。
-- 每个可运行阶段通过编译+硬件验证后建立 Git commit。
+---
 
 ## 官方资料
 
 - 官方仓库：<https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75>
 - 官方文档：<https://docs.waveshare.net/ESP32-S3-Touch-AMOLED-1.75/>
-- 官方快速开始：<https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75/blob/main/docs/getting-started_ZH.md>
 
-## 设备功能
+---
 
-| 功能 | 入口 | 说明 |
-|------|------|------|
-| 亮度调节 | BLE `{"cmd":"brightness","value":0-255}` / 串口 `bright <n>` | 0 视为最低可见亮度（避免全屏黑误判死机）|
-| 息屏 / 亮屏 | BLE `{"cmd":"screen","value":"off"\|"on"}` / 串口 `screen on\|off` | 仅关显示，触摸仍可唤醒（由固件决定）|
-| 航向显示 | 遥测 `course_deg` 自动驱动 | 速度页底部显示「NE 45°」（选在指针扫不到的扇区）|
-| 行程统计 | 串口 `trip` / `trip reset` | 里程、最高速、加权均速；**仅链路 LIVE 且速度有效时累积**（失效不计入）|
-| 表盘切换 | BLE `{"cmd":"face","value":N}` | ✅ **5 个表盘已实现**（模拟/数字/速度/多彩/导航），可滑动或远程切换 |
+## 许可
+
+仅供个人学习使用。第三方组件（LVGL、Arduino-ESP32、厂商示例）遵循其各自许可。
