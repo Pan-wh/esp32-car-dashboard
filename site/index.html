@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32-S3 车载仪表 · 466×466 圆形 AMOLED</title>
+<meta name="description" content="ESP32-S3 车载仪表：466×466 圆形 AMOLED，6 个表盘（时钟/速度表/导航/照片动图），BLE 实时数据，iPhone 导航投屏。开源学习项目。">
+<meta property="og:title" content="ESP32-S3 车载仪表 · 466×466 圆形 AMOLED">
+<meta property="og:description" content="6 个表盘、BLE 实时数据、iPhone 导航投屏。开源学习项目。">
+<meta property="og:image" content="img/all-faces-v2.png">
+<meta name="theme-color" content="#07090d">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 背景层 -->
+<div class="bg-grid" aria-hidden="true"></div>
+<div class="bg-glow" aria-hidden="true"></div>
+<div class="bg-scan" aria-hidden="true"></div>
+
+<!-- 顶部导航 -->
+<header class="nav">
+  <a class="brand" href="#top">
+    <span class="brand-dot"></span>
+    <span class="brand-text">CAR<span class="dim">·</span>DASH</span>
+  </a>
+  <nav class="nav-links">
+    <a href="#faces">表盘</a>
+    <a href="#spec">规格</a>
+    <a href="#stack">技术栈</a>
+    <a class="nav-cta" href="https://github.com/Pan-wh/esp32-car-dashboard" target="_blank" rel="noopener">GitHub ↗</a>
+  </nav>
+</header>
+
+<!-- Hero -->
+<section class="hero" id="top">
+  <div class="hero-badge">ESP32-S3 · LVGL 8.4 · BLE</div>
+
+  <h1 class="hero-title">
+    一块 <span class="accent">圆屏</span><br>
+    六个 <span class="accent2">表盘</span>
+  </h1>
+
+  <p class="hero-sub">
+    466×466 圆形 AMOLED 上的自制车载仪表盘。<br>
+    <span class="dim">板子没有 GPS —— 位置与导航全部来自 iPhone，经 BLE 传入。</span>
+  </p>
+
+  <div class="hero-actions">
+    <a class="btn btn-primary" href="https://github.com/Pan-wh/esp32-car-dashboard" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+      查看源码
+    </a>
+    <a class="btn btn-ghost" href="#faces">看表盘 ↓</a>
+  </div>
+
+  <div class="hero-visual reveal">
+    <img src="img/all-faces-v2.png" alt="六个表盘总览" loading="eager">
+    <div class="hero-visual-glow"></div>
+  </div>
+</section>
+
+<!-- 表盘 -->
+<section class="section" id="faces">
+  <div class="section-head">
+    <span class="section-idx">01</span>
+    <h2>六个表盘</h2>
+    <p class="section-desc">可自由启用 / 隐藏，左右滑动切换</p>
+  </div>
+
+  <div class="cards">
+    <article class="card reveal">
+      <div class="card-img"><img src="img/01-animated.png" alt="模拟指针钟" loading="lazy"></div>
+      <h3>模拟指针钟</h3>
+      <p>极简刻度环 + 三针，橙色秒针</p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-img"><img src="img/02-minimal.png" alt="数字钟" loading="lazy"></div>
+      <h3>数字钟</h3>
+      <p>大字号时间 + 日期 + <code>TIME SYNC</code> 校时状态</p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-img"><img src="img/03-speed.png" alt="速度表" loading="lazy"></div>
+      <h3>速度表</h3>
+      <p>指针 + 中央驾驶员插画，<b>三态表情随车速切换</b></p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-img"><img src="img/04-color.png" alt="彩色数字钟" loading="lazy"></div>
+      <h3>彩色数字钟</h3>
+      <p>渐变配色，夜间也好看</p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-img"><img src="img/05-nav-map.png" alt="导航表盘" loading="lazy"></div>
+      <h3>导航</h3>
+      <p>真实路线图 + 转向箭头 + 剩余距离，走自建网关取高德数据</p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-img"><img src="img/06-photo.png" alt="照片表盘" loading="lazy"></div>
+      <h3>照片表盘</h3>
+      <p>静态图 / 动图轮播，带完整烧屏防护</p>
+    </article>
+  </div>
+</section>
+
+<!-- 三态表情 -->
+<section class="section section-alt">
+  <div class="section-head">
+    <span class="section-idx">02</span>
+    <h2>表情随车速变化</h2>
+    <p class="section-desc">阈值对齐现实限速</p>
+  </div>
+
+  <div class="stages reveal">
+    <img src="img/speed-3stages.png" alt="60 / 90 / 120 km/h 三种表情">
+  </div>
+
+  <div class="stage-legend">
+    <div><span class="dot d1"></span> 0–80 km/h　平静</div>
+    <div><span class="dot d2"></span> 80–110 km/h　皱眉</div>
+    <div><span class="dot d3"></span> &gt;110 km/h　咬牙</div>
+  </div>
+</section>
+
+<!-- 规格 -->
+<section class="section" id="spec">
+  <div class="section-head">
+    <span class="section-idx">03</span>
+    <h2>硬件规格</h2>
+    <p class="section-desc">微雪 Waveshare ESP32-S3-Touch-AMOLED-1.75（带外壳 · 无 GPS）</p>
+  </div>
+
+  <div class="spec-wrap">
+    <div class="spec-img reveal">
+      <img src="img/device-hardware.jpg" alt="硬件实物" loading="lazy">
+    </div>
+    <ul class="spec-list">
+      <li><span>屏幕</span><b>466×466 圆形 AMOLED</b><em>CO5300 · QSPI</em></li>
+      <li><span>触摸</span><b>CST9217</b><em>电容</em></li>
+      <li><span>主控</span><b>ESP32-S3</b><em>双核 Xtensa LX7 · Wi-Fi + BLE 5</em></li>
+      <li><span>内存</span><b>8 MB octal PSRAM</b><em>+ 16 MB Flash</em></li>
+      <li><span>其他</span><b>RTC · 六轴 IMU</b><em>双麦 · SD 卡槽</em></li>
+      <li class="hl"><span>定位</span><b>无 GNSS</b><em>位置来自 iPhone，经 BLE</em></li>
+    </ul>
+  </div>
+</section>
+
+<!-- 技术栈 -->
+<section class="section section-alt" id="stack">
+  <div class="section-head">
+    <span class="section-idx">04</span>
+    <h2>技术栈</h2>
+    <p class="section-desc">从设备到手机到网关，全部自己写</p>
+  </div>
+
+  <div class="stack">
+    <div class="stack-item reveal"><h4>设备端</h4><p>ESP32-S3 · LVGL 8.4 · Arduino CLI · 自研 <code>.pgi</code> 图片格式</p></div>
+    <div class="stack-item reveal"><h4>通信</h4><p>BLE（遥测 / 控制 / 表盘上报）· 自定义紧凑协议</p></div>
+    <div class="stack-item reveal"><h4>App</h4><p>SwiftUI · CoreBluetooth · Core Location · 圆屏裁切预览</p></div>
+    <div class="stack-item reveal"><h4>网关</h4><p>Node.js（零框架）· 高德 Web 服务 · 路线缓存 / 配额保护</p></div>
+  </div>
+
+  <div class="app-shot reveal">
+    <img src="img/photo-tab-ios.png" alt="iOS App 照片页" loading="lazy">
+    <p class="app-shot-cap">iOS App · 照片页（选图 → 圆屏裁切 → 转格式）</p>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta">
+  <div class="cta-inner">
+    <h2>想看代码？</h2>
+    <p>整套开源，从烧录到装 App 的步骤都写成了文档。<br>
+       <span class="dim">连"交给 AI 让它带你做"的执行手册都有。</span></p>
+    <a class="btn btn-primary btn-lg" href="https://github.com/Pan-wh/esp32-car-dashboard" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+      GitHub 仓库
+    </a>
+    <p class="cta-repo">Pan-wh / esp32-car-dashboard</p>
+  </div>
+</section>
+
+<!-- 页脚 -->
+<footer class="footer">
+  <div class="disclaimer">
+    ⚠️ 本项目仅用于个人开发、学习与技术验证：<b>不装车、不商业化、不分发</b>。<br>
+    使用高德开放平台服务，其协议禁止车载场景，请勿用于任何实际驾驶环境。
+  </div>
+  <div class="footer-meta">
+    <span>ESP32-S3 · LVGL · SwiftUI · Node.js</span>
+    <span class="sep">·</span>
+    <span>个人学习项目</span>
+  </div>
+</footer>
+
+<script>
+// 滚动渐显
+const io = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+  }
+}, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+// 鼠标位置做一层轻微视差光晕（仅桌面）
+if (window.matchMedia('(pointer:fine)').matches) {
+  const glow = document.querySelector('.bg-glow');
+  let tx = 50, ty = 30, cx = 50, cy = 30;
+  window.addEventListener('mousemove', (ev) => {
+    tx = (ev.clientX / window.innerWidth) * 100;
+    ty = (ev.clientY / window.innerHeight) * 100;
+  });
+  (function loop() {
+    cx += (tx - cx) * 0.06; cy += (ty - cy) * 0.06;
+    if (glow) glow.style.background =
+      `radial-gradient(700px circle at ${cx}% ${cy}%, rgba(255,140,20,.10), transparent 70%)`;
+    requestAnimationFrame(loop);
+  })();
+}
+</script>
+</body>
+</html>
