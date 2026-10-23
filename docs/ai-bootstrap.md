@@ -333,7 +333,7 @@ App 里「设置 → 网关地址」填 `http://<Mac IP>:8787`，令牌填同一
 ## 9. 想改代码时
 
 先读 [`docs/development-guide.md`](development-guide.md)（该动哪些文件）
-和 [`docs/ai-task-boundaries.md`](ai-task-boundaries.md)（按任务类型划定改动范围）。
+和 `docs/ai-task-boundaries.md`（按任务类型划定改动范围）。
 
 **改完必须**：
 

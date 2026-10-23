@@ -116,7 +116,7 @@
   [nav-backend.md](nav-backend.md)
 - **状态（2026-10-13 更新）**：**已实现** —— 网关（[gateway/](../gateway/README.md)）
   与 iOS 导航核心均已落地，并用真实 Key 完成端到端验证；
-  ✅ **App 侧接入已于 2026-10-14 完成**（定位 → 导航核心 → BLE 下发仪表）。详见 [nav-backend.md](nav-backend.md) §3.4 与 [test-results.md](test-results.md)。
+  ✅ **App 侧接入已于 2026-10-14 完成**（定位 → 导航核心 → BLE 下发仪表）。详见 [nav-backend.md](nav-backend.md) §3.4 与 test-results.md。
 
 ## D-009 参考项目只学设计、不复制代码
 

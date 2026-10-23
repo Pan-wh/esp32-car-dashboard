@@ -450,7 +450,7 @@ curl -s http://127.0.0.1:8080/health
 
 - [ble.md](ble.md) —— 导航消息 BLE 协议（阶段 2，已实现）
 - [decisions.md](decisions.md) —— 技术决策记录
-- [test-results.md](test-results.md) —— 验证台账
+- test-results.md —— 验证台账
 - [deployment.md](deployment.md) —— 固件与 App 部署
 - 参考项目：<https://github.com/mx3353672833-debug/moto-gps-waveshare>
 

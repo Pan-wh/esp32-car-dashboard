@@ -178,7 +178,7 @@ Hash of data verified.        ← 出现 3 次（bootloader/分区表/应用）
 screen /dev/cu.usbmodem101 115200
 ```
 
-**串口命令速查**（详见 [`../PROGRESS.md`](../PROGRESS.md) §11）：
+**串口命令速查**（详见 `../PROGRESS.md` §11）：
 
 | 命令 | 作用 |
 |------|------|
@@ -479,8 +479,8 @@ tools/run_ios_tests.sh
 |------|------|
 | [`setup-macos.md`](setup-macos.md) | 开发环境搭建（工具链安装）|
 | [`development-guide.md`](development-guide.md) | 「改哪里」+ 已验证能力清单 |
-| [`ai-task-boundaries.md`](ai-task-boundaries.md) | 交给 AI 改代码时的任务边界 |
-| [`test-results.md`](test-results.md) | 测试台账（避免重复测试）|
+| `ai-task-boundaries.md` | 交给 AI 改代码时的任务边界 |
+| `test-results.md` | 测试台账（避免重复测试）|
 | [`troubleshooting.md`](troubleshooting.md) | 完整排障记录与根因分析 |
 | [`hardware.md`](hardware.md) | 硬件规格与引脚 |
 | [`ble.md`](ble.md) | BLE 协议细节 |

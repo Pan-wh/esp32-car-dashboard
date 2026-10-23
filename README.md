@@ -250,15 +250,12 @@ reference/              厂商资料（原理图、示例、库；gitignore）
 | [docs/setup-macos.md](docs/setup-macos.md) | macOS 开发环境搭建 |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | **排障手册**（含踩过的坑）|
 | [docs/decisions.md](docs/decisions.md) | 技术决策记录（ADR）|
-| [docs/test-results.md](docs/test-results.md) | 测试台账 |
 | [docs/ui-guidelines.md](docs/ui-guidelines.md) | UI 规范 |
 | [docs/rotation-hardware-vs-software.md](docs/rotation-hardware-vs-software.md) | 屏幕旋转方案对比 |
 | [docs/ai-bootstrap.md](docs/ai-bootstrap.md) | **交给 AI 从零跑通**：烧录固件 + 装 App + 起网关 |
 | [docs/site-deploy.md](docs/site-deploy.md) | 落地页（`site/`）部署到 Cloudflare Pages |
-| [docs/ai-task-boundaries.md](docs/ai-task-boundaries.md) | 用 AI 协作开发时的任务边界 |
 | [docs/wifi-upload-postmortem.md](docs/wifi-upload-postmortem.md) | **Wi-Fi 上传为什么放弃**（完整证据链）|
 | [gateway/DEPLOY.md](gateway/DEPLOY.md) | 网关自包含部署说明（可直接交给 AI 执行）|
-| [PROGRESS.md](PROGRESS.md) | 开发进度与当前状态 |
 
 ---
 
@@ -290,7 +287,7 @@ reference/              厂商资料（原理图、示例、库；gitignore）
 | Node.js | **>= 18**（网关运行时依赖 2 个：`@mapbox/vector-tile`、`pbf`）|
 
 详细搭建步骤见 [docs/setup-macos.md](docs/setup-macos.md)，开发约定见
-[docs/development-guide.md](docs/development-guide.md)，进度见 [PROGRESS.md](PROGRESS.md)。
+[docs/development-guide.md](docs/development-guide.md)。
 
 ---
 

@@ -1,7 +1,7 @@
 # 软件架构与模块边界
 
-> 状态：**已实现**（阶段 0-6 完成，含照片表盘）。进度与测试状态见 [`../PROGRESS.md`](../PROGRESS.md)
-> 与 [`test-results.md`](test-results.md)。
+> 状态：**已实现**（阶段 0-6 完成，含照片表盘）。进度与测试状态见 `../PROGRESS.md`
+> 与 `test-results.md`。
 > **要动手改代码？见 [`development-guide.md`](development-guide.md)（按意图查改哪里）。**
 
 ## 目标

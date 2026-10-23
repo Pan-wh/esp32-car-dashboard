@@ -2,10 +2,10 @@
 
 > 面向二次开发。按**意图**检索，直接给出要改的文件、注意事项与验证方式。
 >
-> 配套文档：[`../PROGRESS.md`](../PROGRESS.md)（进度总览）｜
-> [`test-results.md`](test-results.md)（测试台账）｜
+> 配套文档：`../PROGRESS.md`（进度总览）｜
+> `test-results.md`（测试台账）｜
 > [`troubleshooting.md`](troubleshooting.md)（踩坑记录）｜
-> [`ai-task-boundaries.md`](ai-task-boundaries.md)（**交给 AI 改代码时用这个**）
+> `ai-task-boundaries.md`（**交给 AI 改代码时用这个**）
 
 ---
 
@@ -290,7 +290,7 @@ tools/run_ios_tests.sh                     # 5 项 XCUITest
 `sd`（TF 卡状态）、`scan`（I2C 总线扫描）、`ble`（连接/遥测统计）、
 `face`（切表盘）、`nav`（导航卡片模拟数据）、`demo`（演示速度）、`trip`（行程）、
 `bright`/`screen`（亮度/息屏）、`lvrot`（临时切换方向）、
-`mem`、`dump`、`help`。详见 [`../PROGRESS.md`](../PROGRESS.md) §11。
+`mem`、`dump`、`help`。详见 `../PROGRESS.md` §11。
 
 ---
 

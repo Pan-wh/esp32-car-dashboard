@@ -1,6 +1,6 @@
 # BLE 数据源（iPhone Core Location → 仪表）
 
-改造方向见 [`archive/AI_TASK_IPHONE_BLE_DASHBOARD.md`](archive/AI_TASK_IPHONE_BLE_DASHBOARD.md)。本机**无板载 LC76G GNSS**
+改造方向见 `archive/AI_TASK_IPHONE_BLE_DASHBOARD.md`。本机**无板载 LC76G GNSS**
 （原理图网表证实无 GPS 的 SDA/SCL 网络），故速度/航向/时间改为 **iPhone Core Location 经 BLE 下发**。
 
 
