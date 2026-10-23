@@ -1,5 +1,8 @@
 # 硬件信息（依据）
 
+> **本项目所用版本：微雪 ESP32-S3-Touch-AMOLED-1.75「带外壳 · 无 GPS」**
+> —— 下文规格与引脚以此版本为准。
+
 > 本文档为项目内速查摘要。**所有引脚、地址、初始化细节以官方仓库为准**：
 > `reference/ESP32-S3-Touch-AMOLED-1.75/HARDWARE_REFERENCE_ZH.md`（commit `e4344e7`）。
 > 本文内容均已与该文档核对，禁止凭记忆修改。

@@ -83,6 +83,9 @@ arduino-cli upload -p /dev/cu.usbmodem101 \
 | Node.js | `node -v` | **>= 18** |
 | git | `git --version` | 任意 |
 
+**硬件**：微雪 **ESP32-S3-Touch-AMOLED-1.75**，「**带外壳 · 无 GPS**」版本
+（本项目验证的就是这个版本；GPS 版不需要，定位数据来自 iPhone）。
+
 安装 ESP32 core（若缺失）：
 
 ```bash
