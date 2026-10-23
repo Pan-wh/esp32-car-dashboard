@@ -229,18 +229,33 @@ xcrun devicectl list devices
 # 输出里找到你的 iPhone，复制形如 00008101-001654202261001E 的标识符
 ```
 
+**最省事：用仓库里的脚本**（会自动挑设备、自动续期描述文件）：
+
+```bash
+tools/install_app.sh            # 自动挑第一个在线的 iPhone
+tools/install_app.sh --list     # 先看有哪些设备
+```
+
+**手动等价命令**（想自己控制时）：
+
 ```bash
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 xcodebuild -project CarDashboardPhone.xcodeproj \
   -scheme CarDashboardPhone -configuration Debug \
   -destination 'platform=iOS,id=<你的设备 ID>' \
-  -derivedDataPath /tmp/dd-car build
+  -derivedDataPath /tmp/dd-car -allowProvisioningUpdates build
 
 xcrun devicectl device install app \
   --device <你的设备 ID> \
   /tmp/dd-car/Build/Products/Debug-iphoneos/CarDashboardPhone.app
 ```
+
+> ⚠️ **`-allowProvisioningUpdates` 不能省** —— 没有它，签名会报
+> `No profiles ... Automatic signing is disabled`。
+>
+> ⚠️ **免费 Apple ID 的描述文件只有 7 天有效期**，过期后 iPhone 会提示
+> **「App 不再可用」**。到期重跑一次 `tools/install_app.sh` 即可续期。
 
 **预期**：`** BUILD SUCCEEDED **` + `App installed:`
 

@@ -726,3 +726,33 @@ index >= saved_fcount  →  视为新增，强制启用
 > **不装车、不商业化、不分发**。项目使用高德开放平台 Web 服务，其
 > **服务协议 §3.4 禁止用于车载场景**；若将来需要装车、分发或商业化，
 > 必须先取得书面授权或更换数据源。详见 [`nav-backend.md`](nav-backend.md) §0。
+
+## App 打开提示「不再可用」/ 无法验证 App
+
+**症状**：iPhone 上点 App 图标，弹窗说「不再可用」「无法验证」或直接闪退。
+
+**原因**：**描述文件过期**。免费 Apple ID 的 App Development 描述文件**只有 7 天有效期**，
+到期后系统拒绝启动 App。
+
+**排查顺序**：
+
+1. **Xcode 的 Apple 账号是否还登录着**
+   ```bash
+   xcodebuild -project ios/CarDashboardPhone/CarDashboardPhone.xcodeproj \
+     -scheme CarDashboardPhone -allowProvisioningUpdates build
+   ```
+   - 报 `No Accounts: Add a new account in Accounts settings`
+     → **账号登录失效**，去 Xcode → Settings → Accounts 重新登录（要密码 + 2FA）。
+   - 报 `No profiles for 'com.cardashboard.CarDashboardPhone' were found`
+     → 同上；登录后会自动生成描述文件。
+
+2. **账号正常，只是过期了** → 重跑一次：
+   ```bash
+   tools/install_app.sh
+   ```
+   （脚本带 `-allowProvisioningUpdates`，会自动续期并重装。）
+
+3. **仍然不行** → 重启手机后重试；或先在手机上删掉 App 再装。
+
+**长期省事**：付费 Apple Developer 账号（$99/年）描述文件有效期 **1 年**，
+不用每 7 天折腾一次。
