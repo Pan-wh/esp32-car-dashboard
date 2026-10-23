@@ -1,0 +1,18 @@
+# Cloudflare Workers / Pages 配置
+#
+# 这个站点是**纯静态**的，用 Workers 的 Static Assets 功能托管：
+#   - 不需要构建（没有 build command）
+#   - 直接把仓库里的 site/ 目录原样发布
+#
+# 用命令行部署：npx wrangler deploy
+# 或在 CF 后台「创建应用 → 连 Git」时，部署命令保持默认的 npx wrangler deploy 即可。
+
+name = "cardash"
+compatibility_date = "2026-01-01"
+
+# 静态资源：仓库里的 site/ 目录
+[assets]
+directory = "./site"
+
+# 没有 Worker 脚本，纯静态资源 —— 访问根路径时返回 index.html
+# （Workers Static Assets 会自动处理 SPA/静态站的路由）
