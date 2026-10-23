@@ -1,7 +1,11 @@
 # ESP32-S3 车载仪表
 
-一块 **466×466 圆形 AMOLED** 上的车载仪表盘：6 个表盘、BLE 实时数据、导航投屏、照片/动图表盘。
-位置**不来自 GNSS** —— 全部由 iPhone 的 Core Location 通过 BLE 传入。
+> **ESP32-S3 车载仪表 · 466×466 圆形 AMOLED** ——
+> 6 个表盘（时钟 / 速度表 / 导航 / 照片动图）、BLE 实时数据、iPhone 导航投屏。
+> 板子**不含 GPS**，位置全部来自 iPhone 的 Core Location，经 BLE 下发。
+>
+> *ESP32-S3 car dashboard on a 466×466 round AMOLED: 6 faces, BLE telemetry,
+> iPhone-driven navigation — no on-board GPS.*
 
 <!--
 关键词（供搜索引擎与 GitHub 检索；对读者不可见）
