@@ -3,6 +3,16 @@
 一块 **466×466 圆形 AMOLED** 上的车载仪表盘：6 个表盘、BLE 实时数据、导航投屏、照片/动图表盘。
 位置**不来自 GNSS** —— 全部由 iPhone 的 Core Location 通过 BLE 传入。
 
+<!--
+关键词（供搜索引擎与 GitHub 检索；对读者不可见）
+中文：ESP32-S3 车载仪表 智能仪表盘 圆屏 AMOLED 速度表 时钟 导航投屏 照片表盘
+      动图表盘 LVGL 蓝牙 BLE 实时数据 iPhone 定位 车载显示 副仪表 抬头显示 HUD
+      WaveShare 微雪 ESP32-S3-Touch-AMOLED-1.75 嵌入式 仪表 中控 小屏 表盘 UI
+英文：esp32-s3 car dashboard smart gauge round amoled speedometer clock navigation
+      projection photo face animated gif lvgl ble bluetooth telemetry ios arduino
+      waveshare hud embedded automotive instrument cluster firmware swiftui
+-->
+
 > ## 🤖 想用 AI 帮你跑通？或者只想先看看它能不能跑？
 >
 > - **只想验证固件能跑（约 15 分钟）**：不需要 iPhone、不需要 Apple 账号、不需要网关 ——
