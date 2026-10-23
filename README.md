@@ -34,6 +34,8 @@
 
 ![6 个表盘总览](docs/images/all-faces-v2.png)
 
+> 🌐 **在线预览**：<https://cardash.whpan.com/> —— 不想看代码？先看看它长什么样。
+
 ---
 
 ## 它能做什么
