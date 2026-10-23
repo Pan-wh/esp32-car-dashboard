@@ -265,14 +265,14 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 在 `ios/CarDashboardPhone/project.yml`：
 
 ```yaml
-DEVELOPMENT_TEAM: QFH3X6SMV4          # ← 你的 Team ID
+DEVELOPMENT_TEAM: <你的 Team ID>        # ← 改成你自己的（Apple Developer → Membership）
 CFBundleDisplayName: 车载仪表          # ← 主屏幕显示名
 ```
 
 **查看本机可用签名**：
 ```bash
 security find-identity -v -p codesigning
-# 本机实测：Apple Development: 393561502@qq.com (8C5PUDX9LY)
+# 本机实测：Apple Development: <你的 Apple ID> (<证书 ID>)
 ```
 
 ### 2.3 编译

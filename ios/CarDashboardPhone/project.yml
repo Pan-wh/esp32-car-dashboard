@@ -59,7 +59,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.cardashboard.CarDashboardPhone
         CODE_SIGN_STYLE: Automatic
         # 真机签名：个人开发者 Team（Xcode 登录 Apple ID 后自动生成的 Personal Team）
-        DEVELOPMENT_TEAM: QFH3X6SMV4
+        DEVELOPMENT_TEAM: ""   # ← 改成你自己的 Team ID（Apple Developer → Membership）
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
 

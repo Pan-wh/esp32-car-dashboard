@@ -206,7 +206,7 @@ screen /dev/cu.usbmodem101 115200
 
 1. 打开 `ios/CarDashboardPhone/project.yml`，把
    ```yaml
-   DEVELOPMENT_TEAM: QFH3X6SMV4
+   DEVELOPMENT_TEAM: <你的 Team ID>
    ```
    改成**你自己的 Team ID**（Apple Developer → Membership 里查，形如 `ABCDE12345`）。
 
@@ -226,7 +226,7 @@ xcodegen generate                     # 由 project.yml 生成 .xcodeproj
 
 # 查你的设备 ID（要先插上 iPhone 并信任这台电脑）
 xcrun devicectl list devices
-# 输出里找到你的 iPhone，复制形如 00008101-001654202261001E 的标识符
+# 输出里找到你的 iPhone，复制它的标识符（形如 XXXXXXXX-XXXXXXXXXXXX 的一串）
 ```
 
 **最省事：用仓库里的脚本**（会自动挑设备、自动续期描述文件）：

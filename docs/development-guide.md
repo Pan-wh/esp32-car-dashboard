@@ -174,7 +174,7 @@ tools/sync_firmware.sh              # 同步到固件
 | **会话逻辑（2Hz 发送）** | `DriveSessionManager.swift` | 142 行 |
 | **App 名称** | `project.yml` 的 `CFBundleDisplayName` | 当前「车载仪表」|
 | **App 图标** | `tools/make_app_icon.py` → 重新生成 | 18 种尺寸 |
-| **签名 Team** | `project.yml` 的 `DEVELOPMENT_TEAM` | 当前 `QFH3X6SMV4` |
+| **签名 Team** | `project.yml` 的 `DEVELOPMENT_TEAM` | 改成你自己的 Team ID |
 
 **改完必做**：
 ```bash

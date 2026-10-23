@@ -216,7 +216,7 @@
 						TestTargetID = F914EAEDCB033D53C67A89CF;
 					};
 					F914EAEDCB033D53C67A89CF = {
-						DevelopmentTeam = QFH3X6SMV4;
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -313,7 +313,7 @@
 				CODE_SIGN_ENTITLEMENTS = CarDashboardPhone/CarDashboardPhone.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = QFH3X6SMV4;
+				DEVELOPMENT_TEAM = "";
 				INFOPLIST_FILE = CarDashboardPhone/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -413,7 +413,7 @@
 				CODE_SIGN_ENTITLEMENTS = CarDashboardPhone/CarDashboardPhone.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = QFH3X6SMV4;
+				DEVELOPMENT_TEAM = "";
 				INFOPLIST_FILE = CarDashboardPhone/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
