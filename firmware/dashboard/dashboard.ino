@@ -707,6 +707,44 @@ static SensorPCF85063 rtc;
 static bool rtc_ok = false;
 
 /*
+ * RTC 读数防抖：
+ *
+ * 现象（2026-10-27 真机）：时钟会偶发跳到别的值（像被重置），但设备没重启、
+ * BLE 也没有再次校时 —— 指向 PCF85063 的 I2C 读取被瞬时干扰（触摸 100Hz 与
+ * UI 每秒读 RTC 共用总线）。
+ *
+ * 策略：正常走时两次读数只应前进 0~N 秒；如果倒退超过 3 s、或前进超过
+ * “距上次读数经过的时间 + 10 s”，就认为这次读坏了 → **丢弃，继续用上次好值**，
+ * 并打串口日志。真正的大跳（校时/上电）由 `time_sync_maybe` 主动 invalidate 缓存。
+ */
+/* 轻量 UTC 换算（ESP32 的 newlib 不提供 timegm） */
+static int64_t tm_to_epoch_utc(const struct tm *t)
+{
+  int y = t->tm_year + 1900;
+  int m = t->tm_mon + 1;
+  const int d = t->tm_mday;
+  if (m <= 2) {
+    y -= 1;
+    m += 12;
+  }
+  const int64_t era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = (unsigned)(y - (int)(era * 400));
+  const unsigned doy = (unsigned)((153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1);
+  const unsigned doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;
+  const int64_t days = era * 146097 + (int64_t)doe - 719468;
+  return days * 86400 + t->tm_hour * 3600 + t->tm_min * 60 + t->tm_sec;
+}
+
+static struct tm s_rtc_cached;
+static bool s_rtc_cached_valid = false;
+static uint32_t s_rtc_cached_ms = 0;
+
+static void rtc_time_cache_invalidate(void)
+{
+  s_rtc_cached_valid = false;
+}
+
+/*
  * 时间提供者：把 RTC 时间交给共享 UI 代码（ui_clock / ui_analog 不关心时间来源）。
  * RTC_DateTime::getWeek() 约定 0 = 周日，与 struct tm.tm_wday 一致。
  */
@@ -719,12 +757,14 @@ static void rtc_time_provider(struct tm *out)
   }
 
   RTC_DateTime dt = rtc.getDateTime();
-  out->tm_year = (int)dt.getYear() - 1900;
-  out->tm_mon = (int)dt.getMonth() - 1;
-  out->tm_mday = (int)dt.getDay();
-  out->tm_hour = (int)dt.getHour();
-  out->tm_min = (int)dt.getMinute();
-  out->tm_sec = (int)dt.getSecond();
+  struct tm now;
+  memset(&now, 0, sizeof(now));
+  now.tm_year = (int)dt.getYear() - 1900;
+  now.tm_mon = (int)dt.getMonth() - 1;
+  now.tm_mday = (int)dt.getDay();
+  now.tm_hour = (int)dt.getHour();
+  now.tm_min = (int)dt.getMinute();
+  now.tm_sec = (int)dt.getSecond();
   /*
    * ⚠️ 星期必须钳制到 0..6。
    * PCF85063 的星期寄存器异常时可能给出 7+，而 UI 侧用
@@ -734,7 +774,41 @@ static void rtc_time_provider(struct tm *out)
    */
   int wd = (int)dt.getWeek();
   if (wd < 0 || wd > 6) wd = 0;
-  out->tm_wday = wd;
+  now.tm_wday = wd;
+
+  /* 合理性：年份不在 2020..2080 直接当坏值（上电/掉电时 RTC 可能是 2000/1970） */
+  const int year = now.tm_year + 1900;
+  if (year < 2020 || year > 2080) {
+    if (s_rtc_cached_valid) {
+      *out = s_rtc_cached;
+    } else {
+      *out = now;
+    }
+    return;
+  }
+
+  if (s_rtc_cached_valid) {
+    const int64_t prev = tm_to_epoch_utc(&s_rtc_cached);
+    const int64_t cur = tm_to_epoch_utc(&now);
+    const int64_t delta = cur - prev;
+    const int64_t elapsed_s = (int64_t)(millis() - s_rtc_cached_ms) / 1000;
+    /*
+     * 允许的正常范围：倒退不超过 3 s（秒边界抖动），前进不超过
+     * elapsed + 10 s（UI 可能隔一段时间才读一次）。超出即认为读坏。
+     */
+    if (delta < -3 || delta > elapsed_s + 10) {
+      Serial.printf("[RTC] 读数跳变 %lld s（%04d-%02d-%02d %02d:%02d:%02d），丢弃本次\n",
+                    (long long)delta, (int)(now.tm_year + 1900), now.tm_mon + 1, now.tm_mday,
+                    now.tm_hour, now.tm_min, now.tm_sec);
+      *out = s_rtc_cached;
+      return;
+    }
+  }
+
+  s_rtc_cached = now;
+  s_rtc_cached_valid = true;
+  s_rtc_cached_ms = millis();
+  *out = now;
 }
 
 /* ---------------- LVGL 移植 ---------------- */
@@ -2604,6 +2678,7 @@ static bool time_sync_maybe(int64_t utc_ms)
   if (rtc_ok) {
     rtc.setDateTime((uint16_t)y, (uint8_t)(lt->tm_mon + 1), (uint8_t)lt->tm_mday,
                     (uint8_t)lt->tm_hour, (uint8_t)lt->tm_min, (uint8_t)lt->tm_sec);
+    rtc_time_cache_invalidate(); /* 校时是合法大跳，下一次读数直接接受新值 */
   }
 
   bool first = !s_time_synced;
