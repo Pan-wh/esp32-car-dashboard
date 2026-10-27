@@ -75,14 +75,22 @@
 
 支持**静态图**与**动图**混排轮播，并带完整烧屏防护（亮度封顶 / 像素位移 / 自动息屏，三者独立开关）。
 
-| iOS 侧（选图 → 裁切 → 转格式）| 设备侧 |
+| iOS 侧（选图 → 裁切 → 通过蓝牙发送）| 设备侧 |
 |---|---|
 | ![照片页](docs/images/photo-tab-ios.png) | ![照片表盘](docs/images/photo-face-sim.png) |
 
-- **导入**：素材放 SD 卡，用 `tools/import_photos.sh` 批量转成 `.pgi`
-  —— 支持 JPG / PNG / GIF / **HEIC** / **MOV / MP4**，自动抽帧、自动按设备上限压缩、自动处理 **EXIF 方向**
-- **切图与轮播设置**：走 **BLE**（不需要 Wi-Fi）
-- **实测帧率**：满屏 466×466 动图 **3~4 fps** —— 瓶颈是 SD 卡读速（104 ms/帧，1-bit SDMMC 的物理上限），属硬件限制
+- **导入（2026-10-26 起）：App 蓝牙直传，不用拔卡**
+  —— 选图/视频 → 圆屏裁切 → 转码 → BLE 分片上传（断点续传 + CRC32 校验）。
+  当前固件走“逐片带确认写”，实测约 **2.6 KB/s**：70 KB 的图约 30 秒；App 会显示进度/速率/剩余时间。
+  不再需要 SD 卡插拔，也不再走 Wi-Fi。
+- **画质**：静态照片为 **466×466 全彩 JPEG**（`.pgj`，约 40~60 KB），设备端用 ESP32-S3 ROM 自带的
+  TJpgDec 解码一次到 PSRAM（解码约 200~260 ms，只在切图时发生）。
+- **能力分档**：固件上报能力（`PhotoInfo`），App 决定 UI ——
+  **LITE（默认）只传静态照片**；只有「设备实测动图 ≥8 fps + 本次上传 ≥30 KB/s」才开放动图。
+  当前板实测动图 **3~4 fps**（SD 卡 1-bit 读速的物理上限），所以默认落在 LITE，
+  动图入口会被隐藏并说明原因。
+- **兼容**：旧的 `.pgi` 素材与 `tools/import_photos.sh`（SD 卡批量导入）仍可用；
+  切图/轮播设置继续走 BLE。协议见 [`docs/photo-protocol.md`](docs/photo-protocol.md)。
 
 ### iOS App
 
@@ -93,7 +101,7 @@
 | **仪表** | 表盘切换（列表**由设备 BLE 上报**，新增表盘 App 无需改动）、演示速度滑块、亮度时段曲线 |
 | **数据** | 实时车速 / 海拔 / 航向 / 行程统计 |
 | **导航** | 目的地搜索 → 路线选择 → 下发到设备 |
-| **照片** | 选图/视频 → 圆屏预览裁切（捏合缩放 / 拖动 / 旋转）→ 转 GIF 存相册；上下张切设备上的照片 |
+| **照片** | 设备相册（缩略图 / 删除 / 选择播放）+ 多选添加（裁切 → BLE 直传，进度/续传）+ 播放设置 + 格式化 SD 卡；动图入口按设备能力自动门控 |
 | **设置** | 连接管理、屏幕方向、亮度、休眠 |
 
 ---
@@ -242,7 +250,10 @@ reference/              厂商资料（原理图、示例、库；gitignore）
 | [docs/architecture.md](docs/architecture.md) | 整体架构与模块划分 |
 | [docs/hardware.md](docs/hardware.md) | 硬件规格与引脚 |
 | [docs/ble.md](docs/ble.md) | **BLE 协议**：遥测包、控制命令、表盘上报（含紧凑格式）|
-| [docs/photo-gif-design.md](docs/photo-gif-design.md) | 照片/动图表盘设计与 `.pgi` 格式 |
+| [docs/photo-wireless-design.md](docs/photo-wireless-design.md) | **照片 v5 设计稿**：BLE 直传、能力分档、预算与取舍 |
+| [docs/photo-protocol.md](docs/photo-protocol.md) | **照片线上协议（冻结）**：GATT、JSON、`.pgj`、分片/续传/格式化 |
+| [docs/photo-implementation.md](docs/photo-implementation.md) | **照片实施与真机验收**：落地形态、真机问题修复、验收数据、已知限制 |
+| [docs/photo-gif-design.md](docs/photo-gif-design.md) | 旧动图设计（已被 v5 取代；`.pgi` 格式与烧屏策略仍有效） |
 | [docs/nav-backend.md](docs/nav-backend.md) | 导航后端（网关）接口与部署 |
 | [docs/nav-app-ux.md](docs/nav-app-ux.md) | 导航交互设计 |
 | [docs/deployment.md](docs/deployment.md) | 烧录与部署流程 |

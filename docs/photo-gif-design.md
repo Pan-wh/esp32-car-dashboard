@@ -2,6 +2,13 @@
 
 > **状态**：**已实现**（表盘 id 5）。**下方「最终结论」是与设计稿不一致的地方，以它为准**；
 > 其余章节保留为设计过程记录（含已被否掉的 Wi-Fi 上传方案）。
+>
+> ⚠️ **2026-10-26 已被 v5 取代**：照片导入改为 **BLE 直传**（静态照片用 `.pgj` = 32 B 头 + JPEG），
+> 不再需要 SD 卡插拔；动图按能力分档（LITE 只留静态）。
+> 新设计见 [`photo-wireless-design.md`](photo-wireless-design.md)，协议见 [`photo-protocol.md`](photo-protocol.md)，
+> 实际实施与真机验收见 [`photo-implementation.md`](photo-implementation.md)。
+> 本文 **`.pgi` 格式、烧屏防护、轮播状态机、旧素材兼容** 部分仍然有效；
+> 但 §3.3「BLE 不能传图（1 KB/s）」与 §七/§八的 Wi-Fi 方案已作废（原因见新文档 §5.1）。
 
 ## 最终结论（2026-10-22，与 v4 设计稿的差异）
 

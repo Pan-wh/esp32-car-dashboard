@@ -14,6 +14,11 @@
 | Status（Read/Notify）| `7D2A0003-8F4A-4B7C-9D21-5E6A3B8C1000` |
 | Command（Write）| `7D2A0004-8F4A-4B7C-9D21-5E6A3B8C1000` |
 | Faces 表盘列表（Read/Notify）| `7D2A0005-8F4A-4B7C-9D21-5E6A3B8C1000` |
+| **Photo 照片服务**（2026-10-26）| `7D2A0010-8F4A-4B7C-9D21-5E6A3B8C1000` |
+| PhotoCtl / Data / Evt / Info / State | `…0011` / `…0012` / `…0013` / `…0014` / `…0015` |
+
+> 照片服务独立成服务，协议见 [`photo-protocol.md`](photo-protocol.md)；
+> 未发现该服务的设备视为旧固件（App 优雅降级）。
 
 
 ## 导航消息（阶段 2，2026-10-13）
@@ -333,8 +338,15 @@ swift tools/ble_command_test.swift '{"t":"mr","c":3,"p":[[0,0],[100,0],[100,100]
 
 ### 照片表盘命令（2026-10-19，同 Command 特征）
 
-照片的**导入走 SD 卡**（Wi-Fi 上传已放弃，见
-[`wifi-upload-postmortem.md`](wifi-upload-postmortem.md)），但**切图与轮播设置走 BLE**：
+> **2026-10-26 起：照片导入已改为 BLE 直传**（新独立服务 `7D2A0010-…`），
+> 协议全文见 [`photo-protocol.md`](photo-protocol.md)。下面这组旧命令**仍然保留**
+> （旧 App 兼容），但新 App 使用新服务的 `{"t":"p","op":"set"}` / `"play"` / `"del"` / `"list"`。
+> 照片的**导入不再走 SD 卡**；SD 卡只作为可选存储与批量导入通道（`tools/import_photos.sh`）。
+
+照片的**导入默认走 BLE 直传**（新照片服务，见
+[`photo-protocol.md`](photo-protocol.md)）；SD 卡只作为可选存储与旧素材批量导入通道
+（`tools/import_photos.sh`）。**切图、轮播设置、删除、格式化 SD 卡**走新照片服务；
+下面这组旧 `photo_*` 命令仅用于旧 App 兼容：
 
 ```json
 {"cmd":"photo_prev"}                              // 上一张
@@ -361,6 +373,32 @@ swift tools/ble_command_test.swift '{"t":"mr","c":3,"p":[[0,0],[100,0],[100,100]
 >
 > ⚠️ 设备**不在连接时主动上报照片清单**：App 只知道"能不能切"，
 > 不知道卡上有几张。要显示清单需要新增上报（未做，见 `docs/photo-gif-design.md` §九）。
+>
+> **已解决（2026-10-26）**：新增照片服务后，清单由 `PhotoEvt` 的 `pq/pf/pz` 分页上报，
+> 状态由 `PhotoState`（Read+Notify）上报。见下方「照片服务」。
+
+## 照片服务（`7D2A0010-…`，2026-10-26）
+
+照片的**上传 / 清单 / 删除 / 播放 / 设置**全部走独立 GATT 服务，
+与遥测/表盘特征完全解耦（不共用 JSON 重组通路）。**协议全文**：
+[`photo-protocol.md`](photo-protocol.md)；设计与取舍：[`photo-wireless-design.md`](photo-wireless-design.md) §8。
+
+| 特征 | UUID | 属性 | 用途 |
+|------|------|------|------|
+| PhotoCtl | `…0011` | WRITE | JSON 命令（begin/end/abort/del/play/set/list/bench），≤180 B |
+| PhotoData | `…0012` | WRITE_NR | 二进制分片 `[u32 offset][payload]`，无响应、靠 credit 流控 |
+| PhotoEvt | `…0013` | NOTIFY | 短事件：go/credit/done/err/changed/info + 清单分页 |
+| PhotoInfo | `…0014` | READ | 能力/档位（tier/cap/anim/bench），≤180 B |
+| PhotoState | `…0015` | READ+NOTIFY | 当前张/数量/存储/空间/播放设置/rx，≤180 B |
+
+**关键规则**：
+
+- App 连接后 Read `PhotoInfo` + `PhotoState`，再发 `{"op":"list"}` 取清单；
+- 数据分片 `offset` 必须连续；设备每落盘 ≥1 KB 或 ≥100 ms 回一次 `credit`；
+- 文件级 **CRC32** 校验，失败删 `.part` 不进清单；断连/断电可续传；
+- `PhotoState` Notify 只是"变了"的提示，App 收到后重新 Read（与 Faces 同一模式）；
+- 上传期间设备暂停照片读帧/轮播，**遥测与地图不受影响**；
+- 无此服务的设备 = 旧固件，App 退回"仅 SD 卡导入"说明。
 
 ## 表盘列表上报（`Faces` 特征，2026-10-13）
 

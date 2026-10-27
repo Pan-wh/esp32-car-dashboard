@@ -42,6 +42,27 @@ if [[ -z "$DEV" ]]; then
   fi
 fi
 echo "目标设备: $DEV"
+
+# ── 自动识别签名 Team ──
+# project.yml 里 DEVELOPMENT_TEAM 故意留空（避免把个人 Team ID 提交进仓库），
+# 这里从本机 Apple Development 证书的 OU 自动取出 Team ID；
+# 也可用 `DEVELOPMENT_TEAM=XXXX tools/install_app.sh` 显式覆盖。
+if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then
+  CERT="$(security find-identity -v -p codesigning 2>/dev/null \
+          | sed -n 's/.*"\(Apple Development: .*\)"/\1/p' | head -1)"
+  if [[ -n "${CERT:-}" ]]; then
+    DEVELOPMENT_TEAM="$(security find-certificate -c "$CERT" -p 2>/dev/null \
+      | openssl x509 -noout -subject 2>/dev/null \
+      | sed -n 's/.*OU=\([A-Z0-9]*\).*/\1/p' | head -1)"
+  fi
+fi
+if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then
+  echo "❌ 找不到可用的 Apple Development 证书/Team。"
+  echo "   请先在 Xcode → Settings → Accounts 登录 Apple ID，"
+  echo "   或显式指定：DEVELOPMENT_TEAM=<TeamID> tools/install_app.sh"
+  exit 1
+fi
+echo "签名 Team: $DEVELOPMENT_TEAM"
 echo
 
 cd "$PROJ_DIR"
@@ -49,7 +70,8 @@ cd "$PROJ_DIR"
 echo "→ 构建（-allowProvisioningUpdates 会自动续期描述文件）…"
 if ! xcodebuild -project CarDashboardPhone.xcodeproj -scheme CarDashboardPhone \
       -configuration Debug -destination "platform=iOS,id=$DEV" \
-      -derivedDataPath "$DD" -allowProvisioningUpdates build 2>&1 \
+      -derivedDataPath "$DD" -allowProvisioningUpdates \
+      DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" build 2>&1 \
       | grep -E "error:|BUILD SUCCEEDED|BUILD FAILED" | head -5; then
   :
 fi

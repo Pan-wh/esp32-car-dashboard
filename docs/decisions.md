@@ -181,6 +181,9 @@
   - 保留 `GET /list` / `POST /delete`（几百字节堆即可用），只放弃 `POST /upload`；
   - 帧率受 SD 读速限制（满屏 3~4 fps），需要更流畅用 `--fast` 缩图。
 - **状态**：已定（用户确认"能用就行，不折腾 Wi-Fi"）。
+- **2026-10-26 修订**：照片导入改为 **BLE 直传**（见 [D-014](#d-014-照片传输ble-直传静态照片用-pgj-jpeg)）；
+  SD 卡降级为**可选存储与批量导入通道**。Wi-Fi 上传仍不做（内部 RAM 根因 + 用户明确"只用蓝牙"）。
+  本条其余内容保留为历史记录。
 
 ## D-012 表盘列表上报：**紧凑名字数组**（受 BLE 184 字节硬上限约束）
 
@@ -214,6 +217,38 @@
 - **实现**：`simulator/ui/ui_speed.c` 的 `DRIVER_SPIRITED_V` / `DRIVER_SPEEDING_V`；
   只在**跨阈值**时 `lv_img_set_src`（变更检测，避免每帧重设图片）。
 - **状态**：已定（真机 + 模拟器截图验证，见 `docs/images/speed-3stages.png`）。
+
+## D-014 照片传输：**BLE 直传**，静态照片用 `.pgj`（JPEG）
+
+- **日期**：2026-10-26
+- **决策**：
+  1. 照片的**导入 / 删除 / 清单 / 播放设置**全部走 **BLE 照片服务**
+     （协议见 [`photo-protocol.md`](photo-protocol.md)），不依赖 SD 插拔、不做 Wi-Fi；
+  2. 静态照片格式改为 **`.pgj` = 32 B 头 + 1 张 baseline JPEG**；
+     设备端用 **ESP32-S3 ROM 自带的 TJpgDec**（`esp_jpeg`）解码一次到 PSRAM
+     （全彩 466×466，约 40–60 KB/张；真机实测 ~2.6 KB/s，70 KB 约 30 s）；
+  3. 动图继续用 `.pgi` 索引帧，仅 FULL 档开放（见 D-015）；
+  4. 旧 `.pgi` 文件与 `tools/import_photos.sh` **保留**（只读兼容 + 批量导入）。
+- **原因**：历史"BLE 只能 1 KB/s"是 `withResponse` 发一条等一条的**往返口径**（实测 3.6 KB/s），
+  不是空口能力；bulk 现实吞吐 25–35 KB/s。静态图从 213 KB 降到 40–60 KB 后，BLE 完全够用。
+  完整证据见 [`photo-rework/research-transport.md`](photo-rework/research-transport.md)。
+- **影响**：删除固件 Wi-Fi AP / HTTP 整套代码（回收 ≈80 KB 内部堆）；新增 BLE 照片服务
+  （`ble_photo.cpp`）与照片运行时（`photo_rt.cpp`）；App 照片页重写。
+- **状态**：已实施并通过真机验收（2026-10-27）；问题与验收数据见
+  [`photo-implementation.md`](photo-implementation.md)。
+
+## D-015 照片能力分档：**LITE（仅静态）/ FULL（+动图）**
+
+- **日期**：2026-10-26
+- **决策**：设备上报 `PhotoInfo`（`cap` / `tier` / `anim.fps_meas`），App 用**三层门控**
+  决定是否显示动图入口：
+  ① 固件能力位 `cap.bit1`；② 设备上次实测动图 fps ≥ 8；③ 本次实测上传 ≥ 30 KB/s。
+  任一不满足，App **隐藏入口并显示原因**（不是给一个 3 fps 的残废功能）。
+  当前板默认 **LITE（只保留静态照片）**。
+- **原因**：动图在当前板实测 3~4 fps（瓶颈是 1-bit SD 读）；用户明确"性能不够可以砍 GIF/视频"。
+- **影响**：协议保留 FULL 能力，未来换更强硬件（或 Wi-Fi）时**不需要改协议**；
+  App 的能力降级文案见 [`photo-wireless-design.md`](photo-wireless-design.md) §10.5。
+- **状态**：已实施并通过真机验收（2026-10-27）；当前板稳定 LITE。
 
 ## 待决策事项
 
