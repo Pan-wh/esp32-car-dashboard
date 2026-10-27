@@ -167,10 +167,6 @@ final class BLEClient: NSObject, ObservableObject {
     // 待发队列：BLE 尚未就绪时缓存最新一条，连接/发现特征后立即补发
     private var pendingPacket: Data?
 
-    /// 本次连接是否已下发过"纯时间包"（每次连接只发一次，见 sendTimeOnConnect）。
-    /// 断连重连时会随连接生命周期重置，保证**每次新建连接**都能校一次时。
-    private var didSendTimeOnConnect = false
-
     override init() {
         super.init()
         central = CBCentralManager(delegate: self, queue: .main)
@@ -612,42 +608,8 @@ final class BLEClient: NSObject, ObservableObject {
         }
     }
 
-    /// 连接成功后下发一次**纯时间包**，仅用于让仪表同步 RTC 时间。
-    ///
-    /// 背景：点「连接仪表」只建立 BLE 连接、**不启动定位**，因此设备不会收到
-    /// 任何遥测包，RTC 时间也不会更新（要等点「开始驾驶」才发带 ts_utc_ms 的包）。
-    /// 这里在特征发现完成后立刻发一次最小时间包，让"仅连接"也能校时。
-    ///
-    /// 语义：
-    ///   - 每次 BLE 连接只发一次（didSendTimeOnConnect 标志，didConnect 时重置）；
-    ///   - 不依赖定位/权限（纯时间包无定位字段，locationValid=false）；
-    ///   - telemetryChar 未就绪时不发（等 didDiscoverCharacteristicsFor 里补发）。
     /**
-     连接校时（**每次 BLE 连接成功都自动执行**，不需要点"开始驾驶"）。
-
-     ⚠️ 真机 bug 记录：原来用 `.withoutResponse` 发，连接刚建立时写缓冲不可用，
-     iOS 会**静默丢弃**；重试也还是 withoutResponse，于是连上后时钟一直不对，
-     直到点「开始驾驶」后完整遥测（`.withResponse`）才校时。
-     现在统一用 `.withResponse`：包很小（约 60 B），多几次确认对初始化耗时可忽略，
-     但能保证设备真的收到；并在 0/1/3/8 s 各发一次（幂等，设备每次重校）。
-     */
-    func sendTimeOnConnect() {
-        guard isConnected, telemetryChar != nil else { return }
-        guard !didSendTimeOnConnect else { return }
-        didSendTimeOnConnect = true
-
-        for delay in [0.0, 1.0, 3.0, 8.0] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let self, self.isConnected, self.telemetryChar != nil else { return }
-                let ms = Int64(Date().timeIntervalSince1970 * 1000)
-                self.send(packet: TelemetryPacket.timeOnly(nowUtcMs: ms))
-            }
-        }
-        NSLog("[BLE] 连接校时：已排队 4 次时间包（withResponse）")
-    }
-
-    /**
-     下发亮度曲线（与时间包**同一时机**：每次连接一次）。
+     下发亮度曲线（**每次连接一次**，由 didDiscoverCharacteristicsFor 补发）。
 
      ## 为什么由 App 决定曲线
 
@@ -884,7 +846,6 @@ extension BLEClient: CBCentralManagerDelegate {
         isConnected = true
         isScanning = false
         lastNotice = "已连接 CarDashboard"
-        didSendTimeOnConnect = false // 新连接：允许再校一次时
         peripheral.delegate = self
         /*
          * 一次把两个服务都发现出来（少一次往返）：
@@ -989,8 +950,6 @@ extension BLEClient: CBPeripheralDelegate {
             peripheral.writeValue(pending, for: ch, type: .withResponse)
             pendingPacket = nil
         }
-        // 特征就绪后补发一次纯时间包（连接校时，仅一次）
-        sendTimeOnConnect()
         /*
          * 同时下发亮度曲线 —— 与时间包同一时机（每次连接一次）。
          *

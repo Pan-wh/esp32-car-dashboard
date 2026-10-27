@@ -51,7 +51,7 @@ App 选图 → 手机裁切/编码成 `.pgj`（32 B 头 + baseline JPEG）→ BL
 | 5 | 上传到 25~33 KB 必卡，随后设备 10 s 超时暂停 | **上传中每 16 KB 调一次 `s_part.flush()`**：flush 本身仅 15 ms，但会把 BLE 链路带停（写入/确认随机停 10 s+） | 传输中只 `write` 不 flush；统一在暂停/断连/提交前 flush（`PHOTO_FLUSH_EVERY` 提到 4 MB 兜底） |
 | 6 | App 选完照片弹「读不出来」 | 裁切位图按 3 字节/像素创建 `noneSkipLast` 上下文（应为 4 字节/像素），CGContext 创建失败 | `PhotoEncoder.squareCGImage()` 改为 4 B/像素 |
 | 7 | 格式化把卡写成“不可挂载” | 直接 `esp_vfs_fat_sdcard_format()` 在坏卡上会中断/卡死 | 改为：先挂载（挂载失败时由 SD 驱动重建 FS），成功后**递归清空卡内全部文件/目录**，再重建目录 |
-| 8 | 连上 BLE 但时钟不对，要点「开始驾驶」才校时 | 连接校时用 `.withoutResponse`，刚连接时被 iOS 静默丢弃 | 改为 `.withResponse`，连接后 0/1/3/8 s 各发一次（幂等）；真机日志 `[同步] 首次 BLE UTC → RTC …` |
+| 8 | 连上 BLE 但时钟不对，要点「开始驾驶」才校时 | 连接校时用 `.withoutResponse`，刚连接时被 iOS 静默丢弃 | 曾改为 `.withResponse` 连接后重发，但真机出现 RTC 反复写入/时钟跳变；**已回退为“开始驾驶后随遥测校时”**（最稳）。后续如要恢复需先解决 RTC/I2C 稳定性 |
 
 ## 5. UI 一轮优化（2026-10-27）
 
