@@ -23,8 +23,24 @@
 #include "bright_parse.h"
 #include "telemetry.h"
 
-/* 初始化 BLE Peripheral 并开始广播；成功返回 true */
+/*
+ * 初始化 BLE Peripheral 的 GATT（服务/特征），**不开始广播**；成功返回 true。
+ *
+ * ⚠️ 为什么把广播拆出去：NimBLE 的 `ble_gatts_start()` 在**第一次开始广播**时执行，
+ * 之后不能再注册新服务（`ble_gatts_add_svcs` 会失败/不被发现）。
+ * 照片服务是后注册的，所以必须按：
+ *     ble_telemetry_begin() → ble_photo_begin() → ble_telemetry_advertise()
+ * 的顺序来（见 dashboard.ino setup）。
+ */
 bool ble_telemetry_begin(void);
+
+/*
+ * 开始广播。
+ *
+ * 必须等所有 GATT 服务（遥测 + 照片）都注册完再调用；断连后的广播重启
+ * 由 ble_telemetry_poll() 负责，不需要再调本函数。
+ */
+void ble_telemetry_advertise(void);
 
 /* 是否有 Central 已连接 */
 bool ble_telemetry_connected(void);

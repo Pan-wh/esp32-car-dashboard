@@ -142,7 +142,7 @@ struct ContentView: View {
     @State private var selectedTab = 0
 
     var body: some View {
-        // 三个标签页：配置仪表 / 观察数据 / 导航（预留）
+        // 五个标签页：配置仪表 / 观察数据 / 导航 / 照片 / 设置
         //
         // 为什么分页：此前所有内容挤在一页，开车时要看的"速度、航向"被
         // 亮度、表盘开关等**配置项**挤到下面，每次都得滚动。
@@ -803,7 +803,7 @@ struct ContentView: View {
                      */
                     if f.name == "photo" {
                         NavigationLink {
-                            PhotoTabView(session: session)
+                            PhotoTabView(session: session, embedded: true)
                         } label: {
                             Label("管理素材 / 选择播放哪张", systemImage: "photo.stack")
                                 .font(.footnote)
@@ -898,17 +898,6 @@ struct ContentView: View {
             }
 
             Button(session.isDriving ? "结束驾驶" : "开始驾驶") {
-
-            /*
-             * 照片上传入口（快捷方式）：
-             * 「照片」页本身有完整流程，这里只放一个入口 —— 用户平时停在「仪表」页，
-             * 传图的路径要短。点击后切到「照片」Tab。
-             */
-            NavigationLink {
-                PhotoTabView(session: session)
-            } label: {
-                Label("上传照片到仪表", systemImage: "photo.badge.plus")
-            }
                 if session.isDriving {
                     session.stopDriving()
                 } else {
@@ -926,6 +915,20 @@ struct ContentView: View {
                 }
             }
             .foregroundColor(session.isDriving ? .red : .blue)
+
+            /*
+             * 照片入口（快捷方式）：用户平时停在「仪表」页，加照片的路径要短。
+             * 这里**切到「照片」Tab**而不是 push 一个页面 —— 照片页本身是一个 Tab，
+             * push 会让同一个页面出现两份导航栈。
+             *
+             * ⚠️ 历史 bug：这个入口原来是一个写在 Button 动作闭包里的 `NavigationLink`，
+             *    视图表达式的结果被丢弃 → 界面上根本不渲染（只剩编译器警告）。
+             */
+            Button {
+                selectedTab = 3
+            } label: {
+                Label("上传照片到仪表", systemImage: "photo.badge.plus")
+            }
         } header: {
             Text("仪表连接")
         } footer: {

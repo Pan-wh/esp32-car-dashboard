@@ -251,6 +251,7 @@ enum FaceDisplay {
         case "speed": return "速度表"
         case "color": return "多彩时钟"
         case "nav": return "导航卡片"
+        case "photo": return "照片"
         default: return fallbackLabel.isEmpty ? name : fallbackLabel
         }
     }

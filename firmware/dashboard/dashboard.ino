@@ -48,18 +48,16 @@ extern "C" {
 #include "ui_nav_map.h" /* 导航地图层（阶段 4）*/
 #include "ui_baked_images.h" /* 烘焙图声明（非 const，启动时可充气）*/
 #include "ui_img_inflate.h"  /* 索引图 → PSRAM RGB565 直通图 */
-#include "pgi.h"            /* .pgi 容器：照片表盘的图片格式（见 docs/photo-gif-design.md）*/
+#include "pgi.h"            /* .pgi 容器：pgibench 造测试文件时用（见 docs/photo-gif-design.md）*/
 /*
- * ⚠️ 这两个 include **必须在文件顶部**，不能放在使用处附近。
+ * ⚠️ `photo_rt.h` **必须在文件顶部**，不能放在使用处附近。
  *
  * Arduino 会把自动生成的函数**原型**插在「最后一个顶层 #include 之后」——
- * 若把 photo_slide.h 放在文件中间，原型会被插到它**前面**，
- * 于是 `photo_file_meta_t` 还没声明就被原型引用了（实测报
- * "'photo_file_meta_t' was not declared in this scope"）。
+ * 若把它放在文件中间，原型会被插到它**前面**，于是 `photo_list_t`/
+ * `photo_item_t` 还没声明就被原型引用了（旧版对 photo_slide.h 实测报过
+ * "'photo_file_meta_t' was not declared in this scope"，同一个坑）。
  */
-#include "photo_slide.h"   /* 轮播状态机（纯逻辑，PC 可测）*/
-#include "ui_photo.h"      /* 照片表盘的渲染层 */
-#include "img_indexed.h"  /* 8bpp 索引图解码（pgi 每帧的布局就是它的输入）*/
+#include "photo_rt.h"      /* 照片运行时（SD 扫描/播放/上传落盘；本文件只接线）*/
 #include "nav.h"         /* 导航状态/动作枚举与文案（纯 C，共用） */
 #include "ui_clock.h"    /* 数字时钟页（时间同步状态标签） */
 #include "ui_timesrc.h"
@@ -69,22 +67,23 @@ extern "C" {
 }
 
 /*
- * ⚠️ C++ 的头（WebServer / WiFi）要放在 `extern "C" { ... }` 块**之后**：
- *   - 放**里面** → "template with C linkage"（WebServer 的类模板不能有 C 链接）；
+ * ⚠️ C++ 的头要放在 `extern "C" { ... }` 块**之后**：
+ *   - 放**里面** → "template with C linkage"；
  *   - 放**前面** → 它自己内部的 `extern "C"` 会与后续 `static` 声明冲突。
  * 放在块之后是唯一两个问题都不犯的位置。
+ *
+ * 注：Wi-Fi 上传那一整套（`WiFi.h` / `wifi_*` / `http_*` / `WiFiServer`）已删除，
+ * 换图改走 BLE（`ble_photo.cpp` + `photo_rt.cpp`）。删 Wi-Fi 换回约 80 KB
+ * 内部 RAM 并消除 2.4 GHz 与 BLE 的射频争用，见 docs/photo-wireless-design.md §9.6。
  */
-/*
- * 照片上传用**裸 WiFiServer**，不再包含 WebServer
- * （WebServer 依赖 String/HTTPUpload，在 24 KB 堆上不可靠 —— 详见 wifi 段的说明）。
- */
-#include <WiFi.h>          /* 照片上传：设备连入同一局域网（STA）*/
-
 #include "ble_telemetry.h" /* BLE Peripheral（固件侧，C++） */
+#include "ble_photo.h"     /* BLE 照片服务（GATT/JSON 层，业务 via photo_rt.h）*/
 
 /* ---------------- 可调参数 ---------------- */
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2      /* 与官方示例一致 */
+/** photo_rt 的 JSON 缓冲（协议硬上限 180 B；多留几个字节做终止符）*/
+#define PHOTO_JSON_BUF 192
 #define DEFAULT_PAGE UI_PAGE_SPEED         /* 开机默认页：速度表盘（车机主视角） */
 
 /*
@@ -327,907 +326,11 @@ static void sd_report(bool verbose)
 
 
 
-/* ═══════════════════════════════════════════════════════════════════════
- * 照片表盘：SD 扫描 + 分片预读 + 渲染驱动
- *
- * 依据 docs/photo-gif-design.md §十点五 的实测：
- *   - SD 读 217 KB ≈ 93 ms（**瓶颈**），解码 21 ms，flush 43 ms；
- *   - 若整帧一次读，每帧 159 ms → 只有 6.3 fps；
- *   - 所以把"读"切成 32 KB 一片、分摊到多个主循环，与当前帧的显示时间重叠
- *     → 每帧 ≈ max(93, 66) ≈ 93 ms → **约 10 fps**。
- *
- * 内存：2 个显示缓冲（各 424 KB）+ 1 个暂存区（一帧原始字节 ≈ 218 KB）
- *       ≈ 1.07 MB PSRAM。实测 PSRAM 空闲约 6.4 MB，够用。
- * ═══════════════════════════════════════════════════════════════════════ */
-
-#define PHOTO_DIR          "/photos"
-#define PHOTO_MAX_FILE     (8u * 1024u * 1024u)
-#define PHOTO_READ_CHUNK   (32u * 1024u)
-#define PHOTO_MAX_FRAME_PX (466u * 466u)
-
-static photo_slide_t s_photo;
-static bool          s_photo_ready = false;    /* 缓冲已分配 */
-static uint16_t     *s_photo_buf[2];           /* 双缓冲：显示 / 后台 */
-static int           s_photo_show_idx = 0;     /* 当前正在显示的那块 */
-static uint8_t      *s_photo_stage;            /* 暂存：当前帧的原始字节 */
-static size_t        s_photo_stage_cap;
-static pgi_header_t  s_photo_hdr;              /* 当前文件的头 */
-static File          s_photo_file;
-static bool          s_photo_file_open = false;
-static char          s_photo_cur_name[64];
-static int           s_photo_loading = -1;     /* 正在读的帧号；-1 = 空闲 */
-static size_t        s_photo_got;              /* 已读字节 */
-static size_t        s_photo_need;             /* 该帧总字节 */
-static uint32_t      s_photo_frame_off;        /* 该帧在文件里的偏移 */
-static uint32_t      s_photo_next_load_ms;     /* 下次允许开始读的时间 */
-static uint32_t      s_photo_shift_ms;         /* 位移相位推进时间 */
-static int           s_photo_shift_phase = 0;  /* 位移相位 0..3 */
-static bool          s_photo_entered = false;  /* 是否已进过照片表盘（用于一次性设亮度封顶）*/
-static uint32_t      s_photo_frames = 0;       /* 实测帧率用 */
-static uint32_t      s_photo_fps_t0 = 0;
-static int           s_photo_shown_file = -1;  /* 当前已显示的文件下标（-1=还没显示过）*/
-static int           s_photo_shown_frame = -1; /* 当前已显示的帧下标 */
-static uint32_t      s_photo_t_read = 0;   /* 本统计窗口内累计的读耗时 */
-static uint32_t      s_photo_t_dec  = 0;   /* 本统计窗口内累计的解码耗时 */
-static char          s_photo_names[PHOTO_SLIDE_MAX_FILES][64];
-static int           s_photo_name_count = 0;
-
 /*
- * 前向声明：`apply_screen()` / `apply_brightness()` 定义在文件后面，
- * 而照片表盘要用它们做"自动息屏"和"亮度封顶"。
- * 本项目已有同样的先例（见 s_brightness 附近的注释），照做。
+ * 照片目录：SD 上唯一的照片来源。真正的读写都搬到 `photo_rt.cpp` 了；
+ * 这里保留定义只为 `pgibench` 造测试文件（诊断用）。
  */
-static void apply_screen(bool off);
-static void apply_brightness(uint8_t v);
-
-/* 亮度封顶：照片表盘下最高 180（比正常暗一档，显著延缓 AMOLED 老化）*/
-#define PHOTO_BRIGHTNESS_CAP 180
-
-/* ── 设置持久化（NVS；与表盘/方向同一套机制）── */
-#define PHOTO_PREF_NS "photo"
-#define PK_SLIDE   "slide"
-#define PK_SHIFT   "shift"
-#define PK_SOFF    "soff"
-#define PK_SOFFMS  "soffms"
-#define PK_INTV    "intv"
-
-static void photo_settings_load(void)
-{
-  photo_settings_t d = photo_settings_default();
-  Preferences prefs;
-  if (prefs.begin(PHOTO_PREF_NS, true)) {
-    if (prefs.isKey(PK_SLIDE))  d.slideshow     = prefs.getBool(PK_SLIDE, true);
-    if (prefs.isKey(PK_SHIFT))  d.shift         = prefs.getBool(PK_SHIFT, true);
-    if (prefs.isKey(PK_SOFF))   d.screen_off    = prefs.getBool(PK_SOFF, true);
-    if (prefs.isKey(PK_SOFFMS)) d.screen_off_ms = prefs.getUInt(PK_SOFFMS, d.screen_off_ms);
-    if (prefs.isKey(PK_INTV))   d.interval_ms   = prefs.getUInt(PK_INTV, d.interval_ms);
-    prefs.end();
-  }
-  photo_settings_sanitize(&d);
-  photo_slide_set_settings(&s_photo, d);
-}
-
-static void photo_settings_save(void)
-{
-  Preferences prefs;
-  if (!prefs.begin(PHOTO_PREF_NS, false)) return;
-  prefs.putBool(PK_SLIDE, s_photo.settings.slideshow);
-  prefs.putBool(PK_SHIFT, s_photo.settings.shift);
-  prefs.putBool(PK_SOFF,  s_photo.settings.screen_off);
-  prefs.putUInt(PK_SOFFMS, s_photo.settings.screen_off_ms);
-  prefs.putUInt(PK_INTV,   s_photo.settings.interval_ms);
-  prefs.end();
-}
-
-/* ── 扫描 /photos/ ───────────────────────────────────────────── */
-static int photo_scan_dir(photo_file_meta_t *metas, char names[][64], int cap, int *total)
-{
-  *total = 0;
-  int n = 0;
-  if (!sd_mount()) return 0;
-
-  File dir = SD_MMC.open(PHOTO_DIR);
-  if (!dir || !dir.isDirectory()) return 0;
-
-  for (File f = dir.openNextFile(); f && n < cap; f = dir.openNextFile()) {
-    if (f.isDirectory()) continue;
-    const char *nm = f.name();
-    size_t len = strlen(nm);
-    if (len < 5) continue;
-    if (strcasecmp(nm + len - 4, ".pgi") != 0) continue;
-
-    (*total)++;
-    /*
-     * 只读「文件头 + 帧索引表」就够拿元信息（帧数 + fps），不必整文件读入。
-     *
-     * ⚠️ 不能只给 32 字节头：`pgi_parse_header()` 会校验**帧索引表也在范围内**
-     * （那是防越界的关键检查），所以必须把表一起读进来。
-     * 表的最大长度 = PGI_MAX_FRAMES(512) × 8 = 4096，加头 32 → 4128 字节。
-     */
-    uint8_t hdr[PGI_HEADER_BYTES + PGI_MAX_FRAMES * PGI_FRAME_ENTRY_BYTES];
-    size_t want = sizeof(hdr);
-    size_t got = 0;
-    f.seek(0);
-    while (got < want) {
-      int r = f.read(hdr + got, want - got);
-      if (r <= 0) break;
-      got += (size_t)r;
-    }
-    if (got < PGI_HEADER_BYTES) continue;
-    pgi_header_t h;
-    if (!pgi_parse_header(hdr, got, &h)) continue;
-
-    metas[n].frame_count = h.frame_count;
-    metas[n].fps = h.fps;
-    /* f.name() 可能只给 basename，取最后一段 */
-    const char *base = strrchr(nm, '/');
-    snprintf(names[n], 64, "%s", base ? base + 1 : nm);
-    n++;
-  }
-  return n;
-}
-
-
-
-/**
- * [诊断] 打印 `/photos/` 下每个 .pgi 的关键字段，用于**逐字段对比**：
- *   - 设备自己用 `pgibench` 生成的（能正常播放）
- *   - App 上传的（播放时 LOAD ERROR）
- *
- * 打印内容：文件大小 / magic / 宽高 / 帧数 / fps / flags / 表偏移 / 数据偏移 /
- *           第 0 帧的偏移与长度 / 该帧长度是否等于 `1024 + w*h`。
- *
- * **这是排"格式对不上"最快的办法** —— 不用猜，直接看哪一项不一样。
- */
-static void photo_dump_dir(void)
-{
-  if (!sd_mount()) {
-    Serial.println("[转储] 未检测到 TF 卡");
-    return;
-  }
-  File dir = SD_MMC.open(PHOTO_DIR);
-  if (!dir || !dir.isDirectory()) {
-    Serial.println("[转储] 打不开 /photos/");
-    return;
-  }
-  int n = 0;
-  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
-    if (f.isDirectory()) continue;
-    const char *nm = f.name();
-    size_t len = strlen(nm);
-    if (len < 5 || strcasecmp(nm + len - 4, ".pgi") != 0) continue;
-
-    size_t fsz = (size_t)f.size();
-    uint8_t hdr[PGI_HEADER_BYTES + PGI_MAX_FRAMES * PGI_FRAME_ENTRY_BYTES];
-    size_t got = 0;
-    f.seek(0);
-    while (got < sizeof(hdr)) {
-      int r = f.read(hdr + got, sizeof(hdr) - got);
-      if (r <= 0) break;
-      got += (size_t)r;
-    }
-
-    pgi_header_t h;
-    bool ok = pgi_parse_header(hdr, got, &h);
-    Serial.printf("[转储] %s  大小=%u 解析=%s\n", nm, (unsigned)fsz, ok ? "OK" : "失败");
-    if (!ok) continue;
-
-    /* 第 0 帧：直接从表里读（与 photo_poll 的做法一致）*/
-    uint32_t off = 0, size = 0;
-    if (h.frame_table_off + PGI_FRAME_ENTRY_BYTES <= got) {
-      const uint8_t *e = hdr + h.frame_table_off;
-      off = (uint32_t)e[0] | ((uint32_t)e[1] << 8) | ((uint32_t)e[2] << 16) | ((uint32_t)e[3] << 24);
-      size = (uint32_t)e[4] | ((uint32_t)e[5] << 8) | ((uint32_t)e[6] << 16) | ((uint32_t)e[7] << 24);
-    }
-    const uint32_t expect = (uint32_t)PGI_PALETTE_BYTES + (uint32_t)h.width * h.height;
-    Serial.printf("         w=%u h=%u 帧=%u fps=%u flags=%u 表=%u 数据=%u\n",
-                  (unsigned)h.width, (unsigned)h.height, (unsigned)h.frame_count,
-                  (unsigned)h.fps, (unsigned)h.flags, (unsigned)h.frame_table_off,
-                  (unsigned)h.data_off);
-    Serial.printf("         帧0: off=%u size=%u（应为 %u）%s\n", (unsigned)off,
-                  (unsigned)size, (unsigned)expect, (size == expect) ? "✓" : "✗ 不符");
-    Serial.printf("         应有总大小=%u（%u 字节/帧 × %u 帧 + 头表）\n",
-                  (unsigned)(h.data_off + expect * h.frame_count), (unsigned)expect,
-                  (unsigned)h.frame_count);
-    n++;
-  }
-  if (n == 0) Serial.println("[转储] /photos/ 里没有 .pgi");
-}
-
-
-/**
- * [维护] 删除 `/photos/` 下**不合法**的 .pgi（头解析失败、或大小与头不符）。
- *
- * 为什么需要：早期版本的写入不可靠，留下了被截断/写坏的文件，
- * 照片表盘轮播到它们就显示 LOAD ERROR。新版本已经"坏文件当场删除"，
- * 但**历史遗留的坏文件还在**，这条命令用来一次性清掉。
- *
- * 合法的文件**不会**被动 —— 规则与上传时的校验完全一致。
- */
-static void photo_clean_dir(void)
-{
-  if (!sd_mount()) { Serial.println("[清理] 未检测到 TF 卡"); return; }
-  File dir = SD_MMC.open(PHOTO_DIR);
-  if (!dir || !dir.isDirectory()) { Serial.println("[清理] 打不开 /photos/"); return; }
-
-  int removed = 0, kept = 0;
-  /* 收集待删名单：不能在遍历时直接删（会破坏目录迭代）*/
-  char victims[24][64];
-  int nv = 0;
-
-  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
-    if (f.isDirectory()) continue;
-    const char *nm = f.name();
-    size_t len = strlen(nm);
-    if (len < 5 || strcasecmp(nm + len - 4, ".pgi") != 0) continue;
-
-    const char *base = strrchr(nm, '/');
-    const char *shortname = base ? base + 1 : nm;
-    size_t fsz = (size_t)f.size();
-
-    uint8_t hdr[PGI_HEADER_BYTES + PGI_MAX_FRAMES * PGI_FRAME_ENTRY_BYTES];
-    size_t got = 0;
-    f.seek(0);
-    while (got < sizeof(hdr)) {
-      int r = f.read(hdr + got, sizeof(hdr) - got);
-      if (r <= 0) break;
-      got += (size_t)r;
-    }
-    pgi_header_t h;
-    bool ok = (got >= PGI_HEADER_BYTES) && pgi_parse_header(hdr, got, &h);
-    if (ok) {
-      const uint32_t fr = (uint32_t)PGI_PALETTE_BYTES + (uint32_t)h.width * h.height;
-      const uint32_t total = h.data_off + fr * h.frame_count;
-      if ((uint32_t)fsz != total) ok = false;
-    }
-
-    if (ok) {
-      kept++;
-    } else if (nv < (int)(sizeof(victims) / sizeof(victims[0]))) {
-      snprintf(victims[nv], sizeof(victims[0]), "%s", shortname);
-      nv++;
-      Serial.printf("[清理] ✗ %s（%u 字节）不合法 → 待删\n", shortname, (unsigned)fsz);
-    }
-  }
-
-  for (int i = 0; i < nv; i++) {
-    char path[96];
-    snprintf(path, sizeof(path), PHOTO_DIR "/%s", victims[i]);
-    if (SD_MMC.remove(path)) removed++;
-  }
-  Serial.printf("[清理] 完成：删除 %d 个坏文件，保留 %d 个合法文件\n", removed, kept);
-}
-
-/* ── 打开当前文件 / 取帧信息 ─────────────────────────────────── */
-static bool photo_open_file(const char *name)
-{
-  if (s_photo_file_open) {
-    s_photo_file.close();
-    s_photo_file_open = false;
-  }
-  char path[96];
-  snprintf(path, sizeof(path), PHOTO_DIR "/%s", name);
-  s_photo_file = SD_MMC.open(path, FILE_READ);
-  if (!s_photo_file) return false;
-
-  /* 头 + 帧表一起读（同 photo_scan_dir 的理由）*/
-  uint8_t hdr[PGI_HEADER_BYTES + PGI_MAX_FRAMES * PGI_FRAME_ENTRY_BYTES];
-  size_t got = 0;
-  size_t want = sizeof(hdr);
-  while (got < want) {
-    int r = s_photo_file.read(hdr + got, want - got);
-    if (r <= 0) break;
-    got += (size_t)r;
-  }
-  if (!pgi_parse_header(hdr, got, &s_photo_hdr)) {
-    s_photo_file.close();
-    return false;
-  }
-  s_photo_file_open = true;
-  snprintf(s_photo_cur_name, sizeof(s_photo_cur_name), "%s", name);
-  return true;
-}
-
-/** 分配双缓冲与暂存区（只做一次；失败则不启用照片表盘）*/
-static bool photo_ensure_buffers(void)
-{
-  if (s_photo_ready) return true;
-  const size_t px = PHOTO_MAX_FRAME_PX;
-  s_photo_buf[0] = (uint16_t *)ps_malloc(px * sizeof(uint16_t));
-  s_photo_buf[1] = (uint16_t *)ps_malloc(px * sizeof(uint16_t));
-  /* 一帧原始字节上限：调色板 + 像素（索引 8bpp）*/
-  s_photo_stage_cap = PGI_PALETTE_BYTES + px;
-  s_photo_stage = (uint8_t *)ps_malloc(s_photo_stage_cap);
-  if (s_photo_buf[0] == NULL || s_photo_buf[1] == NULL || s_photo_stage == NULL) {
-    Serial.printf("[照片] PSRAM 分配失败（需要约 %u KB）\n",
-                  (unsigned)((px * 2 * 2 + s_photo_stage_cap) / 1024));
-    free(s_photo_buf[0]); s_photo_buf[0] = NULL;
-    free(s_photo_buf[1]); s_photo_buf[1] = NULL;
-    free(s_photo_stage);  s_photo_stage = NULL;
-    return false;
-  }
-  s_photo_ready = true;
-  return true;
-}
-
-/**
- * 主循环调用：推进轮播、分片读帧、解码并显示。
- *
- * **时间预算**：每次调用最多读 PHOTO_READ_CHUNK(32 KB) 并**至多解码一次**，
- * 保证不会长时间占住主循环（解码 21 ms、单个 32 KB 读约 14 ms）。
- */
-static void photo_poll(void)
-{
-  /* 只有照片表盘可见时才工作（切走即停，省电省 CPU）*/
-  if (ui_pages_current() != UI_PAGE_PHOTO || !sd_mount()) return;
-  if (!photo_ensure_buffers()) return;
-
-  /* 首次进入：扫描目录 → 喂给状态机 */
-  if (s_photo.file_count == 0 && s_photo_cur_name[0] == '\0') {
-    static photo_file_meta_t metas[PHOTO_SLIDE_MAX_FILES];
-    static char names[PHOTO_SLIDE_MAX_FILES][64];
-    int total = 0;
-    int n = photo_scan_dir(metas, names, PHOTO_SLIDE_MAX_FILES, &total);
-    if (n == 0) {
-      ui_photo_set_placeholder(total == 0 ? UI_PHOTO_PLACEHOLDER_EMPTY
-                                          : UI_PHOTO_PLACEHOLDER_ERROR);
-      return;
-    }
-    photo_slide_set_files(&s_photo, n, metas);
-    photo_slide_restart(&s_photo, millis());
-    /* 把文件名记进族里（状态机只管下标，名字由这里维护）*/
-    for (int i = 0; i < n; i++) {
-      snprintf(s_photo_names[i], sizeof(s_photo_names[0]), "%s", names[i]);
-    }
-    s_photo_name_count = n;
-  }
-
-  uint32_t now = millis();
-
-  /*
-   * 亮度封顶（烧屏防护第 3 道）：照片表盘下把亮度压到 PHOTO_BRIGHTNESS_CAP。
-   *
-   * 只在**进入**照片表盘时设一次（`s_photo_entered` 标记），不在每次 poll 里比对
-   * `s_brightness` —— 那个变量定义在文件后半段，且频繁写背光本身就不该做。
-   */
-  if (!s_photo_entered) {
-    s_photo_entered = true;
-    apply_brightness(PHOTO_BRIGHTNESS_CAP);
-  }
-
-  /* 自动息屏（第 4 道）：独立于轮播，触摸会重置计时（见 control_poll 里的 note_touch）*/
-  if (photo_slide_should_screen_off(&s_photo, now)) {
-    apply_screen(true);
-    return;
-  }
-
-  /* 推进轮播（到达切换时刻才返回 true）*/
-  photo_slide_tick(&s_photo, now);
-
-  photo_frame_t f;
-  photo_slide_state(&s_photo, now, &f);
-  if (f.file_index < 0) {
-    ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_EMPTY);
-    return;
-  }
-
-  /* 位移相位：每 2 分钟换一档，四档循环 */
-  if (now - s_photo_shift_ms > 120000u) {
-    s_photo_shift_ms = now;
-    s_photo_shift_phase = (s_photo_shift_phase + 1) & 3;
-  }
-  ui_photo_set_shift(f.shift, s_photo_shift_phase);
-
-  /*
-   * ⚠️ **帧没变就不要重读重解**。
-   *
-   * 实测：静态图（1 帧）也在"每秒播 3 帧"，每帧白白花 读 104ms + 解码 22ms ——
-   * 因为每次 poll 都把 `s_photo_loading` 复位成 -1，于是又把同一帧读了一遍。
-   * 这既浪费 CPU/电，也让一次真正的换帧变得更慢（主循环被无意义地占着）。
-   */
-  if (s_photo_shown_file == f.file_index && s_photo_shown_frame == f.frame_index &&
-      ui_photo_has_frame()) {
-    return;   /* 已经在显示这一帧了，什么都不用做 */
-  }
-
-  /* 换文件 → 重新打开 */
-  const char *want_name = (f.file_index < s_photo_name_count)
-                              ? s_photo_names[f.file_index] : NULL;
-  if (want_name == NULL) return;
-  if (strcmp(want_name, s_photo_cur_name) != 0) {
-    if (!photo_open_file(want_name)) {
-      ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
-      return;
-    }
-    s_photo_loading = -1;
-  }
-
-  /* ── 分片读 + 解码 ── */
-  if (s_photo_loading < 0) {
-    /* 还没开始读这一帧：取帧偏移与长度 */
-    /*
-     * 取该帧在文件里的偏移与长度。
-     *
-     * 注意 `pgi_frame_info()` 需要**整个文件的字节**才能校验范围，而我们手上只有
-     * 头与帧表 —— 所以这里直接读帧表项做一次"轻量"解引用：
-     * 偏移/长度都是 32 位小端，格式由 pgi.h 定义。
-     */
-    uint32_t off = 0, size = 0;
-    {
-      uint8_t ent[PGI_FRAME_ENTRY_BYTES];
-      long cur = s_photo_file.position();
-      s_photo_file.seek(s_photo_hdr.frame_table_off + (uint32_t)f.frame_index * PGI_FRAME_ENTRY_BYTES);
-      if (s_photo_file.read(ent, sizeof(ent)) != (int)sizeof(ent)) {
-        ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
-        return;
-      }
-      s_photo_file.seek(cur);
-      off  = (uint32_t)ent[0] | ((uint32_t)ent[1] << 8) | ((uint32_t)ent[2] << 16) | ((uint32_t)ent[3] << 24);
-      size = (uint32_t)ent[4] | ((uint32_t)ent[5] << 8) | ((uint32_t)ent[6] << 16) | ((uint32_t)ent[7] << 24);
-      const uint32_t expect = (uint32_t)PGI_PALETTE_BYTES +
-                              (uint32_t)s_photo_hdr.width * s_photo_hdr.height;
-      if (size != expect) {
-        Serial.printf("[照片] 帧长度不符：%u != %u\n", (unsigned)size, (unsigned)expect);
-        ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
-        return;
-      }
-      if (size > s_photo_stage_cap) {
-        ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
-        return;
-      }
-    }
-    s_photo_frame_off = off;
-    s_photo_need = size;
-    s_photo_got = 0;
-    s_photo_loading = f.frame_index;
-    s_photo_file.seek(off);
-  }
-
-  if (s_photo_got < s_photo_need) {
-    size_t remain = s_photo_need - s_photo_got;
-    size_t chunk = remain > PHOTO_READ_CHUNK ? PHOTO_READ_CHUNK : remain;
-    uint32_t tr = millis();
-    int r = s_photo_file.read(s_photo_stage + s_photo_got, chunk);
-    s_photo_t_read += millis() - tr;
-    if (r <= 0) {
-      ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
-      s_photo_loading = -1;
-      return;
-    }
-    s_photo_got += (size_t)r;
-    if (s_photo_got < s_photo_need) return; /* 还没读完，下次继续 */
-  }
-
-  /* 读满 → 解码到**后台**缓冲，然后交换 */
-  const int back = 1 - s_photo_show_idx;
-  size_t px = (size_t)s_photo_hdr.width * s_photo_hdr.height;
-  /* 暂存区里是 [调色板][索引]，正好是 img_indexed 的布局 */
-  /*
-   * 暂存区里的布局就是 `[调色板 1024B][索引 w*h]` —— 与 `img_indexed_decode8`
-   * 期望的完全一致（这也是 pgi 格式当初那样设计的原因：零转换逻辑）。
-   */
-  uint32_t td = millis();
-  bool decoded = img_indexed_decode8(s_photo_stage, (int)s_photo_hdr.width,
-                                     (int)s_photo_hdr.height, s_photo_buf[back], px);
-  s_photo_t_dec += millis() - td;
-  if (decoded) {
-    /* 实测帧率：每秒打一次，用来核对 §十点五 里"约 10 fps"的推算 */
-    s_photo_frames++;
-    uint32_t now2 = millis();
-    if (now2 - s_photo_fps_t0 >= 1000u) {
-      /*
-       * 每秒打印时把**三段耗时**一起打出来 —— 这是优化动图帧率的唯一依据。
-       * 之前的推算（读 93ms + 解 21ms + flush 43ms ≈ 10fps）与实测 3~4fps 不符，
-       * 说明还有没算到的时间，必须先量再改。
-       */
-      uint32_t n = s_photo_frames > 0 ? s_photo_frames : 1;
-      Serial.printf("[照片] 实测 %u 帧/秒 | 平均每帧：读 %u ms / 解码 %u ms（%s 第 %d 帧）\n",
-                    (unsigned)(s_photo_frames * 1000u / (now2 - s_photo_fps_t0)),
-                    (unsigned)(s_photo_t_read / n), (unsigned)(s_photo_t_dec / n),
-                    s_photo_cur_name, s_photo_loading);
-      s_photo_frames = 0;
-      s_photo_t_read = 0;
-      s_photo_t_dec = 0;
-      s_photo_fps_t0 = now2;
-    }
-    s_photo_show_idx = back;
-    ui_photo_show_frame(s_photo_buf[s_photo_show_idx], (int)s_photo_hdr.width,
-                        (int)s_photo_hdr.height);
-    s_photo_shown_file = f.file_index;
-    s_photo_shown_frame = f.frame_index;
-  } else {
-    ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_ERROR);
-  }
-  s_photo_loading = -1;
-}
-
-
-/* ═══════════════════════════════════════════════════════════════════════
- * 照片管理 HTTP 服务（**裸 WiFiServer，不用 WebServer**）
- *
- * ## 为什么换掉 WebServer
- *
- * 开热点后内部堆只剩 **约 24 KB**（ESP-IDF 的 Wi-Fi 协议栈吃掉 50 KB+，
- * PSRAM 帮不上忙 —— Wi-Fi/String 只能用内部 RAM）。
- * `WebServer` 依赖 `String`、`HTTPUpload` 等，在这个水位上不可靠：
- * 实测出现过**写到一半失败**、**留下被截断的坏文件**、甚至 **panic 重启**。
- *
- * 换成裸 `WiFiServer` + 手写最小 HTTP 解析后：
- *   - **不用 String**，只有一块 1.2 KB 的静态请求缓冲；
- *   - 请求体**直接流式写 SD**，不驻留内存；
- *   - HTTP/1.0 语义：**一个请求一条连接，回完即关**（客户端也用 Connection: close）。
- *
- * ## 接口（全部 JSON）
- *
- *   GET  /ping                    → {"ok":true}
- *   GET  /list                    → {"ok":true,"files":[{"name","size","frames","fps","ok"}]}
- *   POST /delete?name=x.pgi       → {"ok":true} / {"ok":false,"error":"..."}
- *   POST /upload?name=x.pgi       → 请求体 = **原始 .pgi 字节**（不再要 multipart）
- *                                    → {"ok":true,"bytes":N}
- *
- * 上传会做**三重校验**（落盘大小、头部可解析、大小与头自洽），
- * 任一不过就**当场删除**，绝不把坏文件留在卡上（那会让表盘显示 LOAD ERROR）。
- * ═══════════════════════════════════════════════════════════════════════ */
-
-#define PHOTO_UPLOAD_MAX (8u * 1024u * 1024u)
-#define HTTP_RX_MAX      1200u
-
-static WiFiServer *s_srv = NULL;
-static bool  s_wifi_up = false;
-static String s_wifi_ip;
-static uint8_t s_rx[HTTP_RX_MAX];
-
-static const char *const kWifiSsids = "CarDash";
-
-/** 从 `?name=xxx` 里取出安全文件名：只留 basename、剔危险字符、强制 .pgi */
-static void sanitize_name(const char *raw, char *out, size_t cap)
-{
-  if (raw == NULL) raw = "";
-  const char *p = raw;
-  const char *b = strrchr(p, '/');  if (b != NULL) p = b + 1;
-  b = strrchr(p, '\\');             if (b != NULL) p = b + 1;
-
-  snprintf(out, cap, "%s", p);
-  char *dot = strrchr(out, '.');
-  if (dot != NULL && strcasecmp(dot, ".pgi") == 0) *dot = '\0';
-  for (char *q = out; *q != '\0'; q++) {
-    if (!isalnum((unsigned char)*q) && *q != '_' && *q != '-') *q = '_';
-  }
-  if (out[0] == '\0') snprintf(out, cap, "upload");
-  size_t n = strlen(out);
-  if (n + 4 < cap) snprintf(out + n, cap - n, ".pgi");
-}
-
-/** 校验一个 .pgi 文件是否可用（规则与上传时完全一致）*/
-static bool pgi_file_ok(const char *path, size_t *out_size, pgi_header_t *out_hdr)
-{
-  File f = SD_MMC.open(path, FILE_READ);
-  if (!f) return false;
-  size_t fsz = (size_t)f.size();
-  uint8_t hdr[PGI_HEADER_BYTES + PGI_MAX_FRAMES * PGI_FRAME_ENTRY_BYTES];
-  size_t got = 0;
-  while (got < sizeof(hdr)) {
-    int r = f.read(hdr + got, sizeof(hdr) - got);
-    if (r <= 0) break;
-    got += (size_t)r;
-  }
-  f.close();
-
-  pgi_header_t h;
-  if (got < PGI_HEADER_BYTES || !pgi_parse_header(hdr, got, &h)) return false;
-  const uint32_t fr = (uint32_t)PGI_PALETTE_BYTES + (uint32_t)h.width * h.height;
-  if ((uint32_t)fsz != h.data_off + fr * h.frame_count) return false;
-
-  if (out_size) *out_size = fsz;
-  if (out_hdr) *out_hdr = h;
-  return true;
-}
-
-/* ── 应答小工具（都按 HTTP/1.0 一条连接一条请求）── */
-static void http_reply(WiFiClient &c, int code, const char *reason, const char *json)
-{
-  size_t bodyLen = strlen(json);
-  c.printf("HTTP/1.0 %d %s\r\n", code, reason);
-  c.print("Content-Type: application/json\r\n");
-  c.print("Connection: close\r\n");
-  c.print("Access-Control-Allow-Origin: *\r\n");
-  c.printf("Content-Length: %u\r\n\r\n", (unsigned)bodyLen);
-  c.print(json);
-  c.flush();
-  c.stop();
-}
-
-/** 取 `?key=value` 里的 value（URL 里的 %XX 不解码：我们只允许字母数字_-）*/
-static bool query_arg(const char *url, const char *key, char *out, size_t cap)
-{
-  char pat[24];
-  snprintf(pat, sizeof(pat), "%s=", key);
-  const char *q = strchr(url, '?');
-  if (q == NULL) return false;
-  q++;
-  size_t pl = strlen(pat);
-  while (*q != '\0') {
-    if (strncmp(q, pat, pl) == 0) {
-      q += pl;
-      size_t i = 0;
-      while (*q != '\0' && *q != '&' && i + 1 < cap) out[i++] = *q++;
-      out[i] = '\0';
-      return true;
-    }
-    q = strchr(q, '&');
-    if (q == NULL) return false;
-    q++;
-  }
-  return false;
-}
-
-/** GET /list：列出 /photos/ 下的 .pgi（名字/大小/帧数/fps/是否合法）*/
-static void http_list(WiFiClient &c)
-{
-  if (!sd_mount()) { http_reply(c, 503, "Service Unavailable", "{\"ok\":false,\"error\":\"no_sd\"}"); return; }
-
-  /*
-   * 手工拼 JSON（不用 String，控制内存）。
-   *
-   * ⚠️ **`snprintf` 返回的是"想写多长"，不是"实际写了多长"** ——
-   * 直接累加会让 n 超过缓冲，后续 `sizeof(buf) - n` 就**无符号下溢**成巨大值，
-   * 变成缓冲区溢出。每步都夹住 n。
-   */
-  static char buf[2048];
-  size_t n = 0;
-#define PGI_JSON_APPEND(...)                                                    \
-  do {                                                                          \
-    if (n < sizeof(buf)) {                                                      \
-      int w = snprintf(buf + n, sizeof(buf) - n, __VA_ARGS__);                   \
-      if (w > 0) n += (size_t)((size_t)w < sizeof(buf) - n ? (size_t)w : sizeof(buf) - n - 1); \
-    }                                                                           \
-  } while (0)
-
-  PGI_JSON_APPEND("{\"ok\":true,\"files\":[");
-  bool first = true;
-
-  File dir = SD_MMC.open(PHOTO_DIR);
-  if (dir && dir.isDirectory()) {
-    for (File f = dir.openNextFile(); f && n + 200 < sizeof(buf); f = dir.openNextFile()) {
-      if (f.isDirectory()) continue;
-      const char *nm = f.name();
-      size_t len = strlen(nm);
-      if (len < 5 || strcasecmp(nm + len - 4, ".pgi") != 0) continue;
-
-      const char *base = strrchr(nm, '/');
-      const char *shortname = base ? base + 1 : nm;
-
-      char path[96];
-      snprintf(path, sizeof(path), PHOTO_DIR "/%s", shortname);
-      size_t fsz = 0;
-      pgi_header_t h;
-      bool ok = pgi_file_ok(path, &fsz, &h);
-
-      PGI_JSON_APPEND("%s{\"name\":\"%s\",\"size\":%u,\"frames\":%u,\"fps\":%u,\"ok\":%d}",
-                      first ? "" : ",", shortname, (unsigned)fsz,
-                      (unsigned)(ok ? h.frame_count : 0), (unsigned)(ok ? h.fps : 0),
-                      ok ? 1 : 0);
-      first = false;
-    }
-  }
-  PGI_JSON_APPEND("]}");
-#undef PGI_JSON_APPEND
-  http_reply(c, 200, "OK", buf);
-}
-
-/** POST /delete?name=xxx.pgi */
-static void http_delete(WiFiClient &c, const char *url)
-{
-  char nm[64];
-  if (!query_arg(url, "name", nm, sizeof(nm))) {
-    http_reply(c, 400, "Bad Request", "{\"ok\":false,\"error\":\"missing_name\"}");
-    return;
-  }
-  char safe[64];
-  sanitize_name(nm, safe, sizeof(safe));
-  char path[96];
-  snprintf(path, sizeof(path), PHOTO_DIR "/%s", safe);
-  if (SD_MMC.exists(path) && SD_MMC.remove(path)) {
-    Serial.printf("[上传] 已删除 %s\n", path);
-    s_photo.file_count = 0;  s_photo_name_count = 0;
-    s_photo_cur_name[0] = '\0'; s_photo_loading = -1;
-    http_reply(c, 200, "OK", "{\"ok\":true}");
-  } else {
-    http_reply(c, 404, "Not Found", "{\"ok\":false,\"error\":\"not_found\"}");
-  }
-}
-
-/** POST /upload?name=xxx.pgi，请求体 = 原始 .pgi 字节 */
-static void http_upload(WiFiClient &c, const char *url, size_t contentLen)
-{
-  char nm[64];
-  if (!query_arg(url, "name", nm, sizeof(nm))) snprintf(nm, sizeof(nm), "upload");
-  char safe[64];
-  sanitize_name(nm, safe, sizeof(safe));
-
-  if (contentLen == 0 || contentLen > PHOTO_UPLOAD_MAX) {
-    Serial.printf("[上传] 拒绝：长度非法（%u）\n", (unsigned)contentLen);
-    http_reply(c, 413, "Payload Too Large", "{\"ok\":false,\"error\":\"bad_size\"}");
-    return;
-  }
-  /*
-   * 堆门槛。实测：手机**连上热点后** heap 会再掉几 KB（AP 的 station 连接
-   * 本身要占内存），所以"空闲 20 KB"的读数不代表请求到达时也有 20 KB。
-   * 原来门槛 12 KB 会把正常请求误拒（返回 507）。降到 6 KB，
-   * 并把**真实读数**打出来，便于判断到底还够不够。
-   */
-  const uint32_t heapNow = ESP.getFreeHeap();
-  if (heapNow < 6000u) {
-    Serial.printf("[上传] 拒绝：堆不足（%u B < 6000 B）\n", (unsigned)heapNow);
-    http_reply(c, 507, "Insufficient Storage", "{\"ok\":false,\"error\":\"low_heap\"}");
-    return;
-  }
-  Serial.printf("[上传] 开始写盘，此时内部堆 %u B，最大块 %u B\n", (unsigned)heapNow,
-                (unsigned)ESP.getMaxAllocHeap());
-
-  SD_MMC.mkdir(PHOTO_DIR);
-  char path[96];
-  snprintf(path, sizeof(path), PHOTO_DIR "/%s", safe);
-  File f = SD_MMC.open(path, FILE_WRITE);
-  if (!f) {
-    http_reply(c, 503, "Service Unavailable", "{\"ok\":false,\"error\":\"open_failed\"}");
-    return;
-  }
-
-  /* 流式写：边收边写，不驻留内存 */
-  static uint8_t io[1024];
-  size_t remain = contentLen, total = 0;
-  uint32_t t0 = millis();
-  while (remain > 0) {
-    int avail = c.available();
-    if (avail <= 0) {
-      if (!c.connected()) break;
-      /* 8 MB 在实测速率下要 40 秒以上 —— 30 秒必然超时，放宽到 120 秒 */
-      if (millis() - t0 > 120000u) { Serial.println("[上传] 超时(120s)"); break; }
-      delay(1);
-      continue;
-    }
-    size_t want = (size_t)avail;
-    if (want > sizeof(io)) want = sizeof(io);
-    if (want > remain) want = remain;
-    int got = c.read(io, want);
-    if (got <= 0) break;
-    size_t w = f.write(io, (size_t)got);
-    if (w != (size_t)got) { Serial.println("[上传] 写盘失败 → 中止"); break; }
-    total += w;
-    remain -= (size_t)got;
-  }
-  f.close();
-
-  /* 三重校验：大小对得上 + 头部可解析 + 大小与头自洽；不过就删 */
-  size_t onDisk = 0;
-  pgi_header_t h;
-  bool good = (total == contentLen) && pgi_file_ok(path, &onDisk, &h) && onDisk == total;
-  if (!good) {
-    SD_MMC.remove(path);
-    Serial.printf("[上传] ✗ 校验不过（收到 %u / 声明 %u）→ 已删除\n", (unsigned)total,
-                  (unsigned)contentLen);
-    http_reply(c, 422, "Unprocessable", "{\"ok\":false,\"error\":\"invalid_pgi\"}");
-    return;
-  }
-
-  Serial.printf("[上传] ✓ %s（%u 字节，%u 帧，%u fps）\n", path, (unsigned)onDisk,
-                (unsigned)h.frame_count, (unsigned)h.fps);
-  /* 通知照片表盘重新扫描 */
-  s_photo.file_count = 0;  s_photo_name_count = 0;
-  s_photo_cur_name[0] = '\0'; s_photo_loading = -1;
-
-  char body[96];
-  snprintf(body, sizeof(body), "{\"ok\":true,\"bytes\":%u}", (unsigned)onDisk);
-  http_reply(c, 200, "OK", body);
-}
-
-/** 处理一个客户端（读完请求头 → 分派 → 关连接）*/
-static void http_serve_one(WiFiClient &c)
-{
-  size_t n = 0;
-  uint32_t t0 = millis();
-  /* 读请求头直到 \r\n\r\n */
-  while (n < HTTP_RX_MAX - 1) {
-    int avail = c.available();
-    if (avail <= 0) {
-      if (!c.connected()) { c.stop(); return; }
-      if (millis() - t0 > 8000u) { c.stop(); return; }
-      delay(1);
-      continue;
-    }
-    int got = c.read(s_rx + n, 1);
-    if (got != 1) break;
-    n++;
-    if (n >= 4 && memcmp(s_rx + n - 4, "\r\n\r\n", 4) == 0) break;
-  }
-  s_rx[n] = '\0';
-
-  /* 第一行：METHOD URL VERSION */
-  char method[8] = {0}, url[192] = {0};
-  if (sscanf((char *)s_rx, "%7s %191s", method, url) != 2) {
-    http_reply(c, 400, "Bad Request", "{\"ok\":false,\"error\":\"bad_request\"}");
-    return;
-  }
-
-  /* Content-Length */
-  size_t contentLen = 0;
-  const char *cl = strcasestr((char *)s_rx, "content-length:");
-  if (cl != NULL) {
-    cl += 15;
-    while (*cl == ' ') cl++;
-    contentLen = (size_t)atol(cl);
-  }
-
-  Serial.printf("[上传] %s %s（来自 %s，%u 字节）\n", method, url,
-                c.remoteIP().toString().c_str(), (unsigned)contentLen);
-
-  /* 分派 */
-  if (strcmp(method, "GET") == 0 && strcmp(url, "/ping") == 0) {
-    http_reply(c, 200, "OK", "{\"ok\":true,\"dev\":\"cardash\"}");
-  } else if (strcmp(method, "GET") == 0 && strcmp(url, "/list") == 0) {
-    http_list(c);
-  } else if (strcmp(method, "POST") == 0 && strncmp(url, "/delete", 7) == 0) {
-    http_delete(c, url);
-  } else if (strcmp(method, "POST") == 0 && strncmp(url, "/upload", 7) == 0) {
-    http_upload(c, url, contentLen);
-  } else if (strcmp(method, "GET") == 0 && strcmp(url, "/") == 0) {
-    http_reply(c, 200, "OK",
-               "{\"ok\":true,\"hint\":\"GET /list, POST /upload?name=, POST /delete?name=\"}");
-  } else {
-    http_reply(c, 404, "Not Found", "{\"ok\":false,\"error\":\"unknown_path\"}");
-  }
-}
-
-/** 开热点（AP 模式）+ 起 HTTP 服务 */
-static bool wifi_start_ap(void)
-{
-  if (s_wifi_up) return true;
-
-  WiFi.mode(WIFI_AP);
-  WiFi.setSleep(true); /* 省电 + 省几 KB 调制解调器缓冲 */
-  if (!WiFi.softAP(kWifiSsids, NULL, 6, 0, 1)) {
-    Serial.println("[上传] 开热点失败");
-    WiFi.mode(WIFI_OFF);
-    return false;
-  }
-  s_wifi_up = true;
-  s_wifi_ip = WiFi.softAPIP().toString();
-
-  s_srv = new WiFiServer(80, 1);
-  s_srv->begin();
-  Serial.printf("[上传] 热点已开：SSID=%s（免密）IP=%s，HTTP 就绪（裸 WiFiServer）\n",
-                kWifiSsids, s_wifi_ip.c_str());
-  Serial.printf("[上传] 此时内部堆 %u B\n", (unsigned)ESP.getFreeHeap());
-  return true;
-}
-
-static void wifi_stop_http(void)
-{
-  if (s_srv != NULL) { s_srv->stop(); delete s_srv; s_srv = NULL; }
-  if (s_wifi_up) {
-    WiFi.disconnect(true, false);
-    WiFi.mode(WIFI_OFF);
-    s_wifi_up = false;
-    s_wifi_ip = "";
-  }
-}
-
-/** 主循环：接连接 + 报客户端数变化 */
-static void wifi_poll(void)
-{
-  if (s_srv == NULL) return;
-
-  WiFiClient c = s_srv->available();
-  if (c) http_serve_one(c);
-
-  static int last_sta = -1;
-  int sta = (int)WiFi.softAPgetStationNum();
-  if (sta != last_sta) {
-    Serial.printf("[上传] 热点客户端数：%d\n", sta);
-    last_sta = sta;
-  }
-}
+#define PHOTO_DIR "/photos"
 
 /* ── S1 / S3 spike：SD 读速与 .pgi 解码耗时 ────────────────────────
  *
@@ -1896,6 +999,57 @@ static void apply_screen(bool off)
   sync_display_report_state();
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+ * 给 photo_rt.cpp 的三座小桥（跨编译单元）
+ *
+ * 为什么要有它们：SD 挂载（引脚定义）、背光、息屏都归本文件管；`photo_rt.cpp`
+ * 不重复一套，而是调这里。（`photo_rt.cpp` 里已声明这三个原型。）
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+/** SD 懒挂载（可重试：开机没卡、之后插卡也能起来）*/
+bool dash_sd_mount(void)
+{
+  return sd_mount();
+}
+
+/**
+ * 让下一次 `dash_sd_mount()` 真正重新挂载。
+ * 照片页的「格式化 SD 卡」会先 end() 再手动 mount 去格式化，
+ * 之后必须清掉 sd_mount() 的缓存标志，否则它会误以为卡还挂着。
+ */
+void dash_sd_reset(void)
+{
+  s_sd_ok = false;
+}
+
+/** 照片表盘亮度封顶（烧屏防护第 3 道）*/
+void dash_brightness_cap(uint8_t v)
+{
+  apply_brightness(v);
+}
+
+/** 自动息屏（烧屏防护第 4 道）*/
+void dash_screen_off(void)
+{
+  apply_screen(true);
+}
+
+/**
+ * 从 PhotoState JSON 里读 `cur`（当前照片下标，-1 = 没有）。
+ *
+ * 旧 App 的 `photo_prev/next` 命令只给方向，不给下标，而"当前是第几张"的
+ * **唯一真值**在 photo_rt 里。与其在 photo_rt.h（Lead 已冻结）里加一个 getter，
+ * 不如读它本来就要上报的 JSON —— 10 行的解析，零接口扩散。
+ */
+static int photo_state_cur(void)
+{
+  char js[PHOTO_JSON_BUF];
+  if (photo_rt_state_json(js, sizeof(js)) <= 0) return -1;
+  const char *p = strstr(js, "\"cur\":");
+  if (p == NULL) return -1;
+  return atoi(p + 6);
+}
+
 /* 消费一条 BLE 下行控制命令（主循环调用，BLE 回调只暂存） */
 /*
  * ---------------- 屏幕方向 ----------------
@@ -2304,81 +1458,65 @@ static void control_poll(void)
       s_faces_dirty = true;
       break;
     }
+    /*
+     * 照片表盘（旧 App 的单字段命令，全部转成 `photo_rt_apply_settings()` 的
+     * "只带一个 has_* 字段"调用；新 App 用 `{"op":"set"}` 一次下发多条）。
+     */
     case CONTROL_PHOTO_SLIDE:
-      s_photo.settings.slideshow = (cmd.value != 0);
-      photo_settings_save();
+      photo_rt_apply_settings(true, cmd.value != 0, false, 0, false, 0, false, 0);
       Serial.printf("[照片] 轮播 → %s\n", cmd.value ? "开" : "关（强制像素位移）");
       break;
     case CONTROL_PHOTO_SHIFT:
-      s_photo.settings.shift = (cmd.value != 0);
-      photo_settings_save();
+      photo_rt_apply_settings(false, 0, false, 0, true, cmd.value != 0, false, 0);
       Serial.printf("[照片] 像素位移 → %s\n", cmd.value ? "开" : "关");
       break;
     case CONTROL_PHOTO_SCREENOFF:
-      s_photo.settings.screen_off = (cmd.value != 0);
-      photo_settings_save();
-      Serial.printf("[照片] 自动息屏 → %s\n", cmd.value ? "开" : "关");
-      break;
-    case CONTROL_PHOTO_INTERVAL: {
-      photo_settings_t t = s_photo.settings;
-      t.interval_ms = (uint32_t)cmd.value * 1000u;
-      photo_slide_set_settings(&s_photo, t);
-      photo_settings_save();
-      Serial.printf("[照片] 轮播间隔 → %u 秒\n", (unsigned)(s_photo.settings.interval_ms / 1000u));
-      break;
-    }
-    case CONTROL_PHOTO_GET:
-      Serial.printf("[照片] 轮播=%d 间隔=%us 息屏=%d(%umin) 位移=%d 有效位移=%d\n",
-                    (int)s_photo.settings.slideshow,
-                    (unsigned)(s_photo.settings.interval_ms / 1000u),
-                    (int)s_photo.settings.screen_off,
-                    (unsigned)(s_photo.settings.screen_off_ms / 60000u),
-                    (int)s_photo.settings.shift,
-                    (int)photo_slide_eff_shift(&s_photo));
-      break;
-    case CONTROL_PHOTO_PREV: {
-      if (s_photo.file_count > 0) {
-        int n = s_photo.cur_file - 1;
-        if (n < 0) n = s_photo.file_count - 1;
-        s_photo.cur_file = n;
-        s_photo.cur_frame = 0;
-        s_photo.loops_done = 0;
-        s_photo.pinned_file = n;
-        s_photo.seg_start_ms = millis() - s_photo.settings.interval_ms - 1000u;
-        s_photo_loading = -1;
-        Serial.printf("[照片] 上一张 → 第 %d 张\n", n + 1);
-      }
-      break;
-    }
-    case CONTROL_PHOTO_PLAY: {
       /*
-       * 切到第 N 张（0 起）。做法：先确保文件清单已扫过，
-       * 再把 `cur_file` 设为 N 并把"段起始时间"推到过去，
-       * 下一次 photo_poll 就会立刻加载这一张。
+       * 旧命令只有 0/1，没有时长。0 = 关；1 = 用 30 分钟（默认值）。
+       * 新 App 走 `{"op":"set","soff_s":N}`，能精确指定秒数。
        */
-      if (s_photo.file_count == 0) {
-        Serial.println("[照片] 清单还没扫过，先切到照片表盘触发扫描");
+      photo_rt_apply_settings(false, 0, false, 0, false, 0, true,
+                              cmd.value ? 1800 : 0);
+      Serial.printf("[照片] 自动息屏 → %s\n", cmd.value ? "开（30 分钟）" : "关");
+      break;
+    case CONTROL_PHOTO_INTERVAL:
+      photo_rt_apply_settings(false, 0, true, (int)cmd.value, false, 0, false, 0);
+      Serial.printf("[照片] 轮播间隔 → %d 秒\n", (int)cmd.value);
+      break;
+    case CONTROL_PHOTO_GET: {
+      char js[PHOTO_JSON_BUF];
+      const int n = photo_rt_state_json(js, sizeof(js));
+      Serial.printf("[照片] 状态 %s\n", (n > 0) ? js : "(读不到)");
+      break;
+    }
+    case CONTROL_PHOTO_PREV:
+    case CONTROL_PHOTO_NEXT: {
+      /*
+       * 旧命令没有"当前下标"的概念，这里从 PhotoState 里取（`cur` 是唯一真值来源）。
+       * `photo_rt_play()` 会越界夹取并钉住，语义与旧 photo_play 一致。
+       */
+      const int n = photo_rt_count();
+      if (n <= 0) {
+        Serial.println("[照片] 清单为空，切不了");
         break;
       }
-      int n = (int)cmd.value;
-      if (n < 0) n = 0;
-      if (n >= s_photo.file_count) n = s_photo.file_count - 1;
-      s_photo.cur_file = n;
-      s_photo.cur_frame = 0;
-      s_photo.loops_done = 0;
-      s_photo.pinned_file = n;
-      s_photo.seg_start_ms = millis() - s_photo.settings.interval_ms - 1000u;
-      s_photo_loading = -1;
-      Serial.printf("[照片] 切到第 %d 张（共 %d 张）\n", n + 1, s_photo.file_count);
+      int cur = photo_state_cur();
+      if (cur < 0) cur = 0;
+      int want = (cmd.kind == CONTROL_PHOTO_NEXT) ? (cur + 1) % n : (cur - 1 + n) % n;
+      if (photo_rt_play(want)) {
+        Serial.printf("[照片] %s → 第 %d 张（共 %d 张）\n",
+                      (cmd.kind == CONTROL_PHOTO_NEXT) ? "下一张" : "上一张", want + 1, n);
+      }
       break;
     }
-    case CONTROL_PHOTO_NEXT: {
-      /* 手动切下一张：把"段"的起始时间挪到很久以前，下一次 tick 就会推进 */
-      photo_slide_tick(&s_photo, millis() + s_photo.settings.interval_ms + 1000u);
-      ui_photo_set_placeholder(UI_PHOTO_PLACEHOLDER_LOADING);
-      Serial.println("[照片] 手动切下一张");
+    case CONTROL_PHOTO_PLAY:
+      if (photo_rt_play((int)cmd.value)) {
+        Serial.printf("[照片] 切到第 %d 张\n", (int)cmd.value + 1);
+      }
+      else {
+        Serial.println("[照片] 清单为空，切不了");
+      }
       break;
-    }
     case CONTROL_DEMO_SPEED: {
       /*
        * 演示速度（App 的"模拟速度测试"滑块）。value < 0 = 退出演示。
@@ -2632,10 +1770,11 @@ static void print_help(void)
   Serial.println("       sd [list]                TF 卡状态（`sd list` 连根目录一起列）");
   Serial.println("       sdbench [KB]      SD 读写测速（S1：决定要不要 RLE）");
   Serial.println("       pgibench [帧] [边长] 生成 .pgi 并测解码耗时（S3：定 fps 目标）");
-  Serial.println("       photodump          打印 /photos/ 下每个 .pgi 的头部字段（排格式问题）");
-  Serial.println("       photo clean        删除 /photos/ 下不合法的 .pgi（坏文件会让表盘 LOAD ERROR）");
-  Serial.println("       heap              内部堆/最大块/水位（上传可靠性关键指标）");
-  Serial.println("       wifi on|off        开/关上传热点（CarDash·免密，IP 192.168.4.1）");
+  Serial.println("       photo             照片状态/能力/清单（加图走 App 的 BLE 直传）");
+  Serial.println("       photo bench       自检：解码一张 .pgj 测耗时（写 NVS，等同 App bench）");
+  Serial.println("       photo play N      切到第 N 张（0 起）");
+  Serial.println("       photo del <id>    删除一张（例：photo del p00012.pgj）");
+  Serial.println("       heap              内部堆/最大块/水位（BLE 上传余量看这里）");
   Serial.println("       scan                     I2C 总线扫描（确认器件在线）");
   Serial.println("       ble                      显示 BLE 连接与遥测状态");
   Serial.println("       bright <0-255>            设置亮度（不带参数=查询）");
@@ -2840,34 +1979,6 @@ static void process_command(char *cmd)
    * 也匹配进去（当时确实踩了 —— 敲 sdbench 却走了 sd_report，什么测速都没有）。
    * 前缀匹配的命令，长名字必须排在短名字前面。
    */
-  else if (strncmp(cmd, "wifi", 4) == 0) {
-    /*
-     * wifi on   —— 开热点（开机其实已自动开，这条用于关掉后再开）
-     * wifi off  —— 断开并关闭
-     * wifi      —— 查状态
-     */
-    const char *arg = cmd + 4;
-    while (*arg == ' ') arg++;
-    if (*arg == '\0') {
-      if (s_wifi_up) {
-        Serial.printf("[上传] 热点 %s 已开启（免密），IP=%s，已连客户端 %d 个，内部堆 %u B\n",
-                      kWifiSsids, s_wifi_ip.c_str(), (int)WiFi.softAPgetStationNum(),
-                      (unsigned)ESP.getFreeHeap());
-      } else {
-        Serial.println("[上传] 未开启（敲 wifi on 开热点）");
-      }
-    }
-    else if (strncmp(arg, "off", 3) == 0) {
-      wifi_stop_http();
-      Serial.println("[上传] 已断开");
-    }
-    else if (strncmp(arg, "on", 2) == 0 || strncmp(arg, "auto", 4) == 0) {
-      wifi_start_ap();
-    }
-    else {
-      Serial.println("[上传] 用法：wifi on（开热点）| wifi off（关闭）| wifi（查状态）");
-    }
-  }
   else if (strncmp(cmd, "heap", 4) == 0) {
     /*
      * 堆诊断：上传链路的可靠性完全取决于内部堆（PSRAM 帮不上忙 ——
@@ -2881,20 +1992,47 @@ static void process_command(char *cmd)
                   ESP.getFreeHeap() >= 40000u ? "够用" : "**不足**，上传会被拒绝");
   }
   else if (strncmp(cmd, "photo", 5) == 0) {
-    /* 照片维护：photo clean（删坏文件）/ photo dump（打印头部）*/
+    /*
+     * 照片运行时的串口入口（不接手机也能自查）：
+     *   photo                 打印状态/能力/前 10 项清单
+     *   photo bench           解码一张 .pgj 测耗时（结果写 NVS，等同 App 的 bench）
+     *   photo play N          切到第 N 张（0 起）
+     *   photo del <id>        删除一张（白名单文件名）
+     * 设置类命令仍走旧 App 的 BLE 通道（photo_slide/photo_interval…）。
+     */
     const char *arg = cmd + 5;
     while (*arg == ' ') arg++;
-    if (strncmp(arg, "clean", 5) == 0) {
-      photo_clean_dir();
-    } else if (strncmp(arg, "dump", 4) == 0) {
-      photo_dump_dir();
-    } else {
-      Serial.println("[照片] 用法：photo clean（删不合法文件）| photo dump（打印头部）");
+
+    if (strncmp(arg, "bench", 5) == 0) {
+      photo_rt_bench();
     }
-  }
-  else if (strncmp(cmd, "photodump", 9) == 0) {
-    /* [诊断] 打印 /photos/ 下每个 .pgi 的头部关键字段 */
-    photo_dump_dir();
+    else if (strncmp(arg, "play", 4) == 0) {
+      const int n = atoi(arg + 4);
+      if (!photo_rt_play(n)) Serial.println("[照片] 没有可播放的照片");
+    }
+    else if (strncmp(arg, "del", 3) == 0) {
+      const char *nm = arg + 3;
+      while (*nm == ' ') nm++;
+      const char *e = NULL;
+      if (photo_rt_delete(nm, &e)) Serial.printf("[照片] 已删除 %s\n", nm);
+      else Serial.printf("[照片] 删除失败：%s\n", (e != NULL) ? e : "?");
+    }
+    else if (*arg == '\0') {
+      char js[PHOTO_JSON_BUF];
+      if (photo_rt_info_json(js, sizeof(js)) > 0) Serial.printf("[照片] info  %s\n", js);
+      if (photo_rt_state_json(js, sizeof(js)) > 0) Serial.printf("[照片] state %s\n", js);
+      const int n = photo_rt_count();
+      Serial.printf("[照片] 清单 %d 项：\n", n);
+      for (int i = 0; i < n && i < 10; i++) {
+        if (photo_rt_manifest_item_json(i, js, sizeof(js)) > 0) {
+          Serial.printf("       %s\n", js);
+        }
+      }
+      if (n > 10) Serial.println("       …（只列前 10 项）");
+    }
+    else {
+      Serial.println("[照片] 用法：photo（状态）| photo bench | photo play N | photo del <id>");
+    }
   }
   else if (strncmp(cmd, "sdbench", 7) == 0) {
     /* [S1] SD 顺序读写测速：sdbench [KB] */
@@ -3311,8 +2449,9 @@ void setup()
   bool tp_ok = touch_init();
   rtc_ok = rtc_init();
 
-  /* BLE Peripheral：广播 CarDashboard，等待 iPhone 写入遥测 */
-  Serial.printf("[BLE] 初始化 %s\n", ble_telemetry_begin() ? "成功，开始广播" : "失败");
+  /* BLE Peripheral：先建 GATT（遥测），**不广播**；照片服务注册完后再广播 */
+  const bool ble_ok = ble_telemetry_begin();
+  Serial.printf("[BLE] GATT 初始化 %s\n", ble_ok ? "成功" : "失败");
 
   lvgl_init();
 
@@ -3348,30 +2487,38 @@ void setup()
    * 引用这些 dsc，提前改好可避免"先引用旧格式、后改写"的隐患。 */
   inflate_baked_images();
 
-  /* 业务 UI：全部页面（模拟时钟 / 数字时钟 / 速度表盘） */
+  /* 业务 UI：全部页面（模拟时钟 / 数字时钟 / 速度表盘 / 照片） */
   ui_pages_init();
-  /*
-   * 照片表盘：初始化状态机并读回 NVS 里的设置。
-   * 缓冲（约 1.07 MB PSRAM）**延迟到第一次真的显示照片时**才分配 ——
-   * 不然不用照片的人也要占 1 MB PSRAM（见 photo_ensure_buffers）。
-   */
-  photo_slide_init(&s_photo, photo_settings_default());
-  photo_settings_load();
 
   /*
-   * **开机就开上传热点**。
+   * 照片运行时：读 NVS 设置、建清单、注册事件监听。
    *
-   * 原本要用户先在串口敲 `wifi on` —— 这对"只是想把图传上去"的人是多余的门槛
-   * （用户实测时也确实卡在"串口 wifi on 是什么意思"）。
-   * 热点功耗不高、且免密，直接开机常开；要关仍可串口 `wifi off`。
+   * 顺序要求：必须在 `ui_pages_init()` **之后**（照片页对象/回调已就绪）
+   * 且 SD 能被挂载（`photo_rt_init()` 内部会调 `dash_sd_mount()` 懒挂载）。
+   * 显示缓冲（约 1.4 MB PSRAM）**延迟到第一次真的显示照片时**才分配 ——
+   * 不然不用照片的人也要占 1 MB 多 PSRAM（见 photo_rt.cpp 的 ensure_buffers）。
    */
-  wifi_start_ap();
-  Serial.printf("[照片] 轮播=%d 间隔=%us 息屏=%d(%umin) 位移=%d\n",
-                (int)s_photo.settings.slideshow,
-                (unsigned)(s_photo.settings.interval_ms / 1000u),
-                (int)s_photo.settings.screen_off,
-                (unsigned)(s_photo.settings.screen_off_ms / 60000u),
-                (int)s_photo.settings.shift);
+  photo_rt_init();
+
+  /*
+   * BLE 照片服务（GATT + JSON）。业务全部经 `photo_rt.h`：
+   * `ble_photo_begin()` 只注册服务并把事件监听挂到 photo_rt 上。
+   * BLE 栈没起来就别注册（否则 notify 会打到空连接上）。
+   */
+  if (ble_ok) {
+    if (!ble_photo_begin()) {
+      Serial.println("[照片] ❌ GATT 服务注册失败（照片功能不可用）");
+    }
+    /*
+     * 所有 GATT 服务都注册完（遥测 + 照片）才能开始广播 ——
+     * NimBLE 的 ble_gatts_start() 在第一次广播时执行，之后再加服务不会被发现。
+     */
+    ble_telemetry_advertise();
+    Serial.println("[BLE] 已开始广播（遥测 + 照片服务）");
+  }
+  else {
+    Serial.println("[照片] BLE 未启动，照片服务不可用（仅串口/本地可用）");
+  }
 
   /* 恢复上次保存的屏幕方向（NVS）；无记录则用编译期默认 DISPLAY_ROT */
   restore_display_rotation();
@@ -3919,8 +3066,13 @@ void loop()
   ph_end(PH_SERIAL);
   ph_begin();
   control_poll();             /* BLE 下行控制：亮度 / 息屏 / 表盘 */
-  photo_poll();              /* 照片表盘：仅在它可见时工作（轮播/读帧/解码）*/
-  wifi_poll();               /* 照片上传：处理 HTTP（未连接时是空操作）*/
+  /*
+   * 照片运行时（渲染前）：上传写盘（每拍 ≤4 KB）、轮播、读帧、解码、息屏。
+   * 必须在 `ble_photo_poll()` 之前 —— 这样 credit 里的 `off` 是**刚落盘**的最新值
+   * （否则 App 会看到落后一拍的进度，白白等一个 RTT）。
+   */
+  photo_rt_poll(millis());
+  ble_photo_poll();           /* BLE 照片服务：credit 通知 / 命令队列消费 */
   rotation_poll();            /* 合并后的方向切换（见 s_pending_rot 说明）*/
 
   /*

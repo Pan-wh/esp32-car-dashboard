@@ -54,6 +54,15 @@ firmware/dashboard/nav_parse.h
 firmware/dashboard/img_indexed.c
 firmware/dashboard/img_indexed.h
 firmware/dashboard/font_*.c
+# 照片 v5 新增的共享纯逻辑（2026-10-26）
+firmware/dashboard/pgj.c
+firmware/dashboard/pgj.h
+firmware/dashboard/photo_list.c
+firmware/dashboard/photo_list.h
+firmware/dashboard/photo_cmd.c
+firmware/dashboard/photo_cmd.h
+firmware/dashboard/photo_sync.c
+firmware/dashboard/photo_sync.h
 
 # Node（网关）；本项目零依赖，正常不会出现
 node_modules/

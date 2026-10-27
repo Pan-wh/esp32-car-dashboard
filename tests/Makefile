@@ -5,7 +5,8 @@ PYTHON  ?= python3
 CFLAGS  := -O1 -std=gnu99 -Wall -Wextra -I../simulator/ui
 SRC     := ../simulator/ui/telemetry.c
 
-TESTS   := test_telemetry test_control test_ui_face test_nav test_nav_parse test_nav_map test_img_indexed test_face_report test_auto_bright test_bright_parse test_pgi test_photo_slide
+TESTS   := test_telemetry test_control test_ui_face test_nav test_nav_parse test_nav_map test_img_indexed test_face_report test_auto_bright test_bright_parse test_pgi test_photo_slide \
+           test_pgj test_photo_list test_photo_cmd test_photo_sync
 
 # iOS 侧导航核心：直接编译 App 的真实源文件（不复制逻辑，避免与实现漂移）
 NAV_SRC      := ../ios/CarDashboardPhone/CarDashboardPhone/Nav/NavCore.swift \
@@ -45,6 +46,15 @@ KC_BIN       := test_keychain_token
 # App 侧亮度曲线（协议契约 + 与固件 C 实现交叉验证）
 BC_SRC       := ../ios/CarDashboardPhone/CarDashboardPhone/BrightnessCurve.swift
 BC_BIN       := test_brightness_curve
+
+# 照片 v5（App 侧）：协议/模型解析 + 上传引擎。Foundation-only，macOS 可跑。
+# 直接编译 App 真实源文件，避免与实现漂移。
+PHOTO_SRC        := ../ios/CarDashboardPhone/CarDashboardPhone/Photo/PhotoProtocol.swift \
+                    ../ios/CarDashboardPhone/CarDashboardPhone/Photo/DevicePhotos.swift
+PHOTO_MODEL_BIN  := test_photo_models
+PHOTO_TRANSFER_SRC := $(PHOTO_SRC) \
+                    ../ios/CarDashboardPhone/CarDashboardPhone/Photo/PhotoTransfer.swift
+PHOTO_TRANSFER_BIN := test_photo_transfer
 
 # 导航页状态机（准备/选地点/选路线/导航中）+ 展示格式化
 UI_SRC       := ../ios/CarDashboardPhone/CarDashboardPhone/Nav/NavUIState.swift
@@ -92,6 +102,20 @@ test_pgi: test_pgi.c ../simulator/ui/pgi.c ../simulator/ui/img_indexed.c
 # 照片表盘的轮播状态机（静态/动图混排、三个开关、息屏计时）
 test_photo_slide: test_photo_slide.c ../simulator/ui/photo_slide.c
 
+# ── 照片 v5（BLE 直传）：PGJ 容器 / 清单 / 命令解析 / 接收状态机 ──
+# 纯逻辑，PC 可跑；协议见 docs/photo-protocol.md
+test_pgj: test_pgj.c ../simulator/ui/pgj.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+test_photo_list: test_photo_list.c ../simulator/ui/photo_list.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+test_photo_cmd: test_photo_cmd.c ../simulator/ui/photo_cmd.c ../simulator/ui/photo_list.c
+	$(CC) $(CFLAGS) -o $@ $^
+
+test_photo_sync: test_photo_sync.c ../simulator/ui/photo_sync.c ../simulator/ui/photo_list.c
+	$(CC) $(CFLAGS) -o $@ $^
+
 # ⚠️ 必须遍历 $(TESTS)，不要在这里逐个硬编码测试名。
 #    曾经硬编码过：新测试加进 $(TESTS) 却**永远不会被执行**，
 #    而输出看起来一切正常（face_report 的 51 项就这样漏跑过一轮）。
@@ -116,6 +140,10 @@ run: $(TESTS)
 	@$(MAKE) --no-print-directory test-keychain-token
 	@echo "--- 亮度曲线（协议契约 + 与固件交叉验证）---"
 	@$(MAKE) --no-print-directory test-brightness-curve
+	@echo "--- 照片模型解析（PGJ / Info / State / 清单）---"
+	@$(MAKE) --no-print-directory test-photo-models
+	@echo "--- 照片上传引擎（分片 / 窗口 / 续传）---"
+	@$(MAKE) --no-print-directory test-photo-transfer
 	@echo "--- 导航网关（Node，零依赖，全部离线）---"
 	@if command -v node >/dev/null 2>&1; then \
 		(cd ../gateway && node --test "test/**/*.test.js") ; \
@@ -221,6 +249,28 @@ $(BC_BIN): $(BC_SRC) ../tools/test_brightness_curve.swift
 test-brightness-curve: $(BC_BIN)
 	@./$(BC_BIN)
 
+# ── 照片 v5（App 侧）──
+# 注意：与 C 测试同一个坑 —— 编译与运行拆成两个目标，避免"产物存在就跳过测试"。
+$(PHOTO_MODEL_BIN): $(PHOTO_SRC) ../tools/test_photo_models.swift
+	@if ! command -v swiftc >/dev/null 2>&1; then \
+		echo "  跳过：未找到 swiftc"; \
+		exit 0; \
+	fi
+	swiftc -O -o $(PHOTO_MODEL_BIN) $(PHOTO_SRC) ../tools/test_photo_models.swift
+
+test-photo-models: $(PHOTO_MODEL_BIN)
+	@./$(PHOTO_MODEL_BIN)
+
+$(PHOTO_TRANSFER_BIN): $(PHOTO_TRANSFER_SRC) ../tools/test_photo_transfer.swift
+	@if ! command -v swiftc >/dev/null 2>&1; then \
+		echo "  跳过：未找到 swiftc"; \
+		exit 0; \
+	fi
+	swiftc -O -o $(PHOTO_TRANSFER_BIN) $(PHOTO_TRANSFER_SRC) ../tools/test_photo_transfer.swift
+
+test-photo-transfer: $(PHOTO_TRANSFER_BIN)
+	@./$(PHOTO_TRANSFER_BIN)
+
 # 重新生成 .pgi 夹具（需要带 Pillow 的 python3；产物已入库，平时不用跑）
 #
 #   make fixtures-pgi PYTHON=/path/to/python3
@@ -243,6 +293,6 @@ fs[0].save('/tmp/_pgi_3frame.gif', save_all=True, append_images=fs[1:], duration
 	@$(PYTHON) ../tools/pgi.py /tmp/_pgi_3frame.gif -o fixtures/pgi_3frame.pgi --size 8
 
 clean:
-	rm -f $(TESTS) $(NAV_BIN) $(SIM_BIN) $(FACE_BIN) $(BLE_BIN) $(UI_BIN) $(SCOPE_BIN) $(KC_BIN) $(BC_BIN)
+	rm -f $(TESTS) $(NAV_BIN) $(SIM_BIN) $(FACE_BIN) $(BLE_BIN) $(UI_BIN) $(SCOPE_BIN) $(KC_BIN) $(BC_BIN) $(PHOTO_MODEL_BIN) $(PHOTO_TRANSFER_BIN)
 
-.PHONY: all run clean test-nav-core test-nav-sim test-device-faces test-ble-policy test-nav-ui test-search-scope test-keychain-token test-brightness-curve
+.PHONY: all run clean test-nav-core test-nav-sim test-device-faces test-ble-policy test-nav-ui test-search-scope test-keychain-token test-brightness-curve test-photo-models test-photo-transfer

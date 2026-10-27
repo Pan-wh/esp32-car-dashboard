@@ -281,11 +281,20 @@ public:
     {
         (void)s;
         s_connected = true;
+        /*
+         * 连接参数：15~30 ms、无 latency、4 s 超时。
+         * 默认参数下实测大文件上传只有 ~3 KB/s 且在 25 KB 附近收发停滞；
+         * 照片分片是"小包高频"，连接间隔直接决定吞吐与流控恢复速度。
+         * iOS 可能拒绝更激进的值，这里用 Apple 推荐的 15/30 ms 档。
+         */
+        s->updateConnParams(s->getConnId(), 12, 24, 0, 400);
+        Serial.println("[BLE] 中央设备已连接");
     }
     void onDisconnect(BLEServer *s) override
     {
         (void)s;
         s_connected = false;
+        Serial.println("[BLE] 中央设备已断开");
         s_asm_len = 0; /* 断连后清空半包 */
         /*
          * ⚠️ 不要在这里直接 BLEDevice::startAdvertising()。
@@ -351,12 +360,21 @@ bool ble_telemetry_begin(void)
 
     svc->start();
 
+    /*
+     * ⚠️ 这里**不能**开始广播：NimBLE 在第一次 `adv->start()` 时调用
+     * `ble_gatts_start()`，之后就无法再注册新服务了。照片服务注册在
+     * `ble_photo_begin()`（在 dashboard.ino 里紧接着调用），所以广播必须
+     * 等它注册完 —— 由 `ble_telemetry_advertise()` 负责。
+     */
+    return true;
+}
+
+void ble_telemetry_advertise(void)
+{
     BLEAdvertising *adv = BLEDevice::getAdvertising();
     adv->addServiceUUID(SERVICE_UUID);
     adv->setScanResponse(true);
     adv->start();
-
-    return true;
 }
 
 bool ble_telemetry_connected(void)

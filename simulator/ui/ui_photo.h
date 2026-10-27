@@ -5,8 +5,8 @@
  * 分工：
  *   - `pgi.c`           —— 文件格式的解析与解码（纯逻辑，PC 可测）
  *   - `photo_slide.c`   —— 轮播状态机（纯逻辑，PC 可测）
- *   - **本模块**        —— 把一帧 RGB565 画到屏幕上 + 占位状态 + 像素位移
- *   - 固件 `dashboard.ino` —— SD 读取、分片预读、NVS、BLE
+ *   - **本模块**        —— 把一帧 RGB565 画到屏幕上 + 占位状态 + 像素位移 + 接收进度
+ *   - 固件 `photo_rt.cpp` —— SD 读取、分片预读、NVS、BLE、上传落盘
  *
  * 这样"能不能画对"可以在模拟器里截图验证，不需要真机与 SD 卡。
  *
@@ -69,6 +69,20 @@ void ui_photo_set_shift(bool enable, int phase);
 
 /** 当前是否正在显示实图（false = 占位）*/
 bool ui_photo_has_frame(void);
+
+/**
+ * 接收进度（App 正在上传照片时显示）。
+ *
+ * 显示在**底部**：一条 2~3 px 的细进度条 + 百分比文字，颜色比正文暗一档。
+ * 它**不参与像素位移**（烧屏防护只挪照片本身；进度条只在接收那几秒存在），
+ * 也不遮挡画面中心，所以不需要为它扩图。
+ *
+ * @param visible true = 显示；false = 隐藏（同时清百分比）
+ * @param percent 0..100（越界夹取；<0 当 0）
+ *
+ * 高频调用安全：内部做变更检测，百分比没变就不碰 LVGL 对象。
+ */
+void ui_photo_set_progress(bool visible, int percent);
 
 #ifdef __cplusplus
 }
