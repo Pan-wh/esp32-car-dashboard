@@ -68,13 +68,32 @@ echo
 cd "$PROJ_DIR"
 
 echo "→ 构建（-allowProvisioningUpdates 会自动续期描述文件）…"
+BUILD_LOG="$(mktemp)"
 if ! xcodebuild -project CarDashboardPhone.xcodeproj -scheme CarDashboardPhone \
       -configuration Debug -destination "platform=iOS,id=$DEV" \
       -derivedDataPath "$DD" -allowProvisioningUpdates \
-      DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" build 2>&1 \
-      | grep -E "error:|BUILD SUCCEEDED|BUILD FAILED" | head -5; then
-  :
+      ${DEVELOPMENT_TEAM:+DEVELOPMENT_TEAM=$DEVELOPMENT_TEAM} CODE_SIGN_STYLE=Automatic \
+      build > "$BUILD_LOG" 2>&1; then
+  echo
+  echo "❌ 构建失败。关键错误："
+  grep -E "error:|No Accounts|No profiles|expired" "$BUILD_LOG" | head -4 | sed 's/^/   /'
+  echo
+  if grep -q "No Accounts\|No profiles" "$BUILD_LOG"; then
+    echo "   👉 **Xcode 里的 Apple 账号登出了**（证书本身通常还有效）。"
+    echo "      打开 Xcode → Settings（Cmd+,）→ Accounts → 用 Apple ID 重新登录"
+    echo "      （需要密码 + 手机验证码），登录后再跑本脚本。"
+  elif grep -qi "expired" "$BUILD_LOG"; then
+    echo "   👉 描述文件过期，且无法自动续期 → 同样需要重新登录 Xcode 账号。"
+  fi
+  echo
+  echo "   自查："
+  echo "     security find-identity -v -p codesigning"
+  echo "     defaults read com.apple.dt.Xcode DVTDeveloperAccountManagerAppleIDLists"
+  rm -f "$BUILD_LOG"
+  exit 1
 fi
+rm -f "$BUILD_LOG"
+echo "   ✅ 构建成功"
 
 APP="$DD/Build/Products/Debug-iphoneos/CarDashboardPhone.app"
 if [[ ! -d "$APP" ]]; then
