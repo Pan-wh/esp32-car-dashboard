@@ -86,9 +86,13 @@ if ! xcodebuild -project CarDashboardPhone.xcodeproj -scheme CarDashboardPhone \
     echo "   👉 描述文件过期，且无法自动续期 → 同样需要重新登录 Xcode 账号。"
   fi
   echo
+  echo "   💡 若 Xcode 图形界面里账号明明是登录着的，那是 **Xcode 26 的 xcodebuild 读不到账号** 的已知情况："
+  echo "      直接用 Xcode 打开工程 → 选设备 → Cmd+R 运行一次（见 docs/ai-bootstrap.md §5）。"
+  echo "      成功跑过一次之后，描述文件就存在了，本脚本又能正常用。"
+  echo ""
   echo "   自查："
   echo "     security find-identity -v -p codesigning"
-  echo "     defaults read com.apple.dt.Xcode DVTDeveloperAccountManagerAppleIDLists"
+  echo "     defaults read com.apple.dt.Xcode IDEProvisioningTeamByIdentifier   # 看团队是否登录"
   rm -f "$BUILD_LOG"
   exit 1
 fi
